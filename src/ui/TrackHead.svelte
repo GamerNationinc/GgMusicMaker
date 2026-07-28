@@ -8,6 +8,8 @@
     armTrack,
     removeTrack,
     renameTrack,
+    toggleFxRack,
+    selectedTrackId,
   } from "../state/store";
   import { LANE_HEIGHT } from "./constants";
 
@@ -21,6 +23,12 @@
       value={track.name}
       oninput={(e) => renameTrack(track.id, (e.target as HTMLInputElement).value)}
     />
+    <button
+      class="chip fx"
+      class:on={$selectedTrackId === track.id}
+      onclick={() => toggleFxRack(track.id)}
+      title="Open FX rack"
+    >FX</button>
     <button class="chip" onclick={() => removeTrack(track.id)} title="Remove layer">✕</button>
   </div>
 
@@ -87,6 +95,10 @@
     min-width: 30px;
     min-height: 30px;
     font-size: 12px;
+  }
+  .chip.fx.on {
+    background: var(--magenta);
+    color: #10121a;
   }
   .knob {
     flex: 1 1 auto;

@@ -1,23 +1,19 @@
 // AudioEngine — the Web Audio runtime for ProfitPals DAW.
 //
 // Owns the single AudioContext, the master bus (gain -> limiter -> meter ->
-// output), a shared convolution-reverb bus, and one gain+send node pair per
-// track. Playback schedules an AudioBufferSourceNode per clip on the shared
-// timeline, so layering is inherent. Recording captures mic/line input into an
-// AudioBuffer, and export re-renders the whole project offline.
-//
-// Kept deliberately UI-agnostic: the Svelte store drives it, it never reaches
-// back into the UI.
+// output), a shared convolution-reverb bus, and one TrackChannel per track
+// (fader + 3-band EQ + voice FX + reverb send). Playback schedules an
+// AudioBufferSourceNode per clip on the shared timeline, so layering is
+// inherent. Recording captures mic/line input; export re-renders the whole
+// project offline through the *same* TrackChannel graph.
 
 import type { Project, Track } from "./types";
 import { nextId } from "./types";
 import { anySoloed, isTrackAudible } from "./edits";
 import { makeImpulseResponse, type ReverbSpace } from "./reverb";
+import { TrackChannel } from "./channel";
 
-interface TrackNodes {
-  gain: GainNode;
-  send: GainNode;
-}
+const PITCH_WORKLET_URL = `${import.meta.env.BASE_URL}pitch-processor.js`;
 
 export class AudioEngine {
   readonly ctx: AudioContext;
@@ -27,14 +23,19 @@ export class AudioEngine {
   private analyser: AnalyserNode;
   private convolver: ConvolverNode;
   private reverbReturn: GainNode;
+  private reverbSpace: ReverbSpace = "hall";
 
-  private trackNodes = new Map<string, TrackNodes>();
+  private channels = new Map<string, TrackChannel>();
   private buffers = new Map<string, AudioBuffer>();
   private activeSources: AudioBufferSourceNode[] = [];
 
   private playStartCtxTime = 0;
   private playStartOffset = 0;
   private _isPlaying = false;
+
+  /** Resolves once the pitch worklet has (or hasn't) loaded. */
+  private pitchReady: Promise<boolean>;
+  pitchAvailable = false;
 
   // Recording state
   private recStream: MediaStream | null = null;
@@ -51,8 +52,7 @@ export class AudioEngine {
     this.masterGain = this.ctx.createGain();
     this.masterGain.gain.value = 0.9;
 
-    // A compressor with a high ratio + fast attack acts as a simple limiter,
-    // catching peaks when many layers stack up ("mastering level" in v1).
+    // A high-ratio, fast-attack compressor acts as a simple mastering limiter.
     this.limiter = this.ctx.createDynamicsCompressor();
     this.limiter.threshold.value = -3;
     this.limiter.knee.value = 0;
@@ -64,28 +64,39 @@ export class AudioEngine {
     this.analyser.fftSize = 256;
     this.meterBuf = new Uint8Array(new ArrayBuffer(this.analyser.fftSize));
 
-    // Shared reverb bus.
     this.convolver = this.ctx.createConvolver();
-    this.convolver.buffer = makeImpulseResponse(this.ctx, "hall");
+    this.convolver.buffer = makeImpulseResponse(this.ctx, this.reverbSpace);
     this.reverbReturn = this.ctx.createGain();
     this.reverbReturn.gain.value = 1;
 
-    // Wire the master bus: masterGain -> limiter -> analyser -> output.
     this.masterGain.connect(this.limiter);
     this.limiter.connect(this.analyser);
     this.analyser.connect(this.ctx.destination);
-    // Reverb return folds back into the master bus (pre-limiter).
     this.convolver.connect(this.reverbReturn);
     this.reverbReturn.connect(this.masterGain);
+
+    this.pitchReady = this.loadWorklet(this.ctx);
   }
 
   get isPlaying(): boolean {
     return this._isPlaying;
   }
 
-  /** Resume the context (browsers/WebKitGTK start it suspended until a gesture). */
+  private async loadWorklet(ctx: BaseAudioContext): Promise<boolean> {
+    try {
+      if (!("audioWorklet" in ctx) || !ctx.audioWorklet) return false;
+      await ctx.audioWorklet.addModule(PITCH_WORKLET_URL);
+      if (ctx === this.ctx) this.pitchAvailable = true;
+      return true;
+    } catch {
+      return false; // WebKitGTK without AudioWorklet: voice pitch degrades gracefully
+    }
+  }
+
+  /** Resume the context and make sure the pitch worklet had a chance to load. */
   async ensureRunning(): Promise<void> {
     if (this.ctx.state === "suspended") await this.ctx.resume();
+    await this.pitchReady;
   }
 
   setMasterGain(value: number): void {
@@ -93,14 +104,17 @@ export class AudioEngine {
   }
 
   setReverbSpace(space: ReverbSpace): void {
+    this.reverbSpace = space;
     this.convolver.buffer = makeImpulseResponse(this.ctx, space);
+  }
+
+  get currentReverbSpace(): ReverbSpace {
+    return this.reverbSpace;
   }
 
   // ---- Buffer store -------------------------------------------------------
 
-  /** Decode raw file bytes into an AudioBuffer and register it. */
   async decodeBytes(bytes: ArrayBuffer): Promise<{ bufferId: string; buffer: AudioBuffer }> {
-    // decodeAudioData detaches its input, so hand it a copy.
     const buffer = await this.ctx.decodeAudioData(bytes.slice(0));
     return { bufferId: this.registerBuffer(buffer), buffer };
   }
@@ -115,38 +129,37 @@ export class AudioEngine {
     return this.buffers.get(id);
   }
 
-  // ---- Track nodes --------------------------------------------------------
+  // ---- Track channels -----------------------------------------------------
 
-  private ensureTrackNodes(trackId: string): TrackNodes {
-    let nodes = this.trackNodes.get(trackId);
-    if (!nodes) {
-      const gain = this.ctx.createGain();
-      const send = this.ctx.createGain();
-      send.gain.value = 0;
-      gain.connect(this.masterGain); // dry path
-      gain.connect(send); // pre-fader-ish tap
-      send.connect(this.convolver); // wet path
-      nodes = { gain, send };
-      this.trackNodes.set(trackId, nodes);
-    }
-    return nodes;
+  private createChannel(trackId: string): TrackChannel {
+    const ch = new TrackChannel(this.ctx, this.pitchAvailable);
+    ch.connect(this.masterGain, this.convolver);
+    this.channels.set(trackId, ch);
+    return ch;
   }
 
-  /** Push a track's mixer params (gain/mute/solo/send) to its live nodes. */
+  private ensureChannel(track: Track): TrackChannel {
+    let ch = this.channels.get(track.id);
+    if (!ch) ch = this.createChannel(track.id);
+    // Self-heal: if the worklet finished loading after this channel was built
+    // and the track now wants a pitched voice, rebuild it with the pitch node.
+    if (track.voice.preset !== "off" && !ch.hasPitch && this.pitchAvailable) {
+      ch.dispose();
+      this.channels.delete(track.id);
+      ch = this.createChannel(track.id);
+    }
+    return ch;
+  }
+
   applyTrackParams(track: Track, projectHasSolo: boolean): void {
-    const nodes = this.ensureTrackNodes(track.id);
-    const audible = isTrackAudible(track, projectHasSolo);
-    const target = audible ? track.gain : 0;
-    nodes.gain.gain.setTargetAtTime(target, this.ctx.currentTime, 0.01);
-    nodes.send.gain.setTargetAtTime(audible ? track.reverbSend : 0, this.ctx.currentTime, 0.01);
+    this.ensureChannel(track).applyTrack(track, projectHasSolo);
   }
 
   removeTrack(trackId: string): void {
-    const nodes = this.trackNodes.get(trackId);
-    if (!nodes) return;
-    nodes.gain.disconnect();
-    nodes.send.disconnect();
-    this.trackNodes.delete(trackId);
+    const ch = this.channels.get(trackId);
+    if (!ch) return;
+    ch.dispose();
+    this.channels.delete(trackId);
   }
 
   syncAll(project: Project): void {
@@ -156,7 +169,6 @@ export class AudioEngine {
 
   // ---- Transport ----------------------------------------------------------
 
-  /** Schedule and start playback of the whole project from `fromTime` seconds. */
   play(project: Project, fromTime: number): void {
     this.stopSources();
     const hasSolo = anySoloed(project);
@@ -165,13 +177,13 @@ export class AudioEngine {
     this.playStartOffset = fromTime;
 
     for (const track of project.tracks) {
-      this.applyTrackParams(track, hasSolo);
+      const channel = this.ensureChannel(track);
+      channel.applyTrack(track, hasSolo);
       if (!isTrackAudible(track, hasSolo)) continue;
-      const nodes = this.ensureTrackNodes(track.id);
 
       for (const clip of track.clips) {
         const clipEndT = clip.startTime + clip.duration;
-        if (clipEndT <= fromTime) continue; // already behind the playhead
+        if (clipEndT <= fromTime) continue;
         const buffer = this.buffers.get(clip.bufferId);
         if (!buffer) continue;
 
@@ -181,11 +193,10 @@ export class AudioEngine {
 
         const src = this.ctx.createBufferSource();
         src.buffer = buffer;
-        src.connect(nodes.gain);
+        src.connect(channel.input);
         try {
           src.start(when, into, dur);
         } catch {
-          // Ignore invalid ranges (e.g. offset past buffer end).
           continue;
         }
         this.activeSources.push(src);
@@ -211,14 +222,12 @@ export class AudioEngine {
     this.activeSources = [];
   }
 
-  /** Current playhead position in seconds while playing. */
   currentTime(): number {
     if (!this._isPlaying) return this.playStartOffset;
     const elapsed = this.ctx.currentTime - this.playStartCtxTime;
     return this.playStartOffset + Math.max(0, elapsed);
   }
 
-  /** Peak master level 0..1 for the VU meter. */
   masterLevel(): number {
     this.analyser.getByteTimeDomainData(this.meterBuf);
     let peak = 0;
@@ -231,11 +240,6 @@ export class AudioEngine {
 
   // ---- Recording ----------------------------------------------------------
 
-  /**
-   * Start capturing from a mic/line input. Uses a ScriptProcessorNode rather
-   * than MediaRecorder because it works reliably under WebKitGTK (the Steam
-   * Deck / Tauri webview) and gives us raw Float32 samples with no codec step.
-   */
   async startRecording(deviceId?: string): Promise<void> {
     await this.ensureRunning();
     this.recStream = await navigator.mediaDevices.getUserMedia({
@@ -256,8 +260,6 @@ export class AudioEngine {
       this.recChunks.push(frame);
     };
 
-    // Route through a silent monitor gain so the processor runs without
-    // feeding the input back to the speakers (avoids feedback howl).
     const monitor = this.ctx.createGain();
     monitor.gain.value = 0;
     src.connect(processor);
@@ -267,7 +269,6 @@ export class AudioEngine {
     this.recMonitor = monitor;
   }
 
-  /** Stop recording and assemble the captured audio into an AudioBuffer. */
   async stopRecording(): Promise<AudioBuffer> {
     const chunks = this.recChunks;
     const rate = this.recSampleRate;
@@ -306,11 +307,7 @@ export class AudioEngine {
 
   // ---- Offline export -----------------------------------------------------
 
-  /**
-   * Re-render the whole project (dry + reverb, master gain + limiter) to a
-   * single AudioBuffer via an OfflineAudioContext. `tailSeconds` leaves room
-   * for the reverb tail to ring out past the last clip.
-   */
+  /** Re-render the whole project (FX + reverb + master) to one AudioBuffer. */
   async renderMix(project: Project, tailSeconds = 3): Promise<AudioBuffer> {
     const hasSolo = anySoloed(project);
     let duration = 0;
@@ -321,8 +318,8 @@ export class AudioEngine {
     const rate = project.sampleRate || this.ctx.sampleRate;
     const frames = Math.max(1, Math.ceil(duration * rate));
     const offline = new OfflineAudioContext(2, frames, rate);
+    const hasPitch = await this.loadWorklet(offline);
 
-    // Master bus (mirror of the realtime graph).
     const masterGain = offline.createGain();
     masterGain.gain.value = 0.9;
     const limiter = offline.createDynamicsCompressor();
@@ -334,25 +331,23 @@ export class AudioEngine {
     limiter.connect(offline.destination);
 
     const convolver = offline.createConvolver();
-    convolver.buffer = makeImpulseResponse(offline, "hall");
-    convolver.connect(masterGain);
+    convolver.buffer = makeImpulseResponse(offline, this.reverbSpace);
+    const reverbReturn = offline.createGain();
+    convolver.connect(reverbReturn);
+    reverbReturn.connect(masterGain);
 
     for (const track of project.tracks) {
       if (!isTrackAudible(track, hasSolo)) continue;
-      const gain = offline.createGain();
-      gain.gain.value = track.gain;
-      const send = offline.createGain();
-      send.gain.value = track.reverbSend;
-      gain.connect(masterGain);
-      gain.connect(send);
-      send.connect(convolver);
+      const channel = new TrackChannel(offline, hasPitch);
+      channel.connect(masterGain, convolver);
+      channel.applyTrack(track, hasSolo, /* smooth */ false);
 
       for (const clip of track.clips) {
         const buffer = this.buffers.get(clip.bufferId);
         if (!buffer) continue;
         const src = offline.createBufferSource();
         src.buffer = buffer;
-        src.connect(gain);
+        src.connect(channel.input);
         try {
           src.start(clip.startTime, clip.offset, clip.duration);
         } catch {

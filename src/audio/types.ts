@@ -4,6 +4,8 @@
 // AudioBuffers live separately in the AudioEngine's buffer store, keyed by
 // `bufferId`, so the project model stays lightweight and easy to reason about.
 
+import type { VoicePreset } from "../fx/voice";
+
 /** A region of a source buffer placed on the timeline. Non-destructive:
  *  split/trim only adjust offset/duration/startTime — the buffer is untouched. */
 export interface Clip {
@@ -19,7 +21,21 @@ export interface Clip {
   name: string;
 }
 
-/** One layer/track: a stack of clips plus mix + FX-send params. */
+/** 3-band EQ, gains in dB (-18..+18). */
+export interface EqParams {
+  low: number;
+  mid: number;
+  high: number;
+}
+
+/** Voice-manipulation FX settings for a track. */
+export interface VoiceParams {
+  preset: VoicePreset;
+  /** How much of the shifted signal to blend in, 0..1. */
+  mix: number;
+}
+
+/** One layer/track: a stack of clips plus mix + FX params. */
 export interface Track {
   id: string;
   name: string;
@@ -29,8 +45,12 @@ export interface Track {
   soloed: boolean;
   /** Armed for recording. */
   armed: boolean;
-  /** Reverb send amount, 0..1 (the v1 FX seam; full rack lands in v2). */
+  /** Reverb send amount, 0..1. */
   reverbSend: number;
+  /** 3-band EQ (v2 FX rack). */
+  eq: EqParams;
+  /** Voice manipulation (v2 FX rack). */
+  voice: VoiceParams;
   /** UI accent colour for the track's clips. */
   color: string;
   clips: Clip[];

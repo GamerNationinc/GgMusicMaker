@@ -2,6 +2,7 @@
   import Transport from "./Transport.svelte";
   import Toolbar from "./Toolbar.svelte";
   import Timeline from "./Timeline.svelte";
+  import FxRack from "./FxRack.svelte";
   import {
     togglePlay,
     splitAtPlayhead,
@@ -52,6 +53,8 @@
 <main class="workspace">
   <Timeline />
 </main>
+
+<FxRack />
 
 <footer class="statusbar screen">{$status}</footer>
 

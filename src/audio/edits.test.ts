@@ -127,6 +127,8 @@ describe("solo / mute audibility", () => {
     soloed: false,
     armed: false,
     reverbSend: 0,
+    eq: { low: 0, mid: 0, high: 0 },
+    voice: { preset: "off", mix: 1 },
     color: "#fff",
     clips: [],
     ...over,

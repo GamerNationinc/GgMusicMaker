@@ -18,6 +18,8 @@ import {
 } from "../audio/edits";
 import { AudioEngine } from "../audio/engine";
 import { encodeWav } from "../audio/wav";
+import type { VoicePreset } from "../fx/voice";
+import type { ReverbSpace } from "../audio/reverb";
 
 export const engine = new AudioEngine();
 
@@ -34,10 +36,13 @@ export const transport = writable<TransportState>({
 });
 
 export const selectedClipId = writable<string | null>(null);
+/** Track whose FX rack is open, or null when the rack is closed. */
+export const selectedTrackId = writable<string | null>(null);
 export const status = writable<string>("Ready. Import an audio file to begin.");
 export const masterLevel = writable<number>(0);
 /** Timeline zoom, in pixels per second. */
 export const pixelsPerSecond = writable<number>(80);
+export const reverbSpace = writable<ReverbSpace>(engine.currentReverbSpace);
 
 // ---- internal helpers -----------------------------------------------------
 
@@ -68,6 +73,8 @@ function makeTrack(name: string): Track {
     soloed: false,
     armed: false,
     reverbSend: 0,
+    eq: { low: 0, mid: 0, high: 0 },
+    voice: { preset: "off", mix: 1 },
     color,
     clips: [],
   };
@@ -85,6 +92,7 @@ export function addEmptyTrack(): string {
 export function removeTrack(trackId: string): void {
   engine.removeTrack(trackId);
   updateProject((p) => ({ ...p, tracks: p.tracks.filter((t) => t.id !== trackId) }));
+  selectedTrackId.update((cur) => (cur === trackId ? null : cur));
 }
 
 export function setTrackGain(trackId: string, gain: number): void {
@@ -93,6 +101,31 @@ export function setTrackGain(trackId: string, gain: number): void {
 
 export function setReverbSend(trackId: string, amount: number): void {
   updateTrack(trackId, (t) => ({ ...t, reverbSend: amount }));
+}
+
+// ---- FX rack (v2) ---------------------------------------------------------
+
+export function setEq(trackId: string, band: "low" | "mid" | "high", db: number): void {
+  updateTrack(trackId, (t) => ({ ...t, eq: { ...t.eq, [band]: db } }));
+}
+
+export function setVoiceMix(trackId: string, mix: number): void {
+  updateTrack(trackId, (t) => ({ ...t, voice: { ...t.voice, mix } }));
+}
+
+/** Change a track's voice preset. Rebuilds the FX chain and, if playing,
+ *  reschedules so the change is heard immediately. */
+export async function setVoicePreset(trackId: string, preset: VoicePreset): Promise<void> {
+  await engine.ensureRunning();
+  updateTrack(trackId, (t) => ({ ...t, voice: { ...t.voice, preset } }));
+  if (get(transport).isPlaying) engine.play(get(project), get(transport).playhead);
+  status.set(`Voice: ${preset} on the selected layer.`);
+}
+
+export function setReverbSpace(space: ReverbSpace): void {
+  engine.setReverbSpace(space);
+  reverbSpace.set(space);
+  status.set(`Reverb space: ${space}.`);
 }
 
 export function toggleMute(trackId: string): void {
@@ -201,6 +234,11 @@ export function trimClipTo(
 
 export function selectClip(clipId: string | null): void {
   selectedClipId.set(clipId);
+}
+
+/** Toggle the FX rack for a track (open it, or close it if already open). */
+export function toggleFxRack(trackId: string): void {
+  selectedTrackId.update((cur) => (cur === trackId ? null : trackId));
 }
 
 // ---- transport ------------------------------------------------------------
