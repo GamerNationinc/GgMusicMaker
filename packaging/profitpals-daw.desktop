@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=ProfitPals DAW
+GenericName=Audio Workstation
+Comment=Layer audio, cut clips, record, and add reverb and voice FX
+Exec=APPIMAGE_PATH %f
+Icon=profitpals-daw
+Terminal=false
+Categories=AudioVideo;Audio;AudioVideoEditing;
+Keywords=daw;audio;music;recording;mixer;
+MimeType=audio/wav;audio/mpeg;audio/ogg;audio/flac;audio/x-wav;
+StartupNotify=true
+StartupWMClass=ProfitPals DAW

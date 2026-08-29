@@ -17,15 +17,18 @@ import {
   replaceClip,
 } from "../audio/edits";
 import { AudioEngine } from "../audio/engine";
+import type { AudioBackend } from "../audio/backend";
 import { encodeWav } from "../audio/wav";
 import type { VoicePreset } from "../fx/voice";
 import type { ReverbSpace } from "../audio/reverb";
 
-export const engine = new AudioEngine();
+/** The audio runtime. Typed as the interface, not the class, so a future
+ *  native backend can be swapped in without touching the store or the UI. */
+export const engine: AudioBackend = new AudioEngine();
 
 export const project = writable<Project>({
   tracks: [],
-  sampleRate: engine.ctx.sampleRate,
+  sampleRate: engine.sampleRate,
 });
 
 export const transport = writable<TransportState>({
@@ -267,6 +270,12 @@ export function startMeterLoop(): void {
 
 export async function play(): Promise<void> {
   await engine.ensureRunning();
+  if (!engine.isAudioReady) {
+    // Most likely cause on Linux: WebKitGTK couldn't build its GStreamer audio
+    // pipeline. Say so rather than appearing to play in silence.
+    status.set("No audio output available — check the system audio (GStreamer) setup.");
+    return;
+  }
   const from = get(transport).playhead;
   engine.play(get(project), from);
   transport.update((s) => ({ ...s, isPlaying: true }));
@@ -312,6 +321,7 @@ export async function startRecording(): Promise<void> {
 export async function stopRecording(): Promise<void> {
   if (!engine.isRecording) return;
   const startedAt = get(transport).playhead;
+  const usedWorklet = engine.recordingUsesWorklet;
   const buffer = await engine.stopRecording();
   const bufferId = engine.registerBuffer(buffer);
   const armed = get(project).tracks.find((t) => t.armed);
@@ -327,7 +337,9 @@ export async function stopRecording(): Promise<void> {
     name: "Take",
   };
   updateTrack(armed.id, (t) => ({ ...t, clips: [...t.clips, clip] }));
-  status.set(`Recorded ${buffer.duration.toFixed(1)}s onto ${armed.name}.`);
+  // Flag the degraded capture path so a glitchy take has a visible cause.
+  const note = usedWorklet ? "" : " (fallback capture — may drop samples)";
+  status.set(`Recorded ${buffer.duration.toFixed(1)}s onto ${armed.name}.${note}`);
 }
 
 // ---- export ---------------------------------------------------------------

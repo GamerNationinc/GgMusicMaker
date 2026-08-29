@@ -12,10 +12,13 @@ import { nextId } from "./types";
 import { anySoloed, isTrackAudible } from "./edits";
 import { makeImpulseResponse, type ReverbSpace } from "./reverb";
 import { TrackChannel } from "./channel";
+import type { AudioBackend, DecodedAudio } from "./backend";
+import { assembleTake, type Chunk } from "./recording";
 
 const PITCH_WORKLET_URL = `${import.meta.env.BASE_URL}pitch-processor.js`;
+const RECORDER_WORKLET_URL = `${import.meta.env.BASE_URL}recorder-processor.js`;
 
-export class AudioEngine {
+export class AudioEngine implements AudioBackend {
   readonly ctx: AudioContext;
 
   private masterGain: GainNode;
@@ -39,10 +42,13 @@ export class AudioEngine {
 
   // Recording state
   private recStream: MediaStream | null = null;
-  private recProcessor: ScriptProcessorNode | null = null;
+  /** Worklet capture node (preferred), or the ScriptProcessor fallback. */
+  private recNode: AudioWorkletNode | ScriptProcessorNode | null = null;
   private recMonitor: GainNode | null = null;
-  private recChunks: Float32Array[][] = [];
+  private recChunks: Chunk[] = [];
   private recSampleRate = 48000;
+  /** True when the current take is being captured on the audio thread. */
+  private recUsedWorklet = false;
 
   private meterBuf: Uint8Array<ArrayBuffer>;
 
@@ -82,14 +88,27 @@ export class AudioEngine {
     return this._isPlaying;
   }
 
-  private async loadWorklet(ctx: BaseAudioContext): Promise<boolean> {
+  get sampleRate(): number {
+    return this.ctx.sampleRate;
+  }
+
+  get isAudioReady(): boolean {
+    return this.ctx.state === "running";
+  }
+
+  private async loadWorklet(
+    ctx: BaseAudioContext,
+    url = PITCH_WORKLET_URL,
+  ): Promise<boolean> {
     try {
       if (!("audioWorklet" in ctx) || !ctx.audioWorklet) return false;
-      await ctx.audioWorklet.addModule(PITCH_WORKLET_URL);
-      if (ctx === this.ctx) this.pitchAvailable = true;
+      await ctx.audioWorklet.addModule(url);
+      if (ctx === this.ctx && url === PITCH_WORKLET_URL) this.pitchAvailable = true;
       return true;
     } catch {
-      return false; // WebKitGTK without AudioWorklet: voice pitch degrades gracefully
+      // WebKitGTK without AudioWorklet: voice pitch degrades gracefully and
+      // recording falls back to the ScriptProcessor path.
+      return false;
     }
   }
 
@@ -114,7 +133,7 @@ export class AudioEngine {
 
   // ---- Buffer store -------------------------------------------------------
 
-  async decodeBytes(bytes: ArrayBuffer): Promise<{ bufferId: string; buffer: AudioBuffer }> {
+  async decodeBytes(bytes: ArrayBuffer): Promise<DecodedAudio> {
     const buffer = await this.ctx.decodeAudioData(bytes.slice(0));
     return { bufferId: this.registerBuffer(buffer), buffer };
   }
@@ -240,6 +259,14 @@ export class AudioEngine {
 
   // ---- Recording ----------------------------------------------------------
 
+  /**
+   * Start capturing from a mic/line input.
+   *
+   * Prefers an AudioWorklet, which runs on the audio thread so takes stay clean
+   * while the UI is busy. Falls back to the deprecated main-thread
+   * ScriptProcessorNode when the worklet can't load (older WebKitGTK), so
+   * recording still works rather than failing outright.
+   */
   async startRecording(deviceId?: string): Promise<void> {
     await this.ensureRunning();
     this.recStream = await navigator.mediaDevices.getUserMedia({
@@ -247,62 +274,82 @@ export class AudioEngine {
       video: false,
     });
     const src = this.ctx.createMediaStreamSource(this.recStream);
-    const processor = this.ctx.createScriptProcessor(4096, 2, 2);
     this.recChunks = [];
     this.recSampleRate = this.ctx.sampleRate;
 
-    processor.onaudioprocess = (e) => {
-      const inBuf = e.inputBuffer;
-      const frame: Float32Array[] = [];
-      for (let ch = 0; ch < inBuf.numberOfChannels; ch++) {
-        frame.push(new Float32Array(inBuf.getChannelData(ch)));
-      }
-      this.recChunks.push(frame);
-    };
+    const useWorklet = await this.loadWorklet(this.ctx, RECORDER_WORKLET_URL);
+    let node: AudioWorkletNode | ScriptProcessorNode;
 
+    if (useWorklet) {
+      const worklet = new AudioWorkletNode(this.ctx, "recorder-processor", {
+        numberOfInputs: 1,
+        numberOfOutputs: 1,
+        outputChannelCount: [2],
+      });
+      worklet.port.onmessage = (e: MessageEvent) => {
+        const data = e.data as { type?: string; channels?: Float32Array[] };
+        if (data?.type === "chunk" && data.channels) this.recChunks.push(data.channels);
+      };
+      node = worklet;
+    } else {
+      const processor = this.ctx.createScriptProcessor(4096, 2, 2);
+      processor.onaudioprocess = (e) => {
+        const inBuf = e.inputBuffer;
+        const frame: Float32Array[] = [];
+        for (let ch = 0; ch < inBuf.numberOfChannels; ch++) {
+          frame.push(new Float32Array(inBuf.getChannelData(ch)));
+        }
+        this.recChunks.push(frame);
+      };
+      node = processor;
+    }
+    this.recUsedWorklet = useWorklet;
+
+    // Route through a silent monitor gain so the node is pulled by the graph
+    // without feeding the input back to the speakers (avoids feedback howl).
     const monitor = this.ctx.createGain();
     monitor.gain.value = 0;
-    src.connect(processor);
-    processor.connect(monitor);
+    src.connect(node);
+    node.connect(monitor);
     monitor.connect(this.ctx.destination);
-    this.recProcessor = processor;
+    this.recNode = node;
     this.recMonitor = monitor;
+  }
+
+  /** Whether the in-flight take is using the audio-thread worklet path. */
+  get recordingUsesWorklet(): boolean {
+    return this.recUsedWorklet;
   }
 
   async stopRecording(): Promise<AudioBuffer> {
     const chunks = this.recChunks;
     const rate = this.recSampleRate;
 
-    if (this.recProcessor) {
-      this.recProcessor.onaudioprocess = null;
-      this.recProcessor.disconnect();
+    const node = this.recNode;
+    if (node instanceof AudioWorkletNode) {
+      node.port.postMessage({ type: "stop" });
+      node.port.onmessage = null;
+    } else if (node) {
+      node.onaudioprocess = null;
     }
+    node?.disconnect();
     if (this.recMonitor) this.recMonitor.disconnect();
     if (this.recStream) this.recStream.getTracks().forEach((t) => t.stop());
-    this.recProcessor = null;
+    this.recNode = null;
     this.recMonitor = null;
     this.recStream = null;
     this.recChunks = [];
 
-    const channelCount = chunks[0]?.length ?? 1;
-    let totalFrames = 0;
-    for (const f of chunks) totalFrames += f[0].length;
-    totalFrames = Math.max(1, totalFrames);
-
-    const out = this.ctx.createBuffer(channelCount, totalFrames, rate);
-    for (let ch = 0; ch < channelCount; ch++) {
-      const dest = out.getChannelData(ch);
-      let pos = 0;
-      for (const f of chunks) {
-        dest.set(f[ch] ?? f[0], pos);
-        pos += f[ch]?.length ?? f[0].length;
-      }
+    const { channels, frames } = assembleTake(chunks);
+    const out = this.ctx.createBuffer(channels.length, Math.max(1, frames), rate);
+    for (let ch = 0; ch < channels.length; ch++) {
+      out.getChannelData(ch).set(channels[ch]);
     }
     return out;
   }
 
   get isRecording(): boolean {
-    return this.recProcessor !== null;
+    return this.recNode !== null;
   }
 
   // ---- Offline export -----------------------------------------------------

@@ -13,3 +13,6 @@ src-tauri/gen/
 .env
 .idea/
 .vscode/
+
+# AppImage extraction output
+squashfs-root/
