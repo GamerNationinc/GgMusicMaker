@@ -1,4 +1,4 @@
-# ProfitPals DAW
+# GgMusicMaker
 
 A **very simple, playful DAW for the Steam Deck** (desktop mode). Think "the core
 ideas of Ableton, but as approachable as the Hasbro *Play It Now*" — chunky
@@ -114,7 +114,7 @@ chmod +x install-steamdeck.sh
 
 That copies the AppImage to `~/Applications`, installs the icons, and adds a menu entry —
 everything under `$HOME`, so it needs no `sudo` and survives SteamOS updates. Launch
-**ProfitPals DAW** from the application menu (Multimedia). To play it in Gaming Mode, add
+**GgMusicMaker** from the application menu (Multimedia). To play it in Gaming Mode, add
 `~/Applications/profitpals-daw.AppImage` via *Steam → Add a Non-Steam Game*.
 
 > **Why the release build?** Releases are built on Ubuntu 22.04 (glibc 2.35) because glibc

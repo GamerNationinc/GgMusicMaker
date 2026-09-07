@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Version=1.0
-Name=ProfitPals DAW
+Name=GgMusicMaker
 GenericName=Audio Workstation
 Comment=Layer audio, cut clips, record, and add reverb and voice FX
 Exec=APPIMAGE_PATH %f
