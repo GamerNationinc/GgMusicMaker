@@ -1,0 +1,18 @@
+# Node
+node_modules/
+dist/
+.vite/
+
+# Tauri / Rust
+src-tauri/target/
+src-tauri/gen/
+
+# Editor / OS
+.DS_Store
+*.local
+.env
+.idea/
+.vscode/
+
+# AppImage extraction output
+squashfs-root/
