@@ -1,0 +1,265 @@
+# GgMusicMaker — Master Reference
+
+The single place that says **what this repo is, what is proven to work, where
+everything lives, and where it is going.** Keep it current when features land.
+
+_Last updated: 2026-09-13 (branch `rename-ggmusicmaker`, commit `e6cfe7b`)._
+
+---
+
+## 1. Identity
+
+| | |
+|---|---|
+| Product name | **GgMusicMaker** — a simple, playful DAW for the Steam Deck (desktop mode) |
+| Package / crate / AppImage / desktop id | `ggmusicmaker` |
+| Rust lib crate | `ggmusicmaker_lib` |
+| Tauri bundle identifier | `com.gamernation.ggmusicmaker` |
+| Exported mix filename | `ggmusicmaker-mix.wav` |
+| Version | `0.1.0` (`package.json`, `Cargo.toml`, `tauri.conf.json` — keep in sync) |
+| Stack | TypeScript + Svelte 5 + Vite 6 frontend · Web Audio API + Canvas · Tauri v2 (Rust) shell · WebKitGTK on Linux |
+| Remote | `https://github.com/GamerNationinc/GgMusicMaker` (public) |
+
+### Where it is on this machine (Steam Deck)
+
+| Path | What |
+|---|---|
+| `~/GgMusicMaker/` | The repo (full git history) |
+| `~/GgMusicMaker/src-tauri/target/release/bundle/appimage/GgMusicMaker_0.1.0_amd64.AppImage` | Last native build output (~88 MB) |
+| `~/GgMusicMaker/src-tauri/target/release/bundle/deb/GgMusicMaker_0.1.0_amd64.deb` | .deb (not useful on SteamOS; for Debian/Ubuntu hosts) |
+| `~/Applications/ggmusicmaker.AppImage` | **Installed** app (what the menu launches) |
+| `~/.local/share/applications/ggmusicmaker.desktop` | Menu entry (Multimedia → GgMusicMaker) |
+| `~/.local/share/icons/hicolor/{32,128,256,512}x…/apps/ggmusicmaker.png` | Installed icons |
+| podman image `localhost/ggmusicmaker-build` (1.84 GB) | Ubuntu 22.04 build toolchain (glibc 2.35 + WebKitGTK dev + Node 20 + Rust) |
+| podman volume `ggmm-cargo-registry` | Cached crates so rebuilds take ~1 min instead of ~4 |
+
+---
+
+## 2. What works (verified)
+
+Everything below has been run, not just read. "Browser" = headless Chromium
+against the production build (`npm run test:browser`); "Native" = the AppImage
+launched on this Steam Deck under KDE/Wayland.
+
+### Core DAW
+
+| Feature | Verified how |
+|---|---|
+| Import any audio the WebView decodes (WAV/MP3/OGG/FLAC) onto its own layer | Browser test `imports and layers a file` |
+| Non-destructive **split / trim / move / delete** on the timeline | 16 unit tests in `src/audio/edits.test.ts` (pure math) |
+| **Record** from mic onto an armed layer, via AudioWorklet (falls back to ScriptProcessor on old WebKit and says so in the status bar) | Browser test records 1.8 s and confirms the worklet path was used |
+| Per-layer **volume, mute, solo, reverb send** | Unit-tested param mapping; exercised in browser |
+| **FX rack** per layer: 3-band EQ, voice presets (Chipmunk / Deep / Robot / Alien) with amount, Room / Hall / Plate reverb | Browser test: Chipmunk preset changes the exported render (~193 KB of samples differ) |
+| Shared convolution **reverb** bus with synthesised IRs | Part of the graph exercised above |
+| **Master limiter** + 12-segment LED level meter | Native: LED meter lights during playback |
+| **Export** mix to WAV, rendered offline through the same FX graph (Tauri save dialog, or browser download) | Browser test `exports a WAV` (valid RIFF, >44 bytes); WAV encoder unit-tested |
+| Keyboard: `Space` play/pause · `S` split · `R` record · `Delete` delete clip | In `App.svelte`; used by browser test for undo shortcuts |
+
+### Added 2026-09-13
+
+| Feature | Verified how |
+|---|---|
+| **Undo / Redo** — toolbar buttons + `Ctrl+Z` / `Ctrl+Shift+Z` / `Ctrl+Y`. Covers import, layers, split/delete/move/trim, takes, mixer + FX changes. Fader drags coalesce into one step. Arming is deliberately not undoable. Restoring while playing reschedules audio; restoring a deleted layer recreates its audio channel. | 7 unit tests (`history.test.ts`: order, branch discard, coalescing, window, cap); 6 browser checks (button + keyboard) |
+| **Analogue master meter** (bottom-left): VU-style needle with ballistics, peak-hold tick, **PEAK** lamp (amber = limiter working, red = over full scale), 20-band spectrum strip. Reads the mix **before** the limiter — the post-limiter meter can never show a peak. | 9 unit tests (`spectrum.test.ts`); browser check that the lamp lights on a hot signal (3 consecutive runs); visible in native app |
+
+### Native Steam Deck build
+
+| Step | Verified how |
+|---|---|
+| `npm run build:deck` in the Ubuntu 22.04 container produces AppImage + .deb | Built 3× on this Deck; Rust compile clean |
+| AppImage runs on SteamOS: window, WebView, UI, status "Ready" | Native launch; screenshot |
+| **Audio reaches PipeWire** (bundled GStreamer → pulsesink → pipewire-pulse) | `pw-cli ls Node` shows `ggmusicmaker` `Stream/Output/Audio`, `media.role=webaudio` |
+| `scripts/install-steamdeck.sh` installs AppImage + icons + menu entry under `$HOME`, no sudo | Ran it; `desktop-file-validate` passes |
+| Window reports `WM_CLASS = ggmusicmaker` and groups with its icon in the KDE taskbar | Measured with `xwininfo`; `StartupWMClass` set to match |
+
+### Quality gates (all green at `e6cfe7b`)
+
+```
+npm run check         svelte-check: 213 files, 0 errors, 0 warnings
+npm test              vitest: 6 files, 48 tests
+npm run build         vite: ~90 KB total
+npm run test:browser  13/13 checks
+```
+
+---
+
+## 3. Not yet verified / known limitations
+
+- **Native playback and recording end-to-end.** The audio node exists and the UI works natively, but nobody has yet imported a file through the Tauri file dialog on the Deck, pressed play, and *heard* it, or recorded through WebKitGTK's mic permission path. This is the first thing to do by hand.
+- **CI has never run** on the new commits — they are unpushed (see §6). `ci.yml` and `release.yml` are believed correct but unproven on GitHub's runners.
+- No GitHub release exists yet; the README's "download the AppImage" link is dead until a `v*` tag is pushed.
+- Whole files live in RAM as `AudioBuffer`s — fine for songs, not for hour-long sessions.
+- Live FX monitoring while recording is not a goal (WebKitGTK → GStreamer latency). Record dry, add FX after.
+- No LICENSE file in the repo.
+- The `.deb` is untested anywhere.
+- Gamepad navigation (Gaming Mode) does not exist yet; the app is touch/trackpad/keyboard only.
+
+---
+
+## 4. Repository map
+
+Every tracked file and why it exists.
+
+```
+GgMusicMaker/
+├── MASTER.md                      ← this file
+├── README.md                      User-facing docs: features, architecture, develop, install, Deck notes
+├── index.html                     Vite entry; mounts src/main.ts
+├── package.json                   Scripts (see §5), deps. name=ggmusicmaker
+├── package-lock.json
+├── vite.config.ts                 Dev server on :1420 (Tauri expects it), build settings
+├── svelte.config.js               Svelte 5 preprocess
+├── tsconfig.json / tsconfig.node.json
+├── .gitignore                     node_modules, dist, src-tauri/target, src-tauri/gen, squashfs-root
+│
+├── src/                           FRONTEND (the whole DAW lives here)
+│   ├── main.ts                    Mounts App.svelte, starts the meter/transport rAF loop
+│   ├── audio/                     Audio runtime — no Svelte in here
+│   │   ├── backend.ts             AudioBackend interface: the UI↔runtime seam (swap-in point for a native engine)
+│   │   ├── engine.ts              AudioEngine: AudioContext, master bus (gain→limiter→analyser→out),
+│   │   │                          pre-limiter analyser tap, reverb bus, scheduling, recording, offline render
+│   │   ├── channel.ts             TrackChannel: gain→EQ→pitch worklet→ring-mod→out, + reverb send
+│   │   ├── edits.ts (+test)       Pure clip math: split/trim/move/replace, audibility, project duration
+│   │   ├── recording.ts (+test)   Assemble captured chunks into a take
+│   │   ├── reverb.ts              Synthesised impulse responses: room / hall / plate
+│   │   ├── spectrum.ts (+test)    Pure meter math: dB, block peak/RMS, log-band folding, needle ballistics
+│   │   ├── types.ts               Project / Track / Clip / TransportState model, id + colour helpers
+│   │   └── wav.ts (+test)         WAV encoder
+│   ├── fx/
+│   │   └── voice.ts (+test)       Voice presets (pitch ratio, ring-mod Hz, mix curves)
+│   ├── render/
+│   │   └── peaks.ts               Waveform peak extraction + cache for the timeline canvas
+│   ├── state/
+│   │   ├── store.ts               ALL app actions + Svelte stores. Only file that talks to the engine.
+│   │   └── history.ts (+test)     Pure undo/redo snapshot stack with coalescing
+│   └── ui/                        Svelte 5 components (runes)
+│       ├── App.svelte             Layout: header / toolbar / timeline / fx rack / bottom row; global hotkeys
+│       ├── Transport.svelte       Play/stop, time readout, LED meter, master fader
+│       ├── Toolbar.svelte         Import, Layer, Undo, Redo, Split, Delete, Record, zoom, Export
+│       ├── Timeline.svelte        Ruler + lanes canvas, playhead, clip drag/trim, scroll sync
+│       ├── TrackHead.svelte       Per-layer name, FX button, M/S/arm chips, VOL + RVB faders
+│       ├── FxRack.svelte          EQ, voice presets + amount, reverb space
+│       ├── AnalogMeter.svelte     Bottom-left VU dial + PEAK lamp + spectrum (canvas)
+│       ├── constants.ts           LANE_HEIGHT, HEAD_WIDTH, RULER_HEIGHT (keep heads and lanes aligned)
+│       └── theme.css              Retro pixel / DOOM-status-bar theme, touch-sized controls
+│
+├── public/                        Served as-is; AudioWorklets must be plain files
+│   ├── pitch-processor.js         Dual-delay-line pitch shifter (voice FX)
+│   └── recorder-processor.js      Audio-thread capture for recording
+│
+├── src-tauri/                     NATIVE SHELL (Rust / Tauri v2)
+│   ├── Cargo.toml                 package ggmusicmaker, lib ggmusicmaker_lib; webkit2gtk pinned =2.0.2
+│   ├── Cargo.lock
+│   ├── build.rs                   tauri_build::build()
+│   ├── tauri.conf.json            productName, identifier, 1280×800 window, CSP, bundle targets
+│   │                              (appimage+deb), bundleMediaFramework=true, icons
+│   ├── capabilities/default.json  Permissions: dialog open/save, fs write (export)
+│   ├── icons/                     32, 128, 128@2x, icon.png — generated by scripts/gen_icons.py
+│   ├── src/main.rs                → ggmusicmaker_lib::run()
+│   └── src/lib.rs                 Sets WEBKIT_DISABLE_DMABUF_RENDERER=1; registers dialog+fs plugins;
+│                                  on Linux auto-grants WebKitGTK mic permission requests
+│
+├── packaging/
+│   ├── ggmusicmaker.desktop       Menu entry template (APPIMAGE_PATH substituted by installer);
+│   │                              Icon=ggmusicmaker, StartupWMClass=ggmusicmaker
+│   └── Containerfile              Ubuntu 22.04 build image = same as the release runner
+│
+├── scripts/
+│   ├── build-in-container.sh      podman/docker: build the toolchain image, then npm ci + build:deck
+│   ├── fix-appimage.sh            Post-build: strip bundled libwayland-* from the AppDir, repack with
+│   │                              appimagetool. WITHOUT THIS THE WEBVIEW IS BLANK ON STEAMOS.
+│   ├── install-steamdeck.sh       Copy AppImage to ~/Applications, install icons + .desktop, refresh caches
+│   └── gen_icons.py               Pure-Python PNG icon generator (mixer-fader motif)
+│
+├── tests/
+│   ├── browser-integration.mjs    Headless Chromium: boot, import, undo/redo, meter, record, export, FX
+│   └── fixtures/tone.wav          Test tone (peaks right at the limiter threshold — see test comments)
+│
+├── docs/
+│   └── screenshot.png             README screenshot
+│
+└── .github/workflows/
+    ├── ci.yml                     Push/PR: check → test → build → browser test (ubuntu-22.04)
+    └── release.yml                Tag v* or manual: full native build on ubuntu-22.04 (glibc 2.35),
+                                   desktop-entry validation, xvfb launch smoke test, attach AppImage+deb
+```
+
+Generated / ignored: `node_modules/`, `dist/`, `src-tauri/target/`, `src-tauri/gen/`.
+
+---
+
+## 5. How to do things
+
+```bash
+# ---- develop (any machine with Node 20+) ----
+npm install
+npm run dev              # http://localhost:1420 — full DAW in a normal browser
+npm run check            # svelte-check
+npm test                 # vitest
+npm run build            # production frontend → dist/
+npm run test:browser     # needs Chromium: `npx playwright-core install chromium`, or set CHROME_PATH
+
+# ---- native (needs Rust + WebKitGTK dev libs; i.e. Ubuntu 22.04 or the container) ----
+npm run tauri dev        # dev server + native window
+npm run build:deck       # tauri build + scripts/fix-appimage.sh → AppImage + .deb
+
+# ---- on a Steam Deck (no toolchain on the immutable root needed) ----
+scripts/build-in-container.sh    # rootless podman; ~4 min cold, ~1 min warm
+scripts/install-steamdeck.sh     # install what was just built
+~/Applications/ggmusicmaker.AppImage   # or launch from the app menu
+
+# ---- release ----
+git tag v0.1.0 && git push origin v0.1.0     # release.yml builds + attaches artifacts
+```
+
+### Runtime facts worth knowing
+
+- The AppImage bundles GTK, WebKitGTK and **all of GStreamer** (core + plugins) from Ubuntu 22.04, and deliberately does **not** bundle `libwayland-*` (must match the host's Mesa) nor Mesa/EGL itself.
+- glibc: built on 2.35 so it runs on SteamOS. Do not build the release on a newer distro.
+- Useful env vars if the WebView misbehaves: `WEBKIT_DISABLE_DMABUF_RENDERER=1` (set by `lib.rs`), `GDK_BACKEND=x11` (forces XWayland).
+- Diagnosing a blank window: run the AppImage from a terminal; a `WebKitWebProcess` crash prints there. `LD_DEBUG=libs` on the AppImage finds library mismatches fast.
+
+---
+
+## 6. Direction
+
+### Immediate (blocked only on a push)
+
+1. **Push** `rename-ggmusicmaker` (3 commits ahead of `origin/main`; no credentials on this Deck):
+   `git config --global credential.helper store && git push -u origin rename-ggmusicmaker`
+2. Merge to `main` → CI runs for the first time.
+3. Tag `v0.1.0` → first real release; fix the README download link's target.
+4. On-device manual pass: import via Tauri dialog → play → hear it → record → export via save dialog.
+
+### Near term
+
+- **Gamepad navigation** so the app is usable in Gaming Mode (Steam Input → keyboard is the cheap first step; a focus ring + D-pad model is the real one).
+- LICENSE file.
+- A real screenshot for the README (the current one predates the meter/undo).
+- Persist/restore a session (project JSON + referenced files) — the app currently forgets everything on close.
+- Track re-ordering and multi-select.
+
+### v3 ideas (from the original roadmap)
+
+- Formant-corrected pitch shifting; real impulse-response files for reverb.
+- Movable FX order / more inserts per layer.
+- A native Rust/`cpal` `AudioBackend` if WebKitGTK ever proves too slow on the Deck — the interface in `src/audio/backend.ts` exists precisely so this is a second implementation, not a rewrite.
+
+### Non-goals
+
+- Live FX monitoring while recording (latency through GStreamer).
+- Windows/macOS builds (nothing prevents them, but nothing tests them).
+
+---
+
+## 7. History of decisions (why things are the way they are)
+
+| Decision | Why |
+|---|---|
+| Strip `libwayland-*` from the AppImage | Ubuntu 22.04's libwayland 1.20 shadowed the host's 1.23; SteamOS Mesa EGL needs `wl_display_create_queue_with_name` → `EGL_BAD_PARAMETER` → WebProcess abort → blank window. Found with `LD_DEBUG=libs`. |
+| Bundle **all** GStreamer instead of none | Bundled 1.20 core couldn't load the host's 1.26 plugins (`appsrc not found`); using the host's core needs GLib ≥ 2.80 which clashes with the bundled GTK. Bundling the whole stack is the only self-consistent option. |
+| Meter taps **pre**-limiter | A limiter's purpose is to never pass a peak, so a post-limiter meter can't show peaking. Red zone = limiter threshold (-3 dBFS). |
+| Undo history coalesces by key | Faders emit an edit per pointer move; without coalescing one drag = hundreds of undo steps. |
+| Arming excluded from undo | It's transport state (which track records next), not a change to the project. |
+| Build in an Ubuntu 22.04 container even on the Deck | SteamOS root is immutable and has no compiler; glibc 2.41 builds wouldn't be shareable anyway. Same image as CI = same bugs as CI. |
+| Tauri identifier `com.gamernation.ggmusicmaker` | Chosen during the rename; change before first release if a different domain is wanted (it's the app's stable OS-level id). |

@@ -10,6 +10,9 @@ send on every layer and a master limiter for the final level.
 
 ![GgMusicMaker screenshot](docs/screenshot.png)
 
+> **See [MASTER.md](MASTER.md)** for the verified status of every feature, a map of every
+> file, install locations, and the roadmap.
+
 ## Status
 
 **Working now (v1 + v2):**
