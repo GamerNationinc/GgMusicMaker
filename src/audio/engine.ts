@@ -212,7 +212,9 @@ export class AudioEngine implements AudioBackend {
     for (const track of project.tracks) {
       const channel = this.ensureChannel(track);
       channel.applyTrack(track, hasSolo);
-      if (!isTrackAudible(track, hasSolo)) continue;
+      // Schedule every track, audible or not: mute/solo are just the channel
+      // gain, so toggling them mid-playback must find sources already running.
+      // Skipping inaudible tracks here left them silent until the next play.
 
       for (const clip of track.clips) {
         const clipEndT = clip.startTime + clip.duration;

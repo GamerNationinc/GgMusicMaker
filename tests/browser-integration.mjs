@@ -148,6 +148,48 @@ async function main() {
     !status.includes("fallback capture"),
   );
 
+  // --- mute / solo during playback --------------------------------------
+  // Regression: sources were only scheduled for audible tracks, so a mute
+  // then un-mute (or solo then un-solo) mid-playback went silent for good.
+  // Uses a 4 s tone on its own layer and measures after the 1 s tone and the
+  // 1.8 s take have finished, so that layer is the only thing sounding.
+  const litLeds = () =>
+    page.$$eval(".seg", (els) => els.filter((e) => !e.style.background.includes("panel")).length);
+  await page.click("button[aria-label='Stop']");
+  await page.setInputFiles("input[type=file]", [join(ROOT, "tests", "fixtures", "tone-4s.wav")]);
+  await page.waitForTimeout(600);
+  const longLayer = ".head:nth-child(3)";
+  // Mute BEFORE play, then un-mute during playback.
+  await page.click(`${longLayer} .chip.mute`);
+  await page.click("button[aria-label='Play or pause']");
+  await page.waitForTimeout(2100);
+  const whileMuted = await litLeds();
+  await page.click(`${longLayer} .chip.mute`);
+  await page.waitForTimeout(300);
+  const afterUnmute = await litLeds();
+  check(
+    "muted-before-play layer sounds once un-muted",
+    whileMuted === 0 && afterUnmute > 0,
+    `${whileMuted} → ${afterUnmute} LEDs`,
+  );
+  await page.click("button[aria-label='Stop']");
+  await page.waitForTimeout(200);
+  // Solo another layer BEFORE play, then un-solo during playback.
+  await page.click(".head:nth-child(1) .chip.solo");
+  await page.click("button[aria-label='Play or pause']");
+  await page.waitForTimeout(2100);
+  const whileSoloed = await litLeds();
+  await page.click(".head:nth-child(1) .chip.solo");
+  await page.waitForTimeout(300);
+  const afterUnsolo = await litLeds();
+  check(
+    "un-soloing brings back a layer that was silent at play",
+    whileSoloed === 0 && afterUnsolo > 0,
+    `${whileSoloed} → ${afterUnsolo} LEDs`,
+  );
+  await page.click("button[aria-label='Stop']");
+  await page.waitForTimeout(200);
+
   // --- export + voice FX change the render ------------------------------
   async function exportBytes() {
     const dl = page.waitForEvent("download", { timeout: 15000 });
