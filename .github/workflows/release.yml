@@ -74,7 +74,7 @@ jobs:
 
       - name: Smoke-test that the binary launches
         run: |
-          APPIMAGE=$(find src-tauri/target/release/bundle/appimage -name '*.AppImage' | head -1)
+          APPIMAGE=$(find src-tauri/target/release/bundle/appimage -maxdepth 1 -name 'GgMusicMaker*.AppImage' | head -1)
           echo "Built: $APPIMAGE"
           file "$APPIMAGE"
           # Launch under a virtual display; the window opens and we kill it.
@@ -95,7 +95,7 @@ jobs:
         run: |
           mkdir -p dist-artifacts
           find src-tauri/target/release/bundle -type f \
-            \( -name '*.AppImage' -o -name '*.deb' \) -exec cp {} dist-artifacts/ \;
+            \( -name 'GgMusicMaker*.AppImage' -o -name 'GgMusicMaker*.deb' \) -exec cp {} dist-artifacts/ \;
           cp packaging/ggmusicmaker.desktop scripts/install-steamdeck.sh dist-artifacts/
           ls -lh dist-artifacts
 

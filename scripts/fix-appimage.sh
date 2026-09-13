@@ -19,7 +19,7 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUNDLE_DIR="$REPO_DIR/src-tauri/target/release/bundle/appimage"
 
 APPDIR="$(find "$BUNDLE_DIR" -maxdepth 1 -name '*.AppDir' -type d | head -1 || true)"
-APPIMAGE="$(find "$BUNDLE_DIR" -maxdepth 1 -name '*.AppImage' -type f ! -name 'appimagetool*' | head -1 || true)"
+APPIMAGE="$(find "$BUNDLE_DIR" -maxdepth 1 -name '*.AppImage' -type f | head -1 || true)"
 if [ -z "$APPDIR" ] || [ -z "$APPIMAGE" ]; then
   echo "error: no AppDir/AppImage under $BUNDLE_DIR — run 'npm run tauri build' first" >&2
   exit 1
@@ -28,8 +28,10 @@ fi
 echo "==> Stripping host-tied libraries from $(basename "$APPDIR")"
 find "$APPDIR/usr/lib" -name 'libwayland-*.so*' -print -delete
 
-# appimagetool repacks the AppDir. Cached next to the bundle; APPIMAGETOOL overrides.
-TOOL="${APPIMAGETOOL:-$BUNDLE_DIR/appimagetool-x86_64.AppImage}"
+# appimagetool repacks the AppDir. Cached under target/ but *outside* the
+# bundle dir, so nothing that globs bundle/appimage/*.AppImage (the release
+# smoke test, artifact collection) can mistake it for the app.
+TOOL="${APPIMAGETOOL:-$REPO_DIR/src-tauri/target/appimagetool-x86_64.AppImage}"
 if [ ! -x "$TOOL" ]; then
   echo "==> Downloading appimagetool"
   curl -fsSL -o "$TOOL" \
