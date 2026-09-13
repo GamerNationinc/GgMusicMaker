@@ -34,9 +34,16 @@ pub fn run() {
                 // and connect_permission_request.
                 use webkit2gtk::glib::Cast;
                 use webkit2gtk::{
-                    PermissionRequestExt, UserMediaPermissionRequest, WebViewExt,
+                    PermissionRequestExt, SettingsExt, UserMediaPermissionRequest, WebViewExt,
                 };
                 let wv = webview.inner();
+                // WebKitGTK ships with MediaStream support switched OFF, and
+                // wry doesn't switch it on, so getUserMedia fails before the
+                // permission handler below is ever asked. Enable it here.
+                if let Some(settings) = WebViewExt::settings(&wv) {
+                    settings.set_enable_media_stream(true);
+                    settings.set_enable_media_capabilities(true);
+                }
                 wv.connect_permission_request(|_, req| {
                     // Only auto-grant microphone/camera capture, which the user
                     // has already opted into by pressing Record.
