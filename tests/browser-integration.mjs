@@ -113,12 +113,16 @@ async function main() {
   });
   await page.click("button[aria-label='Play or pause']");
   await page.waitForTimeout(700);
+  // The lamp is the "(o) PEAK" glyphs at the bottom-left of the dial face
+  // (cells 1..8 of row 10, 5x7 px cells). Scan that strip for the brightest
+  // pixel: amber/red when lit, dim green when not.
   const lamp = await page.evaluate(() => {
     const c = document.querySelector("canvas.meter");
     const dpr = window.devicePixelRatio || 1;
-    const w = c.width / dpr;
-    const [r, g, b] = c.getContext("2d").getImageData((w - 16) * dpr, 14 * dpr, 1, 1).data;
-    return { r, g, b };
+    const d = c.getContext("2d").getImageData(5 * dpr, 70 * dpr, 40 * dpr, 7 * dpr).data;
+    let best = { r: 0, g: 0, b: 0 };
+    for (let i = 0; i < d.length; i += 4) if (d[i] > best.r) best = { r: d[i], g: d[i + 1], b: d[i + 2] };
+    return best;
   });
   check(
     "analogue meter PEAK lamp lights on a hot signal",

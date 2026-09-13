@@ -45,10 +45,10 @@
     $project.tracks.forEach((track, ti) => {
       const y = ti * LANE_HEIGHT;
       // Lane background stripes.
-      ctx.fillStyle = ti % 2 ? "#15141f" : "#12111b";
+      ctx.fillStyle = ti % 2 ? "#06140b" : "#051009";
       ctx.fillRect(0, y, w, LANE_HEIGHT);
       // Bar gridlines every second.
-      ctx.strokeStyle = "rgba(255,255,255,0.04)";
+      ctx.strokeStyle = "rgba(55,224,122,0.07)";
       ctx.lineWidth = 1;
       for (let s = 0; s * pps < w; s++) {
         const x = Math.round(s * pps) + 0.5;
@@ -73,8 +73,11 @@
     const clipH = LANE_HEIGHT - pad * 2;
     const selected = clip.id === $selectedClipId;
 
+    // DOOM-style extrusion: a hard black drop behind the clip.
+    ctx.fillStyle = "#000";
+    ctx.fillRect(x + 3, top + 3, cw, clipH);
     // Clip body.
-    ctx.fillStyle = selected ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.35)";
+    ctx.fillStyle = selected ? "rgba(184,255,208,0.14)" : "rgba(2,10,5,0.85)";
     ctx.fillRect(x, top, cw, clipH);
     ctx.strokeStyle = selected ? "#ffffff" : color;
     ctx.lineWidth = selected ? 2 : 1;
@@ -131,10 +134,10 @@
     rulerCanvas.style.height = `${RULER_HEIGHT}px`;
     const ctx = rulerCanvas.getContext("2d")!;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.fillStyle = "#0a0912";
+    ctx.fillStyle = "#020704";
     ctx.fillRect(0, 0, w, RULER_HEIGHT);
-    ctx.fillStyle = "#8f8ab5";
-    ctx.strokeStyle = "rgba(255,255,255,0.15)";
+    ctx.fillStyle = "#3f9a62";
+    ctx.strokeStyle = "rgba(55,224,122,0.25)";
     ctx.font = "10px monospace";
     // Label every second; tick every second.
     const step = pps < 40 ? 5 : 1;
@@ -285,7 +288,7 @@
     flex-direction: column;
     flex: 1 1 auto;
     min-width: 0;
-    background: var(--bg);
+    background: transparent; /* the rain shows through the void */
   }
   .ruler-row {
     display: flex;
@@ -313,6 +316,7 @@
     flex: 0 0 auto;
     border-right: 2px solid var(--bevel-dark);
     background: var(--panel);
+    box-shadow: 4px 0 0 #000; /* the LAYERS column stands proud of the void */
   }
   .empty {
     padding: 20px 12px;

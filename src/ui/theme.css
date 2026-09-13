@@ -1,23 +1,28 @@
-/* GgMusicMaker — retro pixel / DOOM-status-bar theme.
+/* GgMusicMaker — Matrix-terminal / DOOM-status-bar theme.
  *
- * Chunky beveled panels echoing the Hasbro "Play It Now" toy, a dark arcade
- * palette, and blocky monospace type. Sized and spaced for touch on the Steam
- * Deck's 1280x800 screen (large hit targets, no hover-only affordances). */
+ * Phosphor green on near-black with CRT scanlines (the Matrix side), and
+ * chunky panels and buttons that are *extruded* — a hard black drop-shadow
+ * offset down-right plus light/dark bevels — the way DOOM's status bar makes
+ * flat sprites read as solid objects (the 2.5D side). Blocky monospace type
+ * throughout. Sized and spaced for touch on the Steam Deck's 1280x800 screen
+ * (large hit targets, no hover-only affordances). */
 
 :root {
-  --bg: #0e0d16;
-  --panel: #1b1a29;
-  --panel-hi: #2a2840;
-  --panel-lo: #0a0912;
-  --ink: #e7e3ff;
-  --ink-dim: #8f8ab5;
+  --bg: #030805;
+  --panel: #071a0f;
+  --panel-hi: #0d2c1a;
+  --panel-lo: #020704;
+  --ink: #b8ffd0;
+  --ink-dim: #3f9a62;
   --magenta: #ff3ca0;
-  --green: #5af096;
+  --green: #37e07a;
   --cyan: #3cc8ff;
-  --amber: #ffcf3c;
-  --danger: #ff5b5b;
-  --bevel-light: rgba(255, 255, 255, 0.14);
-  --bevel-dark: rgba(0, 0, 0, 0.55);
+  --amber: #ffb020;
+  --danger: #ff4a4a;
+  --bevel-light: rgba(140, 255, 180, 0.22);
+  --bevel-dark: rgba(0, 0, 0, 0.75);
+  --extrude: 4px 4px 0 #000; /* the DOOM drop */
+  --glow: 0 0 6px rgba(55, 224, 122, 0.45);
   --font: "Courier New", "DejaVu Sans Mono", ui-monospace, monospace;
   --touch: 44px; /* minimum touch target */
 }
@@ -46,6 +51,24 @@ body {
   flex-direction: column;
 }
 
+/* CRT: scanlines + a soft vignette over everything, never blocking input. */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1000;
+  background:
+    repeating-linear-gradient(
+      to bottom,
+      rgba(0, 0, 0, 0) 0px,
+      rgba(0, 0, 0, 0) 2px,
+      rgba(0, 0, 0, 0.16) 2px,
+      rgba(0, 0, 0, 0.16) 3px
+    ),
+    radial-gradient(ellipse at center, rgba(0, 0, 0, 0) 60%, rgba(0, 0, 0, 0.35) 100%);
+}
+
 canvas {
   image-rendering: pixelated;
   display: block;
@@ -59,6 +82,7 @@ canvas {
   border-left: 2px solid var(--bevel-light);
   border-right: 2px solid var(--bevel-dark);
   border-bottom: 2px solid var(--bevel-dark);
+  box-shadow: var(--extrude), inset 0 0 0 1px rgba(55, 224, 122, 0.08);
 }
 
 button.btn {
@@ -76,14 +100,19 @@ button.btn {
   padding: 0 14px;
   cursor: pointer;
   font-size: 13px;
+  box-shadow: 3px 3px 0 #000;
+  text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.6);
 }
 
+/* Pressing sinks the button into its own shadow. */
 button.btn:active {
   background: linear-gradient(var(--panel), var(--panel-lo));
   border-top: 2px solid var(--bevel-dark);
   border-left: 2px solid var(--bevel-dark);
   border-right: 2px solid var(--bevel-light);
   border-bottom: 2px solid var(--bevel-light);
+  transform: translate(2px, 2px);
+  box-shadow: 1px 1px 0 #000;
 }
 
 button.btn.accent {
@@ -120,6 +149,11 @@ button.btn:disabled {
   color: var(--ink-dim);
   cursor: pointer;
   font-family: var(--font);
+  box-shadow: 2px 2px 0 #000;
+}
+.chip:active {
+  transform: translate(1px, 1px);
+  box-shadow: 1px 1px 0 #000;
 }
 .chip.on.mute {
   background: var(--amber);
@@ -161,11 +195,13 @@ input[type="range"]::-webkit-slider-thumb {
   color: var(--ink-dim);
 }
 
+/* Terminal readouts: sunken, phosphor glow. */
 .screen {
-  background: #05130a;
+  background: #020a05;
   color: var(--green);
   border: 2px solid var(--bevel-dark);
   padding: 2px 8px;
   font-weight: bold;
-  text-shadow: 0 0 6px rgba(90, 240, 150, 0.5);
+  text-shadow: var(--glow);
+  box-shadow: inset 2px 2px 0 #000, inset 0 0 14px rgba(55, 224, 122, 0.12);
 }

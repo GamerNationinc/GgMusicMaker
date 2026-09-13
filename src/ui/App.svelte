@@ -5,6 +5,7 @@
   import FxRack from "./FxRack.svelte";
   import AnalogMeter from "./AnalogMeter.svelte";
   import ExportDialog from "./ExportDialog.svelte";
+  import MatrixRain from "./MatrixRain.svelte";
   import {
     togglePlay,
     splitAtPlayhead,
@@ -67,6 +68,7 @@
 <Toolbar />
 
 <main class="workspace">
+  <MatrixRain />
   <Timeline />
 </main>
 
@@ -112,6 +114,15 @@
     min-height: 0;
     display: flex;
     overflow: hidden;
+    position: relative; /* rain canvas anchors here, behind the timeline */
+    background: var(--bg);
+  }
+  .workspace > :global(.timeline) {
+    position: relative;
+    z-index: 1;
+  }
+  .title {
+    text-shadow: 2px 2px 0 var(--panel-lo), var(--glow);
   }
   .bottom {
     flex: 0 0 auto;
