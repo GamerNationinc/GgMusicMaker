@@ -37,6 +37,11 @@
       "icons/icon.png"
     ],
     "category": "Music",
+    "linux": {
+      "appimage": {
+        "bundleMediaFramework": true
+      }
+    },
     "shortDescription": "A simple, playful DAW for the Steam Deck",
     "longDescription": "Layer any audio, cut and split clips, record from the mic, and add iZotope-style reverb and voice FX — wrapped in retro pixel/DOOM art. Built for the Steam Deck in desktop mode."
   }

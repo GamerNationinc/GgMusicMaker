@@ -94,8 +94,12 @@ npm test               # vitest (edit math, WAV encoder, peaks, take assembly)
 npm run build          # production frontend build
 npm run test:browser   # headless Chromium: boot, import, RECORD, export, voice FX
 
-# Build a Steam Deck AppImage + .deb:
-npm run tauri build
+# Build the Steam Deck AppImage (+ .deb) — tauri build plus scripts/fix-appimage.sh:
+npm run build:deck
+
+# Same thing from a machine without the Tauri toolchain (including a Steam Deck):
+# builds inside an Ubuntu 22.04 container via podman/docker, matching CI.
+scripts/build-in-container.sh
 ```
 
 `test:browser` needs a Chromium binary. It looks in Playwright's browser cache first, so
@@ -169,3 +173,10 @@ appearing to play in silence.
 - `src-tauri/src/lib.rs` disables the WebKitGTK DMABUF renderer, the common fix for
   a black WebView on Mesa/Steam Deck drivers, and the app requests microphone access
   for recording.
+- `scripts/fix-appimage.sh` (run by `npm run build:deck`) strips the bundled
+  `libwayland-*` from the AppImage. SteamOS's Mesa EGL driver needs a newer libwayland
+  than the Ubuntu 22.04 build host ships; with the bundled copy shadowing the system one,
+  `WebKitWebProcess` aborts with `Could not create default EGL display` and the window
+  stays blank. GStreamer, by contrast, *is* bundled in full (`bundleMediaFramework`) so
+  the audio pipeline is self-contained rather than mixing the bundled 1.20 core with the
+  host's 1.26 plugins.

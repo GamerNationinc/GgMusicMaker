@@ -68,7 +68,9 @@ jobs:
           desktop-file-validate /tmp/check.desktop
 
       - name: Build AppImage and .deb
-        run: npm run tauri build
+        # build:deck = tauri build + scripts/fix-appimage.sh (strips host-tied
+        # libs that otherwise blank the WebView on SteamOS).
+        run: npm run build:deck
 
       - name: Smoke-test that the binary launches
         run: |

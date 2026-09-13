@@ -11,4 +11,4 @@ Categories=AudioVideo;Audio;AudioVideoEditing;
 Keywords=daw;audio;music;recording;mixer;
 MimeType=audio/wav;audio/mpeg;audio/ogg;audio/flac;audio/x-wav;
 StartupNotify=true
-StartupWMClass=GgMusicMaker
+StartupWMClass=ggmusicmaker
