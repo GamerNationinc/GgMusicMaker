@@ -5,7 +5,9 @@
   // shows where there is nothing else — the space "beyond" the project.
   import { onMount } from "svelte";
 
-  const GLYPHS = "ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉ0123456789ABCDEFXYZ<>/\\|=+*#@%$";
+  // Pure ASCII: guaranteed to exist in every monospace font WebKitGTK can
+  // find on the Deck (CJK glyphs rendered as blanks there).
+  const GLYPHS = "0123456789ABCDEFGHJKLMNPQRSTUVWXYZ<>/\\|=+*#@%$&?!;:~^";
   const COL_W = 14;
   const ROW_H = 16;
   const TICK_MS = 50;
