@@ -8,7 +8,7 @@ Load any audio file, stack it into layers, cut and split clips on a timeline,
 record from the mic, and mix it down — with an iZotope-style convolution reverb
 send on every layer and a master limiter for the final level.
 
-![screenshot placeholder](docs/screenshot.png)
+![GgMusicMaker screenshot](docs/screenshot.png)
 
 ## Status
 
@@ -55,7 +55,7 @@ src/
 src-tauri/   Rust/Tauri shell: window config, mic/fs permissions, WebKitGTK setup
 ```
 
-Key design choices (see `docs/` and inline comments):
+Key design choices (see also "Architecture decisions" below and inline comments):
 
 - **Non-destructive editing** — clips only reference a decoded `AudioBuffer` and
   adjust `offset`/`duration`/`startTime`; source audio is never mutated. The math
@@ -98,6 +98,9 @@ npm run test:browser   # headless Chromium: boot, import, RECORD, export, voice 
 npm run tauri build
 ```
 
+`test:browser` needs a Chromium binary. It looks in Playwright's browser cache first, so
+`npx playwright-core install chromium` is enough; or point `CHROME_PATH` at any Chrome/Chromium.
+
 The frontend also runs fully in a plain browser — export falls back to a normal
 download when the Tauri APIs aren't present, so you can develop most features
 without building the native shell.
@@ -109,13 +112,13 @@ build, not one you compiled yourself on a newer distro** (see the glibc note bel
 
 ```bash
 chmod +x install-steamdeck.sh
-./install-steamdeck.sh ~/Downloads/ProfitPals-DAW_0.1.0_amd64.AppImage
+./install-steamdeck.sh ~/Downloads/GgMusicMaker_0.1.0_amd64.AppImage
 ```
 
 That copies the AppImage to `~/Applications`, installs the icons, and adds a menu entry —
 everything under `$HOME`, so it needs no `sudo` and survives SteamOS updates. Launch
 **GgMusicMaker** from the application menu (Multimedia). To play it in Gaming Mode, add
-`~/Applications/profitpals-daw.AppImage` via *Steam → Add a Non-Steam Game*.
+`~/Applications/ggmusicmaker.AppImage` via *Steam → Add a Non-Steam Game*.
 
 > **Why the release build?** Releases are built on Ubuntu 22.04 (glibc 2.35) because glibc
 > is forward- but not backward-compatible: a binary compiled against a newer glibc than

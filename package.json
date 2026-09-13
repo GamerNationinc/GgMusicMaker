@@ -1,7 +1,7 @@
 {
-  "name": "profitpals-daw",
+  "name": "ggmusicmaker",
   "version": "0.1.0",
-  "description": "ProfitPals DAW — a simple, playful DAW for the Steam Deck",
+  "description": "GgMusicMaker — a simple, playful DAW for the Steam Deck",
   "type": "module",
   "scripts": {
     "dev": "vite",

@@ -1,4 +1,4 @@
-// AudioEngine — the Web Audio runtime for ProfitPals DAW.
+// AudioEngine — the Web Audio runtime for GgMusicMaker.
 //
 // Owns the single AudioContext, the master bus (gain -> limiter -> meter ->
 // output), a shared convolution-reverb bus, and one TrackChannel per track

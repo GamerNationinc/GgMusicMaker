@@ -362,7 +362,7 @@ export async function exportMix(): Promise<void> {
       const { save } = await import("@tauri-apps/plugin-dialog");
       const { writeFile } = await import("@tauri-apps/plugin-fs");
       const path = await save({
-        defaultPath: "profitpals-mix.wav",
+        defaultPath: "ggmusicmaker-mix.wav",
         filters: [{ name: "WAV audio", extensions: ["wav"] }],
       });
       if (!path) {
@@ -383,8 +383,8 @@ export async function exportMix(): Promise<void> {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = "profitpals-mix.wav";
+  a.download = "ggmusicmaker-mix.wav";
   a.click();
   URL.revokeObjectURL(url);
-  status.set("Exported profitpals-mix.wav");
+  status.set("Exported ggmusicmaker-mix.wav");
 }

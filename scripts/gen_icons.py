@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the ProfitPals DAW app icons.
+"""Generate the GgMusicMaker app icons.
 
 Pure-Python PNG encoder (no third-party deps) so icons can be regenerated
 anywhere, including in CI. Draws a chunky mixer-fader motif echoing the Hasbro

@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# Install ProfitPals DAW so it launches with one click from the desktop menu.
+# Install GgMusicMaker so it launches with one click from the desktop menu.
 #
 # Copies the AppImage into ~/Applications, installs the icons, and writes a
 # .desktop entry into ~/.local/share/applications. Everything lands under $HOME,
 # so it works on SteamOS's immutable root without sudo and survives OS updates.
 #
-# Usage:  ./scripts/install-steamdeck.sh [path/to/ProfitPals-DAW.AppImage]
+# Usage:  ./scripts/install-steamdeck.sh [path/to/GgMusicMaker.AppImage]
 # With no argument it looks for a freshly built AppImage in src-tauri/target.
 
 set -euo pipefail
 
-APP_NAME="ProfitPals DAW"
-APP_ID="profitpals-daw"
+APP_NAME="GgMusicMaker"
+APP_ID="ggmusicmaker"
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 APPS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
@@ -27,7 +27,7 @@ fi
 
 if [ -z "${SRC_APPIMAGE:-}" ] || [ ! -f "$SRC_APPIMAGE" ]; then
   echo "error: no AppImage found." >&2
-  echo "  Pass one explicitly:  $0 ~/Downloads/ProfitPals-DAW_0.1.0_amd64.AppImage" >&2
+  echo "  Pass one explicitly:  $0 ~/Downloads/GgMusicMaker_0.1.0_amd64.AppImage" >&2
   echo "  Or build one first:   npm run tauri build" >&2
   exit 1
 fi

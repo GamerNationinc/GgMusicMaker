@@ -2370,7 +2370,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "profitpals-daw"
+name = "ggmusicmaker"
 version = "0.1.0"
 dependencies = [
  "serde",

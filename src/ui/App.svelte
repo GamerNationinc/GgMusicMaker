@@ -43,7 +43,7 @@
 <header class="app-header panel">
   <div class="brand">
     <span class="logo">▶</span>
-    <span class="title">ProfitPals<span class="daw">DAW</span></span>
+    <span class="title">GgMusic<span class="accent">Maker</span></span>
   </div>
   <Transport />
 </header>
@@ -83,9 +83,8 @@
     color: var(--magenta);
     text-shadow: 2px 2px 0 var(--panel-lo);
   }
-  .daw {
+  .accent {
     color: var(--cyan);
-    margin-left: 4px;
   }
   .workspace {
     flex: 1 1 auto;

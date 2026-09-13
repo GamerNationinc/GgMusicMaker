@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    profitpals_daw_lib::run()
+    ggmusicmaker_lib::run()
 }

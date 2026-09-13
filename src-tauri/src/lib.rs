@@ -1,4 +1,4 @@
-// ProfitPals DAW — Tauri shell.
+// GgMusicMaker — Tauri shell.
 //
 // The DAW itself lives in the web frontend (Web Audio API + Canvas). This Rust
 // shell hosts the WebView, wires up the file dialog + filesystem plugins so the
@@ -54,5 +54,5 @@ pub fn run() {
 
     builder
         .run(tauri::generate_context!())
-        .expect("error while running ProfitPals DAW");
+        .expect("error while running GgMusicMaker");
 }

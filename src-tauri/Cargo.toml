@@ -1,13 +1,13 @@
 [package]
-name = "profitpals-daw"
+name = "ggmusicmaker"
 version = "0.1.0"
-description = "ProfitPals DAW — a simple, playful DAW for the Steam Deck"
-authors = ["ProfitPals"]
+description = "GgMusicMaker — a simple, playful DAW for the Steam Deck"
+authors = ["GamerNation"]
 edition = "2021"
 rust-version = "1.82"
 
 [lib]
-name = "profitpals_daw_lib"
+name = "ggmusicmaker_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

@@ -64,7 +64,7 @@ jobs:
 
       - name: Validate desktop entry
         run: |
-          sed 's|APPIMAGE_PATH|/usr/bin/true|' packaging/profitpals-daw.desktop > /tmp/check.desktop
+          sed 's|APPIMAGE_PATH|/usr/bin/true|' packaging/ggmusicmaker.desktop > /tmp/check.desktop
           desktop-file-validate /tmp/check.desktop
 
       - name: Build AppImage and .deb
@@ -94,12 +94,12 @@ jobs:
           mkdir -p dist-artifacts
           find src-tauri/target/release/bundle -type f \
             \( -name '*.AppImage' -o -name '*.deb' \) -exec cp {} dist-artifacts/ \;
-          cp packaging/profitpals-daw.desktop scripts/install-steamdeck.sh dist-artifacts/
+          cp packaging/ggmusicmaker.desktop scripts/install-steamdeck.sh dist-artifacts/
           ls -lh dist-artifacts
 
       - uses: actions/upload-artifact@v4
         with:
-          name: profitpals-daw-linux
+          name: ggmusicmaker-linux
           path: dist-artifacts/*
 
       - name: Attach to release
@@ -108,10 +108,10 @@ jobs:
         with:
           files: dist-artifacts/*
           body: |
-            **ProfitPals DAW** — Steam Deck build.
+            **GgMusicMaker** — Steam Deck build.
 
-            1. Download `ProfitPals-DAW_*.AppImage` and `install-steamdeck.sh`
+            1. Download `GgMusicMaker_*.AppImage` and `install-steamdeck.sh`
             2. `chmod +x install-steamdeck.sh && ./install-steamdeck.sh <the AppImage>`
-            3. Launch **ProfitPals DAW** from the application menu.
+            3. Launch **GgMusicMaker** from the application menu.
 
             Built on Ubuntu 22.04 (glibc 2.35) for SteamOS compatibility.

@@ -1,0 +1,39 @@
+name: CI
+
+# Frontend quality gates on every push and pull request. The native Tauri
+# build is deliberately left to release.yml (it needs the WebKitGTK toolchain
+# and a glibc-pinned runner); this job only proves the app logic is sound.
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+jobs:
+  frontend:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Type-check
+        run: npm run check
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Production build
+        run: npm run build
+
+      - name: Install Chromium for browser tests
+        run: npx playwright-core install --with-deps chromium
+
+      - name: Browser integration tests
+        run: npm run test:browser

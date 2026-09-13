@@ -10,6 +10,7 @@
 // device-level check.
 //
 // Usage: node tests/browser-integration.mjs   (after `npm run build`)
+// Needs Chromium: `npx playwright-core install chromium`, or set CHROME_PATH.
 
 import http from "node:http";
 import { readFile } from "node:fs/promises";
@@ -22,8 +23,9 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DIST = join(ROOT, "dist");
 const PORT = 4610;
 
-const CHROME =
-  process.env.CHROME_PATH || "/opt/pw-browsers/chromium-1194/chrome-linux/chrome";
+// CHROME_PATH overrides; otherwise use the Chromium that playwright-core
+// resolves from its cache (`npx playwright-core install chromium`).
+const CHROME = process.env.CHROME_PATH || undefined;
 
 const MIME = {
   ".html": "text/html",
@@ -74,7 +76,7 @@ async function main() {
   await page.goto(`http://localhost:${PORT}/`, { waitUntil: "networkidle" });
 
   // --- boot -------------------------------------------------------------
-  check("app mounts", (await page.textContent(".title")) === "ProfitPalsDAW");
+  check("app mounts", (await page.textContent(".title")) === "GgMusicMaker");
 
   // --- import -----------------------------------------------------------
   const tone = join(ROOT, "tests", "fixtures", "tone.wav");

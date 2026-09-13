@@ -1,4 +1,4 @@
-// Core data model for ProfitPals DAW.
+// Core data model for GgMusicMaker.
 //
 // Everything here is plain, serializable state (no Web Audio objects). Decoded
 // AudioBuffers live separately in the AudioEngine's buffer store, keyed by
