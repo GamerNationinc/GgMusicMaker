@@ -78,5 +78,11 @@ export interface AudioBackend {
   readonly recordingUsesWorklet: boolean;
 
   // Export
-  renderMix(project: Project, tailSeconds?: number): Promise<AudioBuffer>;
+  /** Render the whole project offline. `onProgress` gets 0..1 as rendering
+   *  advances, so the UI can show a real bar rather than a spinner. */
+  renderMix(
+    project: Project,
+    tailSeconds?: number,
+    onProgress?: (fraction: number) => void,
+  ): Promise<AudioBuffer>;
 }

@@ -4,6 +4,7 @@
   import Timeline from "./Timeline.svelte";
   import FxRack from "./FxRack.svelte";
   import AnalogMeter from "./AnalogMeter.svelte";
+  import ExportDialog from "./ExportDialog.svelte";
   import {
     togglePlay,
     splitAtPlayhead,
@@ -75,6 +76,8 @@
   <AnalogMeter />
   <div class="statusbar screen">{$status}</div>
 </footer>
+
+<ExportDialog />
 
 <style>
   .app-header {

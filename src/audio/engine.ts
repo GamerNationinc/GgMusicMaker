@@ -382,7 +382,11 @@ export class AudioEngine implements AudioBackend {
   // ---- Offline export -----------------------------------------------------
 
   /** Re-render the whole project (FX + reverb + master) to one AudioBuffer. */
-  async renderMix(project: Project, tailSeconds = 3): Promise<AudioBuffer> {
+  async renderMix(
+    project: Project,
+    tailSeconds = 3,
+    onProgress?: (fraction: number) => void,
+  ): Promise<AudioBuffer> {
     const hasSolo = anySoloed(project);
     let duration = 0;
     for (const t of project.tracks)
@@ -430,6 +434,26 @@ export class AudioEngine implements AudioBackend {
       }
     }
 
-    return offline.startRendering();
+    // OfflineAudioContext has no progress event, but it can be suspended at
+    // scheduled times. Pausing briefly at N checkpoints and resuming gives a
+    // genuine progress figure at almost no cost.
+    if (onProgress) {
+      const steps = 24;
+      for (let i = 1; i < steps; i++) {
+        const at = (duration * i) / steps;
+        offline
+          .suspend(at)
+          .then(() => {
+            onProgress(i / steps);
+            return offline.resume();
+          })
+          .catch(() => {
+            /* suspend past the end or unsupported: progress just skips ahead */
+          });
+      }
+    }
+    const rendered = await offline.startRendering();
+    onProgress?.(1);
+    return rendered;
   }
 }

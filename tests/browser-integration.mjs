@@ -198,6 +198,12 @@ async function main() {
   }
   const dry = await exportBytes();
   check("exports a WAV", dry.length > 44 && dry.slice(0, 4).toString() === "RIFF");
+  await page.waitForTimeout(300);
+  const phase = await page.textContent(".dialog .phase").catch(() => "");
+  check("export popup reports completion", phase.trim() === "EXPORT COMPLETE", phase.trim());
+  await page.click(".dialog button");
+  await page.waitForTimeout(200);
+  check("export popup dismisses", (await page.$(".dialog")) === null);
 
   await page.click(".chip.fx");
   await page.waitForTimeout(200);

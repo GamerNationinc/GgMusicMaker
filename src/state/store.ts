@@ -49,6 +49,13 @@ export const masterMeter = writable<MasterMeter>({ peak: 0, rms: 0, reduction: 0
 /** Log-spaced spectrum bands (0..1) of the mix. The same array is re-set each frame. */
 export const SPECTRUM_BANDS = 20;
 export const masterSpectrum = writable<Float32Array>(new Float32Array(SPECTRUM_BANDS));
+/** Export dialog state. `phase` drives the retro progress popup. */
+export interface ExportState {
+  phase: "idle" | "rendering" | "encoding" | "saving" | "done" | "error";
+  fraction: number;
+  message: string;
+}
+export const exportState = writable<ExportState>({ phase: "idle", fraction: 0, message: "" });
 export const canUndo = writable<boolean>(false);
 export const canRedo = writable<boolean>(false);
 /** Timeline zoom, in pixels per second. */
@@ -431,47 +438,72 @@ export async function stopRecording(): Promise<void> {
 
 // ---- export ---------------------------------------------------------------
 
-/** Render the mix to WAV and save it (Tauri dialog if available, else download). */
+let exportCloseTimer = 0;
+function setExport(phase: ExportState["phase"], fraction: number, message = ""): void {
+  exportState.set({ phase, fraction, message });
+}
+
+export function dismissExport(): void {
+  clearTimeout(exportCloseTimer);
+  setExport("idle", 0);
+}
+
+/** Render the mix to WAV and save it (Tauri dialog if available, else download).
+ *  Drives `exportState` so the UI can show progress and the outcome. */
 export async function exportMix(): Promise<void> {
   const p = get(project);
   if (projectDuration(p) === 0) {
     status.set("Nothing to export yet.");
     return;
   }
-  status.set("Rendering mix…");
-  const rendered = await engine.renderMix(p);
-  const wav = encodeWav(rendered);
-  const bytes = new Uint8Array(wav);
+  if (get(exportState).phase !== "idle" && get(exportState).phase !== "done") return;
+  clearTimeout(exportCloseTimer);
 
-  const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-  if (isTauri) {
-    try {
+  try {
+    setExport("rendering", 0);
+    status.set("Rendering mix…");
+    const rendered = await engine.renderMix(p, 3, (f) => setExport("rendering", f));
+    setExport("encoding", 1);
+    // Let the bar paint the encoding phase before the synchronous encode.
+    await new Promise((r) => setTimeout(r, 30));
+    const bytes = new Uint8Array(encodeWav(rendered));
+
+    const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+    let where: string;
+    if (isTauri) {
       const { save } = await import("@tauri-apps/plugin-dialog");
       const { writeFile } = await import("@tauri-apps/plugin-fs");
+      setExport("saving", 1);
       const path = await save({
         defaultPath: "ggmusicmaker-mix.wav",
         filters: [{ name: "WAV audio", extensions: ["wav"] }],
       });
       if (!path) {
+        dismissExport();
         status.set("Export cancelled.");
         return;
       }
       await writeFile(path, bytes);
-      status.set(`Exported to ${path}`);
-      return;
-    } catch (err) {
-      status.set(`Export failed: ${(err as Error).message}`);
-      return;
+      where = path;
+    } else {
+      // Browser fallback: trigger a download.
+      setExport("saving", 1);
+      const blob = new Blob([bytes], { type: "audio/wav" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "ggmusicmaker-mix.wav";
+      a.click();
+      URL.revokeObjectURL(url);
+      where = "ggmusicmaker-mix.wav";
     }
+    const secs = rendered.duration.toFixed(1);
+    setExport("done", 1, `${secs}s → ${where}`);
+    status.set(`Exported ${where}`);
+    exportCloseTimer = window.setTimeout(dismissExport, 2500);
+  } catch (err) {
+    const msg = (err as Error).message;
+    setExport("error", 0, msg);
+    status.set(`Export failed: ${msg}`);
   }
-
-  // Browser fallback: trigger a download.
-  const blob = new Blob([bytes], { type: "audio/wav" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "ggmusicmaker-mix.wav";
-  a.click();
-  URL.revokeObjectURL(url);
-  status.set("Exported ggmusicmaker-mix.wav");
 }
