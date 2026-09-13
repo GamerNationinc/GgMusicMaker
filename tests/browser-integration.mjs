@@ -84,6 +84,54 @@ async function main() {
   await page.waitForTimeout(600);
   check("imports and layers a file", (await page.$$(".head")).length === 1);
 
+  // --- undo / redo ------------------------------------------------------
+  check("undo enabled after an edit", await page.isEnabled("button.undo"));
+  check("redo disabled with nothing undone", !(await page.isEnabled("button.redo")));
+  await page.click("button.undo");
+  await page.waitForTimeout(150);
+  check("undo removes the imported layer", (await page.$$(".head")).length === 0);
+  await page.click("button.redo");
+  await page.waitForTimeout(150);
+  check("redo restores the layer", (await page.$$(".head")).length === 1);
+  await page.click("button:has-text('Layer')");
+  await page.waitForTimeout(150);
+  await page.keyboard.press("Control+z");
+  await page.waitForTimeout(150);
+  check("Ctrl+Z undoes adding a layer", (await page.$$(".head")).length === 1);
+  await page.keyboard.press("Control+Shift+z");
+  await page.waitForTimeout(150);
+  check("Ctrl+Shift+Z redoes it", (await page.$$(".head")).length === 2);
+  await page.keyboard.press("Control+z"); // back to just the imported layer
+  await page.waitForTimeout(150);
+
+  // --- analogue meter ---------------------------------------------------
+  // The fixture tone sits right at the limiter threshold, so crank the master
+  // fader: the pre-limiter meter must then light its PEAK lamp while playing.
+  await page.$eval(".master input[type=range]", (el) => {
+    el.value = "1.2";
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await page.click("button[aria-label='Play or pause']");
+  await page.waitForTimeout(700);
+  const lamp = await page.evaluate(() => {
+    const c = document.querySelector("canvas.meter");
+    const dpr = window.devicePixelRatio || 1;
+    const w = c.width / dpr;
+    const [r, g, b] = c.getContext("2d").getImageData((w - 16) * dpr, 14 * dpr, 1, 1).data;
+    return { r, g, b };
+  });
+  check(
+    "analogue meter PEAK lamp lights on a hot signal",
+    lamp.r > 200 && lamp.b < 120,
+    `rgb(${lamp.r},${lamp.g},${lamp.b})`,
+  );
+  await page.click("button[aria-label='Stop']");
+  await page.$eval(".master input[type=range]", (el) => {
+    el.value = "0.9";
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await page.waitForTimeout(200);
+
   // --- recording (previously untested) ----------------------------------
   await page.click("button:has-text('Record')");
   await page.waitForTimeout(1800);

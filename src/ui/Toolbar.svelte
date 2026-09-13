@@ -7,6 +7,10 @@
     startRecording,
     stopRecording,
     exportMix,
+    undo,
+    redo,
+    canUndo,
+    canRedo,
     transport,
     pixelsPerSecond,
   } from "../state/store";
@@ -40,6 +44,11 @@
   />
   <button class="btn magenta" onclick={() => fileInput.click()}>＋ Import</button>
   <button class="btn" onclick={addEmptyTrack}>＋ Layer</button>
+
+  <span class="divider"></span>
+
+  <button class="btn undo" onclick={undo} disabled={!$canUndo} title="Undo (Ctrl+Z)" aria-label="Undo">↶ Undo</button>
+  <button class="btn redo" onclick={redo} disabled={!$canRedo} title="Redo (Ctrl+Shift+Z)" aria-label="Redo">↷ Redo</button>
 
   <span class="divider"></span>
 

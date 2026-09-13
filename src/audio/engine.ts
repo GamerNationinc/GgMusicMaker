@@ -12,7 +12,8 @@ import { nextId } from "./types";
 import { anySoloed, isTrackAudible } from "./edits";
 import { makeImpulseResponse, type ReverbSpace } from "./reverb";
 import { TrackChannel } from "./channel";
-import type { AudioBackend, DecodedAudio } from "./backend";
+import type { AudioBackend, DecodedAudio, MasterMeter } from "./backend";
+import { blockLevels, logBands } from "./spectrum";
 import { assembleTake, type Chunk } from "./recording";
 
 const PITCH_WORKLET_URL = `${import.meta.env.BASE_URL}pitch-processor.js`;
@@ -24,6 +25,10 @@ export class AudioEngine implements AudioBackend {
   private masterGain: GainNode;
   private limiter: DynamicsCompressorNode;
   private analyser: AnalyserNode;
+  /** Parallel tap on the mix *before* the limiter. The post-limiter analyser
+   *  can never show a peak (that's the limiter's job), so the analogue meter
+   *  reads here to show how hot the mix really is. */
+  private preAnalyser: AnalyserNode;
   private convolver: ConvolverNode;
   private reverbReturn: GainNode;
   private reverbSpace: ReverbSpace = "hall";
@@ -51,6 +56,8 @@ export class AudioEngine implements AudioBackend {
   private recUsedWorklet = false;
 
   private meterBuf: Uint8Array<ArrayBuffer>;
+  private preTimeBuf: Float32Array<ArrayBuffer>;
+  private preFreqBuf: Uint8Array<ArrayBuffer>;
 
   constructor() {
     this.ctx = new AudioContext();
@@ -70,12 +77,19 @@ export class AudioEngine implements AudioBackend {
     this.analyser.fftSize = 256;
     this.meterBuf = new Uint8Array(new ArrayBuffer(this.analyser.fftSize));
 
+    this.preAnalyser = this.ctx.createAnalyser();
+    this.preAnalyser.fftSize = 1024; // 512 bins ≈ 47 Hz each at 48 kHz
+    this.preAnalyser.smoothingTimeConstant = 0.6;
+    this.preTimeBuf = new Float32Array(new ArrayBuffer(4 * this.preAnalyser.fftSize));
+    this.preFreqBuf = new Uint8Array(new ArrayBuffer(this.preAnalyser.frequencyBinCount));
+
     this.convolver = this.ctx.createConvolver();
     this.convolver.buffer = makeImpulseResponse(this.ctx, this.reverbSpace);
     this.reverbReturn = this.ctx.createGain();
     this.reverbReturn.gain.value = 1;
 
     this.masterGain.connect(this.limiter);
+    this.masterGain.connect(this.preAnalyser); // tap only; no output
     this.limiter.connect(this.analyser);
     this.analyser.connect(this.ctx.destination);
     this.convolver.connect(this.reverbReturn);
@@ -255,6 +269,17 @@ export class AudioEngine implements AudioBackend {
       if (v > peak) peak = v;
     }
     return peak;
+  }
+
+  masterMeter(): MasterMeter {
+    this.preAnalyser.getFloatTimeDomainData(this.preTimeBuf);
+    const { peak, rms } = blockLevels(this.preTimeBuf);
+    return { peak, rms, reduction: this.limiter.reduction };
+  }
+
+  masterSpectrum(out: Float32Array): Float32Array {
+    this.preAnalyser.getByteFrequencyData(this.preFreqBuf);
+    return logBands(this.preFreqBuf, this.ctx.sampleRate, out);
   }
 
   // ---- Recording ----------------------------------------------------------

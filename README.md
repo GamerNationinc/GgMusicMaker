@@ -27,6 +27,11 @@ send on every layer and a master limiter for the final level.
   - **Reverb** send with selectable **Room / Hall / Plate** spaces.
 - 🌫️ Shared convolution **reverb** bus (synthesised impulse responses).
 - 📈 **Master limiter** + level meter ("mastering level").
+- 🎚️ **Analogue master meter** (bottom-left): VU-style needle with peak hold, a
+  **PEAK** lamp, and a spectrum strip — all reading the mix *before* the limiter, so the
+  red zone means "the limiter is working" and the lamp means "over full scale".
+- ↶ **Undo / redo** for every edit (import, layers, cut/split/move/trim, takes, mixer
+  and FX changes); fader drags collapse into one step.
 - 💾 **Export** the whole mix to a WAV file — rendered offline through the *same*
   FX graph you hear (native save dialog under Tauri).
 
@@ -90,7 +95,7 @@ npm run tauri dev
 
 # Quality gates:
 npm run check          # svelte-check / TypeScript
-npm test               # vitest (edit math, WAV encoder, peaks, take assembly)
+npm test               # vitest (edit math, WAV encoder, take assembly, undo history, meter math)
 npm run build          # production frontend build
 npm run test:browser   # headless Chromium: boot, import, RECORD, export, voice FX
 
@@ -150,6 +155,8 @@ swapped in behind the same interface while the entire UI stays as-is.
 | `S`       | Split at playhead   |
 | `R`       | Record / stop       |
 | `Delete`  | Delete selected clip|
+| `Ctrl+Z`  | Undo                |
+| `Ctrl+Shift+Z` / `Ctrl+Y` | Redo |
 
 ## Known runtime dependency: GStreamer
 

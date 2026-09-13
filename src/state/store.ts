@@ -17,7 +17,8 @@ import {
   replaceClip,
 } from "../audio/edits";
 import { AudioEngine } from "../audio/engine";
-import type { AudioBackend } from "../audio/backend";
+import type { AudioBackend, MasterMeter } from "../audio/backend";
+import * as history from "./history";
 import { encodeWav } from "../audio/wav";
 import type { VoicePreset } from "../fx/voice";
 import type { ReverbSpace } from "../audio/reverb";
@@ -43,25 +44,91 @@ export const selectedClipId = writable<string | null>(null);
 export const selectedTrackId = writable<string | null>(null);
 export const status = writable<string>("Ready. Import an audio file to begin.");
 export const masterLevel = writable<number>(0);
+/** Pre-limiter peak/RMS/gain-reduction, refreshed every frame for the analogue meter. */
+export const masterMeter = writable<MasterMeter>({ peak: 0, rms: 0, reduction: 0 });
+/** Log-spaced spectrum bands (0..1) of the mix. The same array is re-set each frame. */
+export const SPECTRUM_BANDS = 20;
+export const masterSpectrum = writable<Float32Array>(new Float32Array(SPECTRUM_BANDS));
+export const canUndo = writable<boolean>(false);
+export const canRedo = writable<boolean>(false);
 /** Timeline zoom, in pixels per second. */
 export const pixelsPerSecond = writable<number>(80);
 export const reverbSpace = writable<ReverbSpace>(engine.currentReverbSpace);
 
 // ---- internal helpers -----------------------------------------------------
 
-function updateProject(fn: (p: Project) => Project): void {
+let hist = history.createHistory<Project>();
+
+function setHistory(h: history.History<Project>): void {
+  hist = h;
+  canUndo.set(history.canUndo(h));
+  canRedo.set(history.canRedo(h));
+}
+
+interface EditOptions {
+  /** Coalesce key for continuous controls (see history.ts); `false` = not undoable. */
+  history?: string | false;
+}
+
+/** Apply an edit to the project, record it for undo, and sync the engine. */
+function updateProject(fn: (p: Project) => Project, opts: EditOptions = {}): void {
   project.update((p) => {
     const next = fn(p);
+    if (next === p) return p;
+    if (opts.history !== false) {
+      setHistory(history.push(hist, p, opts.history ?? null, performance.now()));
+    }
     engine.syncAll(next);
     return next;
   });
 }
 
-function updateTrack(trackId: string, fn: (t: Track) => Track): void {
-  updateProject((p) => ({
-    ...p,
-    tracks: p.tracks.map((t) => (t.id === trackId ? fn(t) : t)),
-  }));
+function updateTrack(trackId: string, fn: (t: Track) => Track, opts?: EditOptions): void {
+  updateProject(
+    (p) => ({
+      ...p,
+      tracks: p.tracks.map((t) => (t.id === trackId ? fn(t) : t)),
+    }),
+    opts,
+  );
+}
+
+/** Swap in a historical project state (undo/redo) and bring the engine along. */
+function restoreProject(target: Project): void {
+  const current = get(project);
+  // Channels for tracks that no longer exist would linger in the graph.
+  for (const t of current.tracks) {
+    if (!target.tracks.some((x) => x.id === t.id)) engine.removeTrack(t.id);
+  }
+  project.set(target);
+  engine.syncAll(target);
+  // Clip edits must be audible immediately, like a voice-preset change is.
+  if (get(transport).isPlaying) engine.play(target, get(transport).playhead);
+  const clipIds = new Set(target.tracks.flatMap((t) => t.clips.map((c) => c.id)));
+  selectedClipId.update((id) => (id && clipIds.has(id) ? id : null));
+  selectedTrackId.update((id) => (id && target.tracks.some((t) => t.id === id) ? id : null));
+}
+
+export function undo(): void {
+  const r = history.undo(hist, get(project));
+  if (!r) {
+    status.set("Nothing to undo.");
+    return;
+  }
+  setHistory(r.history);
+  restoreProject(r.state);
+  status.set("Undo.");
+}
+
+export function redo(): void {
+  const r = history.redo(hist, get(project));
+  if (!r) {
+    status.set("Nothing to redo.");
+    return;
+  }
+  setHistory(r.history);
+  restoreProject(r.state);
+  status.set("Redo.");
 }
 
 let colorIdx = 0;
@@ -99,21 +166,25 @@ export function removeTrack(trackId: string): void {
 }
 
 export function setTrackGain(trackId: string, gain: number): void {
-  updateTrack(trackId, (t) => ({ ...t, gain }));
+  updateTrack(trackId, (t) => ({ ...t, gain }), { history: `gain:${trackId}` });
 }
 
 export function setReverbSend(trackId: string, amount: number): void {
-  updateTrack(trackId, (t) => ({ ...t, reverbSend: amount }));
+  updateTrack(trackId, (t) => ({ ...t, reverbSend: amount }), { history: `send:${trackId}` });
 }
 
 // ---- FX rack (v2) ---------------------------------------------------------
 
 export function setEq(trackId: string, band: "low" | "mid" | "high", db: number): void {
-  updateTrack(trackId, (t) => ({ ...t, eq: { ...t.eq, [band]: db } }));
+  updateTrack(trackId, (t) => ({ ...t, eq: { ...t.eq, [band]: db } }), {
+    history: `eq:${band}:${trackId}`,
+  });
 }
 
 export function setVoiceMix(trackId: string, mix: number): void {
-  updateTrack(trackId, (t) => ({ ...t, voice: { ...t.voice, mix } }));
+  updateTrack(trackId, (t) => ({ ...t, voice: { ...t.voice, mix } }), {
+    history: `voicemix:${trackId}`,
+  });
 }
 
 /** Change a track's voice preset. Rebuilds the FX chain and, if playing,
@@ -143,12 +214,16 @@ export function renameTrack(trackId: string, name: string): void {
   updateTrack(trackId, (t) => ({ ...t, name }));
 }
 
-/** Arm exactly one track for recording (single-arm keeps v1 simple). */
+/** Arm exactly one track for recording (single-arm keeps v1 simple).
+ *  Arming is transport state, not an edit, so it stays out of undo. */
 export function armTrack(trackId: string): void {
-  updateProject((p) => ({
-    ...p,
-    tracks: p.tracks.map((t) => ({ ...t, armed: t.id === trackId ? !t.armed : false })),
-  }));
+  updateProject(
+    (p) => ({
+      ...p,
+      tracks: p.tracks.map((t) => ({ ...t, armed: t.id === trackId ? !t.armed : false })),
+    }),
+    { history: false },
+  );
 }
 
 // ---- import ---------------------------------------------------------------
@@ -217,10 +292,14 @@ export function deleteSelectedClip(): void {
 }
 
 export function moveClipTo(trackId: string, clipId: string, newStart: number): void {
-  updateTrack(trackId, (t) => ({
-    ...t,
-    clips: t.clips.map((c) => (c.id === clipId ? moveClip(c, newStart) : c)),
-  }));
+  updateTrack(
+    trackId,
+    (t) => ({
+      ...t,
+      clips: t.clips.map((c) => (c.id === clipId ? moveClip(c, newStart) : c)),
+    }),
+    { history: `move:${clipId}` },
+  );
 }
 
 export function trimClipTo(
@@ -229,10 +308,14 @@ export function trimClipTo(
   newStart: number,
   newEnd: number,
 ): void {
-  updateTrack(trackId, (t) => ({
-    ...t,
-    clips: t.clips.map((c) => (c.id === clipId ? trimClip(c, newStart, newEnd) : c)),
-  }));
+  updateTrack(
+    trackId,
+    (t) => ({
+      ...t,
+      clips: t.clips.map((c) => (c.id === clipId ? trimClip(c, newStart, newEnd) : c)),
+    }),
+    { history: `trim:${clipId}` },
+  );
 }
 
 export function selectClip(clipId: string | null): void {
@@ -248,9 +331,13 @@ export function toggleFxRack(trackId: string): void {
 
 let rafId = 0;
 
+const spectrumBuf = new Float32Array(SPECTRUM_BANDS);
+
 function tick(): void {
   const t = get(transport);
   masterLevel.set(engine.masterLevel());
+  masterMeter.set(engine.masterMeter());
+  masterSpectrum.set(engine.masterSpectrum(spectrumBuf));
   if (t.isPlaying) {
     const now = engine.currentTime();
     const end = projectDuration(get(project));

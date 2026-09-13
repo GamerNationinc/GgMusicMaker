@@ -3,12 +3,15 @@
   import Toolbar from "./Toolbar.svelte";
   import Timeline from "./Timeline.svelte";
   import FxRack from "./FxRack.svelte";
+  import AnalogMeter from "./AnalogMeter.svelte";
   import {
     togglePlay,
     splitAtPlayhead,
     deleteSelectedClip,
     startRecording,
     stopRecording,
+    undo,
+    redo,
     status,
     transport,
   } from "../state/store";
@@ -16,6 +19,18 @@
   function onKey(e: KeyboardEvent) {
     const tag = (e.target as HTMLElement)?.tagName;
     if (tag === "INPUT" || tag === "TEXTAREA") return;
+    if (e.ctrlKey || e.metaKey) {
+      const k = e.key.toLowerCase();
+      if (k === "z") {
+        e.preventDefault();
+        if (e.shiftKey) redo();
+        else undo();
+      } else if (k === "y") {
+        e.preventDefault();
+        redo();
+      }
+      return;
+    }
     switch (e.key) {
       case " ":
         e.preventDefault();
@@ -56,7 +71,10 @@
 
 <FxRack />
 
-<footer class="statusbar screen">{$status}</footer>
+<footer class="bottom">
+  <AnalogMeter />
+  <div class="statusbar screen">{$status}</div>
+</footer>
 
 <style>
   .app-header {
@@ -92,9 +110,16 @@
     display: flex;
     overflow: hidden;
   }
-  .statusbar {
+  .bottom {
     flex: 0 0 auto;
+    display: flex;
+    align-items: flex-end;
+    gap: 6px;
     margin: 6px;
+  }
+  .statusbar {
+    flex: 1 1 auto;
+    min-width: 0;
     font-size: 13px;
     min-height: 26px;
     display: flex;

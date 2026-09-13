@@ -20,6 +20,17 @@ export interface DecodedAudio {
   buffer: AudioBuffer;
 }
 
+/** One frame of master-bus metering, taken *before* the limiter so the
+ *  meter shows how hard the mix is hitting it. */
+export interface MasterMeter {
+  /** Linear peak; can exceed 1.0 when the mix is over full scale. */
+  peak: number;
+  /** Linear RMS. */
+  rms: number;
+  /** Limiter gain reduction in dB (<= 0). Non-zero means it's working. */
+  reduction: number;
+}
+
 export interface AudioBackend {
   /** Device sample rate the project renders at. */
   readonly sampleRate: number;
@@ -53,6 +64,10 @@ export interface AudioBackend {
   currentTime(): number;
   /** Peak master level, 0..1, for the meter. */
   masterLevel(): number;
+  /** Pre-limiter peak/RMS and limiter gain reduction, for the analogue meter. */
+  masterMeter(): MasterMeter;
+  /** Fill `out` with log-spaced spectrum bands (0..1) of the pre-limiter mix. */
+  masterSpectrum(out: Float32Array): Float32Array;
 
   // Recording
   startRecording(deviceId?: string): Promise<void>;
