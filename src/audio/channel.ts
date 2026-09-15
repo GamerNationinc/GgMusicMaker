@@ -2,11 +2,15 @@
 //
 // Signal path:
 //   input(gain: vol/mute/solo)
-//     -> EQ low-shelf -> mid peak -> high-shelf
+//     -> EQ low-shelf -> mid peak -> high-shelf -> stereo (mono layers become L = R)
 //     -> [voice synth worklet]     (stacked vocal engines; N-channel out)
 //     -> [placer: layer pan/width]
 //     -> output ----------------------------------> master (dry)
 //              \-> [placer: reverb pan/width] -> send(gain) -> reverb convolver (wet)
+//
+// The bracketed worklet stages are only in the path while they have work
+// to do (synth engaged, or non-neutral pan/width); otherwise the EQ feeds
+// the output directly and the send comes straight off the output.
 //
 // The synth worklet is built with as many output channels as the master bus
 // has (2, 6 or 8), so a surround field lands on the bus discretely, with no
@@ -37,6 +41,10 @@ export class TrackChannel {
   private eqMid: BiquadFilterNode;
   private eqHigh: BiquadFilterNode;
 
+  /** Pins the EQ output to 2 channels so a mono layer reaches the bus (and
+   *  the synth) as L = R, whether or not the worklets are in the path. */
+  private stereo: GainNode;
+
   private synth: AudioWorkletNode | null = null;
   private place: AudioWorkletNode | null = null;
   private sendPlace: AudioWorkletNode | null = null;
@@ -63,6 +71,10 @@ export class TrackChannel {
     this.eqHigh = ctx.createBiquadFilter();
     this.eqHigh.type = "highshelf";
     this.eqHigh.frequency.value = EQ_HIGH_HZ;
+    this.stereo = ctx.createGain();
+    this.stereo.channelCount = 2;
+    this.stereo.channelCountMode = "explicit";
+    this.stereo.channelInterpretation = "speakers";
 
     if (hasWorklets) {
       const opts = { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [busChannels] };
@@ -77,19 +89,51 @@ export class TrackChannel {
       }
     }
 
-    // Wire the chain.
+    // Wire the chain. The worklet stages start routed around (see `route`):
+    // a layer with nothing engaged costs no worklet calls at all.
     this.input.connect(this.eqLow);
     this.eqLow.connect(this.eqMid);
     this.eqMid.connect(this.eqHigh);
-    if (this.synth && this.place && this.sendPlace) {
-      this.eqHigh.connect(this.synth);
-      this.synth.connect(this.place);
-      this.place.connect(this.output);
-      this.output.connect(this.sendPlace);
-      this.sendPlace.connect(this.send);
-    } else {
-      this.eqHigh.connect(this.output);
-      this.output.connect(this.send);
+    this.eqHigh.connect(this.stereo);
+    this.stereo.connect(this.output);
+    this.output.connect(this.send);
+    if (this.synth && this.place) this.synth.connect(this.place);
+  }
+
+  /** Whether the EQ feeds the synth+placer worklets (true) or the output directly. */
+  private fxRouted = false;
+  /** Whether the send goes through its placer worklet (true) or straight to `send`. */
+  private sendRouted = false;
+
+  /** Put the worklet stages in or out of the signal path. Every worklet
+   *  node costs a JS call per render quantum even when it is a passthrough
+   *  (~3 % of the audio thread each under WebKitGTK), so a layer with no
+   *  synth and neutral placement bypasses them entirely. */
+  private route(fx: boolean, sendFx: boolean): void {
+    if (!this.synth || !this.place || !this.sendPlace) return;
+    if (fx !== this.fxRouted) {
+      this.fxRouted = fx;
+      if (fx) {
+        this.stereo.disconnect(this.output);
+        this.stereo.connect(this.synth);
+        this.place.connect(this.output);
+      } else {
+        this.stereo.disconnect(this.synth);
+        this.place.disconnect(this.output);
+        this.stereo.connect(this.output);
+      }
+    }
+    if (sendFx !== this.sendRouted) {
+      this.sendRouted = sendFx;
+      if (sendFx) {
+        this.output.disconnect(this.send);
+        this.output.connect(this.sendPlace);
+        this.sendPlace.connect(this.send);
+      } else {
+        this.output.disconnect(this.sendPlace);
+        this.sendPlace.disconnect(this.send);
+        this.output.connect(this.send);
+      }
     }
   }
 
@@ -121,6 +165,11 @@ export class TrackChannel {
     ramp(this.eqMid.gain, fx.eq ? track.eq.mid : 0);
     ramp(this.eqHigh.gain, fx.eq ? track.eq.high : 0);
 
+    const synthOn = fx.synth && synthIsActive(track.synth);
+    const placeOn = fx.place && (track.pan !== 0 || track.width !== 1);
+    const sendOn = fx.reverb && (track.reverbPan !== 0 || track.reverbWidth !== 1);
+    this.route(synthOn || placeOn, sendOn);
+
     if (this.place && this.sendPlace) {
       const set = (node: AudioWorkletNode, name: string, v: number) => {
         const param = node.parameters.get(name);
@@ -136,7 +185,7 @@ export class TrackChannel {
       const synth = track.synth;
       // With no engine up (or the module switched off) there is nothing wet
       // to hear, so keep the dry path bit-exact instead of fading it by `mix`.
-      const active = fx.synth && synthIsActive(synth);
+      const active = synthOn;
       for (const key of Object.keys(DEFAULT_SYNTH) as SynthKey[]) {
         const param = this.synth.parameters.get(key);
         if (!param) continue;
@@ -156,6 +205,7 @@ export class TrackChannel {
       this.eqLow,
       this.eqMid,
       this.eqHigh,
+      this.stereo,
       this.synth,
       this.place,
       this.sendPlace,

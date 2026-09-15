@@ -219,9 +219,10 @@ appearing to play in silence.
 
 - Targeted at desktop mode (SteamOS / KDE), 1280×800, touch + trackpad friendly
   (large hit targets, no hover-only controls).
-- `src-tauri/src/lib.rs` disables the WebKitGTK DMABUF renderer, the common fix for
-  a black WebView on Mesa/Steam Deck drivers, and the app requests microphone access
-  for recording.
+- `src-tauri/src/lib.rs` leaves WebKitGTK's DMABUF (GPU) renderer on — with it off,
+  WebKitGTK 2.50 software-rasterises the whole window every animation frame and
+  playback lags badly on the Deck. If a driver shows a black window, run with
+  `WEBKIT_DISABLE_DMABUF_RENDERER=1`. The app requests microphone access for recording.
 - `scripts/fix-appimage.sh` (run by `npm run build:deck`) strips the bundled
   `libwayland-*` from the AppImage. SteamOS's Mesa EGL driver needs a newer libwayland
   than the Ubuntu 22.04 build host ships; with the bundled copy shadowing the system one,

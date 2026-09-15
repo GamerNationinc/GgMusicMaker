@@ -82,6 +82,8 @@ launched on this Steam Deck under KDE/Wayland.
 
 | **FX chain rack** (replaces the row of modules) — the rack is a chain strip `LAYER ▸ EQ ▸ VOICE SYNTH ▸ REVERB` plus one full-width editor for the picked slot. Each slot has a **power switch** (real per-module bypass: `Track.fx.{place,eq,synth,reverb}`; settings are kept, the graph never changes shape — the module is pushed to its neutral values), a **lamp** that lights only when the module is on *and* doing something, and a one-line **summary** (`Choir · 70%`, `+4 / 0 / -3.5 dB`, `hall · 30%`, `L 40 · 120%`). The track head's FX chip lights when any module is engaged. Voice Synth presets moved from a wall of 11 buttons to a hardware-style screen (`◀ CHOIR / Stacks ▶`, shows `custom · edited` once touched) with a **BROWSE** popover grouped by category (Classic / Stacks / Synth / Space; Esc closes). Pure summary/lamp logic in `src/fx/chain.ts`. Session format v4 (v1–v3 files open with every module on). | 5 unit tests (`chain.test.ts`: neutral layer, summaries, lamp needs on+engaged, readouts, normalize); browser: rack opens on the synth slot, browser pick closes and updates the screen, strip summary, head chip lit, bypassing the synth renders **bit-identical to dry** and keeps the summary, the duplicate's rack shows the same preset; 49/49 ×2. One CSS class collision found by measuring (`.eq` editor height leaking onto the `.slot.eq` strip cell) |
 
+| **Native playback measured and fixed** — first time the app was played on the Deck itself (session opened through the Tauri dialog, 3 layers, Choir + Chipmunk on two of them). It was "super laggy": `perf` on the WebKitWebProcess main thread showed 98 % in one pixel loop inside libwebkit2gtk (Skia software raster). Cause: `lib.rs` had forced `WEBKIT_DISABLE_DMABUF_RENDERER=1` since v1 as a precaution; on WebKitGTK 2.50 that path re-rasterises and copies the whole window every animation frame. Removed. Also: a layer with nothing engaged now bypasses its three worklet nodes entirely (`TrackChannel.route`), and an explicit stereo stage keeps mono layers L = R on the bus without the worklets. | Native, rebuilt AppImage, `top -H` on the WebKit process while playing: main thread **98 % → 12–15 %** (app's own CPU readout 14 %), audio thread 30 % with the FX session, 20 % dry (was 25–29 %); window renders with the GPU renderer. The synth DSP itself was cleared first: `jsc` from the same WebKitGTK 2.50.4 runs it as fast as V8 (Chipmunk 3 %, Choir 5 % per layer). Browser suite 49/49 ×2 |
+
 ### Native Steam Deck build
 
 | Step | Verified how |
@@ -105,14 +107,14 @@ npm run test:browser  49/49 checks
 
 ## 3. Not yet verified / known limitations
 
-- **Native playback and recording end-to-end.** The audio node exists and the UI works natively, but nobody has yet imported a file through the Tauri file dialog on the Deck, pressed play, and *heard* it, or recorded through WebKitGTK's mic permission path. This is the first thing to do by hand.
+- **Native recording end-to-end** through WebKitGTK's mic permission path has still not been done by hand. (Native playback *has* now been exercised on the Deck — see 2026-09-15 below.)
 - **CI has never run** on the new commits — they are unpushed (see §6). `ci.yml` and `release.yml` are believed correct but unproven on GitHub's runners.
 - No GitHub release exists yet; the README's "download the AppImage" link is dead until a `v*` tag is pushed.
 - Whole files live in RAM as `AudioBuffer`s — fine for songs, not for hour-long sessions. Session files embed audio as 16-bit PCM (~10 MB per stereo minute at 48 kHz), so a long project makes a big `.ggmm`.
 - The Tauri close-guard (`onCloseRequested` → ask) is exercised in a browser only via `beforeunload`; the native path compiles against the granted permissions but has not been clicked through on the Deck yet.
 - Live FX monitoring while recording is not a goal (WebKitGTK → GStreamer latency). Record dry, add FX after.
 - **Surround has only been heard as a fold-down.** Headless Chromium and (very likely) the Deck's WebKitGTK report a 2-channel destination, so the live 5.1/7.1 bus path (`setSurround` → rebuilt master + channels) compiles and is exercised only in its stereo branch; the multichannel WAVs are verified structurally and by per-channel levels, not on a surround rig. The reverb send is stereo (5.1 folds down into it; 7.1's side/back channels are dropped from the send).
-- The Voice Synth is JavaScript on the audio thread; a project with many layers all on the heaviest presets could provoke the D lamp on the Deck. Not yet measured natively.
+- The Voice Synth is JavaScript on the audio thread: measured natively at ~30 % of the audio thread for two FX layers (Choir + Chipmunk) plus a dry one. Many layers on the heaviest presets could still provoke the D lamp; WebKit's per-worklet-node call overhead is noticeable (a dry 3-layer project sat at 25 % before idle layers were routed around their nodes, 20 % after), so folding the two placer nodes into the synth node (one worklet per layer, two outputs) is the next lever if it is ever needed.
 - No LICENSE file in the repo.
 - The `.deb` is untested anywhere.
 - Gamepad navigation (Gaming Mode) does not exist yet; the app is touch/trackpad/keyboard only.
@@ -195,7 +197,7 @@ GgMusicMaker/
 │   ├── capabilities/default.json  Permissions: dialog open/save/ask, fs read+write ($HOME etc.), window close
 │   ├── icons/                     32, 128, 128@2x, icon.png — generated by scripts/gen_icons.py
 │   ├── src/main.rs                → ggmusicmaker_lib::run()
-│   └── src/lib.rs                 Sets WEBKIT_DISABLE_DMABUF_RENDERER=1; registers dialog+fs plugins;
+│   └── src/lib.rs                 Registers dialog+fs plugins (DMABUF renderer deliberately left ON);
 │                                  on Linux auto-grants WebKitGTK mic permission requests
 │
 ├── packaging/
@@ -255,7 +257,7 @@ git tag v0.1.0 && git push origin v0.1.0     # release.yml builds + attaches art
 
 - The AppImage bundles GTK, WebKitGTK and **all of GStreamer** (core + plugins) from Ubuntu 22.04, and deliberately does **not** bundle `libwayland-*` (must match the host's Mesa) nor Mesa/EGL itself.
 - glibc: built on 2.35 so it runs on SteamOS. Do not build the release on a newer distro.
-- Useful env vars if the WebView misbehaves: `WEBKIT_DISABLE_DMABUF_RENDERER=1` (set by `lib.rs`), `GDK_BACKEND=x11` (forces XWayland).
+- Useful env vars if the WebView misbehaves: `WEBKIT_DISABLE_DMABUF_RENDERER=1` (black window on a broken driver — but it makes playback lag, see §7), `GDK_BACKEND=x11` (forces XWayland).
 - Diagnosing a blank window: run the AppImage from a terminal; a `WebKitWebProcess` crash prints there. `LD_DEBUG=libs` on the AppImage finds library mismatches fast.
 
 ---
@@ -307,4 +309,5 @@ git tag v0.1.0 && git push origin v0.1.0     # release.yml builds + attaches art
 | Undo history coalesces by key | Faders emit an edit per pointer move; without coalescing one drag = hundreds of undo steps. |
 | Arming excluded from undo | It's transport state (which track records next), not a change to the project. |
 | Build in an Ubuntu 22.04 container even on the Deck | SteamOS root is immutable and has no compiler; glibc 2.41 builds wouldn't be shareable anyway. Same image as CI = same bugs as CI. |
+| WebKitGTK's DMABUF (GPU) renderer stays **on** | v1 disabled it preemptively ("black window fix"). Measured on the Deck: with it off, WebKitGTK 2.50 software-paints the whole window per frame → main thread 98 % during playback; on → 12–15 %. The real black-window bug was libwayland (above). Anyone with a broken driver can still set `WEBKIT_DISABLE_DMABUF_RENDERER=1` in the environment. |
 | Tauri identifier `com.gamernation.ggmusicmaker` | Chosen during the rename; change before first release if a different domain is wanted (it's the app's stable OS-level id). |

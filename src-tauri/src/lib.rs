@@ -9,15 +9,12 @@
 use tauri::Manager;
 
 pub fn run() {
-    // On Linux the WebView is WebKitGTK. The DMABUF renderer breaks on some
-    // Mesa / Steam Deck driver combinations, showing a black window; disabling
-    // it is the standard fix. Set before any window is created.
-    #[cfg(target_os = "linux")]
-    {
-        if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
-            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
-        }
-    }
+    // On Linux the WebView is WebKitGTK. Its DMABUF (GPU) renderer is left ON:
+    // with it disabled, WebKitGTK 2.50 re-rasterises and copies the whole
+    // window in software on every animation frame, which pegged the main
+    // thread at ~98 % during playback on the Steam Deck (15 % with it on).
+    // If a driver shows a black window, `WEBKIT_DISABLE_DMABUF_RENDERER=1`
+    // in the environment still works — WebKit reads it directly.
 
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
