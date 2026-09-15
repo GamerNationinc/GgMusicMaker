@@ -20,7 +20,16 @@ import { AudioEngine } from "../audio/engine";
 import type { AudioBackend, MasterMeter } from "../audio/backend";
 import * as history from "./history";
 import { encodeWav } from "../audio/wav";
-import type { VoicePreset } from "../fx/voice";
+import {
+  DEFAULT_SYNTH,
+  SYNTH_PRESETS,
+  clampSynthValue,
+  presetParams,
+  surroundChannels,
+  SURROUND,
+  type SynthKey,
+  type SurroundLayout,
+} from "../fx/voice-synth";
 import type { ReverbSpace } from "../audio/reverb";
 import {
   packSession,
@@ -38,6 +47,7 @@ export const engine: AudioBackend = new AudioEngine();
 export const project = writable<Project>({
   tracks: [],
   sampleRate: engine.sampleRate,
+  surround: "stereo",
 });
 
 export const transport = writable<TransportState>({
@@ -69,6 +79,9 @@ export const canRedo = writable<boolean>(false);
 /** Timeline zoom, in pixels per second. */
 export const pixelsPerSecond = writable<number>(80);
 export const reverbSpace = writable<ReverbSpace>(engine.currentReverbSpace);
+/** Channels the live output really has for the chosen layout (2 on a stereo
+ *  device even when the project is 5.1 — the synth folds its field down). */
+export const liveChannels = writable<number>(engine.liveChannels);
 /** Ableton-style load readout: UI-thread utilisation + audio dropout lamp. */
 export const systemLoad = writable<LoadState>(INITIAL_LOAD);
 const LOW_POWER_KEY = "ggmm.lowPower";
@@ -145,8 +158,10 @@ function restoreProject(target: Project): void {
     if (!target.tracks.some((x) => x.id === t.id)) engine.removeTrack(t.id);
   }
   project.set(target);
+  engine.setSurround(target.surround);
+  liveChannels.set(engine.liveChannels);
   engine.syncAll(target);
-  // Clip edits must be audible immediately, like a voice-preset change is.
+  // Clip edits must be audible immediately, like a synth change is.
   if (get(transport).isPlaying) engine.play(target, get(transport).playhead);
   const clipIds = new Set(target.tracks.flatMap((t) => t.clips.map((c) => c.id)));
   selectedClipId.update((id) => (id && clipIds.has(id) ? id : null));
@@ -188,7 +203,7 @@ function makeTrack(name: string): Track {
     armed: false,
     reverbSend: 0,
     eq: { low: 0, mid: 0, high: 0 },
-    voice: { preset: "off", mix: 1 },
+    synth: { ...DEFAULT_SYNTH },
     color,
     clips: [],
   };
@@ -225,19 +240,38 @@ export function setEq(trackId: string, band: "low" | "mid" | "high", db: number)
   });
 }
 
-export function setVoiceMix(trackId: string, mix: number): void {
-  updateTrack(trackId, (t) => ({ ...t, voice: { ...t.voice, mix } }), {
-    history: `voicemix:${trackId}`,
+/** Turn one Voice Synth knob. Drags coalesce into a single undo step. */
+export function setSynthParam(trackId: string, key: SynthKey, value: number): void {
+  const v = clampSynthValue(key, value);
+  updateTrack(trackId, (t) => (t.synth[key] === v ? t : { ...t, synth: { ...t.synth, [key]: v } }), {
+    history: `synth:${key}:${trackId}`,
   });
 }
 
-/** Change a track's voice preset. Rebuilds the FX chain and, if playing,
- *  reschedules so the change is heard immediately. */
-export async function setVoicePreset(trackId: string, preset: VoicePreset): Promise<void> {
+/** Load a factory preset onto a track's synth. Makes sure the audio device
+ *  (and the worklet) are up first, since this is usually the first FX click. */
+export async function applySynthPreset(trackId: string, name: string): Promise<void> {
+  const preset = SYNTH_PRESETS.find((p) => p.name === name);
+  if (!preset) return;
   await engine.ensureRunning();
-  updateTrack(trackId, (t) => ({ ...t, voice: { ...t.voice, preset } }));
-  if (get(transport).isPlaying) engine.play(get(project), get(transport).playhead);
-  status.set(`Voice: ${preset} on the selected layer.`);
+  updateTrack(trackId, (t) => ({ ...t, synth: presetParams(preset) }));
+  status.set(`Voice Synth: ${preset.name} on the selected layer.`);
+}
+
+/** Change the project's output layout (stereo / 5.1 / 7.1). Rebuilds the
+ *  live graph when the device can follow; export always renders the layout. */
+export async function setSurround(layout: SurroundLayout): Promise<void> {
+  await engine.ensureRunning();
+  const rebuilt = engine.setSurround(layout);
+  updateProject((p) => (p.surround === layout ? p : { ...p, surround: layout }), { history: "surround" });
+  liveChannels.set(engine.liveChannels);
+  if (rebuilt && get(transport).isPlaying) engine.play(get(project), get(transport).playhead);
+  const want = surroundChannels(layout);
+  const note =
+    engine.liveChannels >= want
+      ? ""
+      : ` — this device outputs ${engine.liveChannels} channels, so you hear a fold-down; the WAV export gets all ${want}.`;
+  status.set(`Output: ${SURROUND[layout].label}${note}`);
 }
 
 export function setReverbSpace(space: ReverbSpace): void {
@@ -589,8 +623,9 @@ export async function exportMix(): Promise<void> {
     const bytes = new Uint8Array(encodeWav(rendered));
 
     setExport("saving", 1);
+    const suffix = p.surround === "stereo" ? "" : `-${p.surround}`;
     const where = await saveBytes(bytes, {
-      defaultName: "ggmusicmaker-mix.wav",
+      defaultName: `ggmusicmaker-mix${suffix}.wav`,
       filters: [{ name: "WAV audio", extensions: ["wav"] }],
       mime: "audio/wav",
     });
@@ -600,7 +635,8 @@ export async function exportMix(): Promise<void> {
       return;
     }
     const secs = rendered.duration.toFixed(1);
-    setExport("done", 1, `${secs}s → ${where}`);
+    const ch = rendered.numberOfChannels > 2 ? ` (${rendered.numberOfChannels} ch)` : "";
+    setExport("done", 1, `${secs}s${ch} → ${where}`);
     status.set(`Exported ${where}`);
     exportCloseTimer = window.setTimeout(dismissExport, 2500);
   } catch (err) {
@@ -620,6 +656,8 @@ function resetWorkspace(next: Project): void {
   stop();
   for (const t of get(project).tracks) engine.removeTrack(t.id);
   project.set(next);
+  engine.setSurround(next.surround);
+  liveChannels.set(engine.liveChannels);
   engine.syncAll(next);
   setHistory(history.createHistory<Project>());
   selectedClipId.set(null);
@@ -639,7 +677,7 @@ async function confirmDiscard(): Promise<boolean> {
 /** Start over with an empty project. */
 export async function newSession(): Promise<void> {
   if (!(await confirmDiscard())) return;
-  resetWorkspace({ tracks: [], sampleRate: engine.sampleRate });
+  resetWorkspace({ tracks: [], sampleRate: engine.sampleRate, surround: "stereo" });
   sessionPath.set(null);
   dirty.set(false);
   status.set("New session.");

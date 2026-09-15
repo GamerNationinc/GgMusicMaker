@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { DEFAULT_SYNTH } from "../fx/voice-synth";
 import { packSession, unpackSession, referencedBufferIds, sessionDisplayName } from "./session";
-import type { Project } from "../audio/types";
+import type { Project, Track } from "../audio/types";
 import { nextId, reserveIds, __resetIds } from "../audio/types";
 import type { PcmSource } from "../audio/wav";
 
@@ -22,6 +23,7 @@ const buffers = new Map<string, PcmSource>([
 
 const project: Project = {
   sampleRate: 48000,
+  surround: "stereo",
   tracks: [
     {
       id: "track_1",
@@ -32,7 +34,7 @@ const project: Project = {
       armed: true,
       reverbSend: 0.3,
       eq: { low: 2, mid: -1, high: 4 },
-      voice: { preset: "chipmunk", mix: 0.7 },
+      synth: { ...DEFAULT_SYNTH, mix: 0.7, shift: 1, pitch: 7 },
       color: "#ff3ca0",
       clips: [
         { id: "clip_1", bufferId: "buf_1", startTime: 0, offset: 0, duration: 2, name: "a" },
@@ -48,7 +50,7 @@ const project: Project = {
       armed: false,
       reverbSend: 0,
       eq: { low: 0, mid: 0, high: 0 },
-      voice: { preset: "off", mix: 1 },
+      synth: { ...DEFAULT_SYNTH },
       color: "#5af096",
       clips: [{ id: "clip_3", bufferId: "buf_2", startTime: 1, offset: 0, duration: 0.5, name: "c" }],
     },
@@ -77,7 +79,7 @@ describe("session container", () => {
     expect(header.project.sampleRate).toBe(48000);
     expect(header.project.tracks.map((t) => t.name)).toEqual(["Vocal", "Beat"]);
     expect(header.project.tracks[0].clips).toEqual(project.tracks[0].clips);
-    expect(header.project.tracks[0].voice).toEqual({ preset: "chipmunk", mix: 0.7 });
+    expect(header.project.tracks[0].synth).toEqual({ ...DEFAULT_SYNTH, mix: 0.7, shift: 1, pitch: 7 });
     expect(header.project.tracks[0].eq).toEqual({ low: 2, mid: -1, high: 4 });
 
     const a = audio.get("buf_1")!;
@@ -138,5 +140,37 @@ describe("reserveIds", () => {
     nextId("x");
     reserveIds(["x_1"]);
     expect(nextId("x")).toBe("x_3");
+  });
+});
+
+describe("session migration", () => {
+  it("opens a v1 file: voice presets become synth settings, surround defaults to stereo", () => {
+    const v1 = {
+      format: "GGMM",
+      version: 1,
+      app: "GgMusicMaker",
+      savedAt: "2026-09-13T00:00:00.000Z",
+      reverbSpace: "hall",
+      pixelsPerSecond: 80,
+      playhead: 0,
+      project: {
+        sampleRate: 48000,
+        tracks: [{ ...project.tracks[1], synth: undefined, voice: { preset: "chipmunk", mix: 0.5 }, clips: [] }],
+      },
+      audio: [],
+    };
+    const json = new TextEncoder().encode(JSON.stringify(v1));
+    const bytes = new Uint8Array(12 + json.length);
+    const view = new DataView(bytes.buffer);
+    bytes.set([0x47, 0x47, 0x4d, 0x4d], 0); // "GGMM"
+    view.setUint32(4, 1, true);
+    view.setUint32(8, json.length, true);
+    bytes.set(json, 12);
+
+    const { header } = unpackSession(bytes.buffer);
+    const t = header.project.tracks[0] as Track & { voice?: unknown };
+    expect(t.voice).toBeUndefined();
+    expect(t.synth).toMatchObject({ mix: 0.5, shift: 1, pitch: 7 });
+    expect(header.project.surround).toBe("stereo");
   });
 });

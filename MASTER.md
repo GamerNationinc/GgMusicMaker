@@ -49,7 +49,7 @@ launched on this Steam Deck under KDE/Wayland.
 | Non-destructive **split / trim / move / delete** on the timeline | 16 unit tests in `src/audio/edits.test.ts` (pure math) |
 | **Record** from mic onto an armed layer, via AudioWorklet (falls back to ScriptProcessor on old WebKit and says so in the status bar) | Browser test records 1.8 s and confirms the worklet path was used |
 | Per-layer **volume, mute, solo, reverb send** | Unit-tested param mapping; exercised in browser |
-| **FX rack** per layer: 3-band EQ, voice presets (Chipmunk / Deep / Robot / Alien) with amount, Room / Hall / Plate reverb | Browser test: Chipmunk preset changes the exported render (~193 KB of samples differ) |
+| **FX rack** per layer: 3-band EQ, Voice Synth (see 2026-09-14 below), Room / Hall / Plate reverb | Browser test: Chipmunk preset changes the exported render (~200 KB of samples differ) |
 | Shared convolution **reverb** bus with synthesised IRs | Part of the graph exercised above |
 | **Master limiter** + 12-segment LED level meter | Native: LED meter lights during playback |
 | **Export** mix to WAV, rendered offline through the same FX graph (Tauri save dialog, or browser download) | Browser test `exports a WAV` (valid RIFF, >44 bytes); WAV encoder unit-tested |
@@ -69,6 +69,9 @@ launched on this Steam Deck under KDE/Wayland.
 | **Load meter + low-power mode** — header readout like Ableton's: `CPU nn%` (UI-thread utilisation: per-frame busy time from the top of the rAF tick until a zero-delay timer runs, EMA-smoothed, published at 4 Hz), a **D** lamp when the audio clock advanced <97 % of wall time during playback/recording (= the audio thread starved), and an **ECO** toggle (persisted in `localStorage`) that unmounts the Matrix rain and caps meters at 20 fps. Independently, the meter loop now idles: after 2.5 s with nothing playing/recording/sounding it drops to 8 Hz and, once the VU has decayed to silence, stops pushing values (each push repaints the ASCII VU + LED strip). The rain also pauses while the document is hidden. | 7 unit tests (`load.test.ts`); 6 browser checks (readout, no false dropout, ECO on/off/remembered). Measured in headless Chromium, idle after a 4 s playback: main-thread busy **10.7 % → 3.4 %** (→ 1.3 % with ECO) |
 | **Sessions** — New / Open / Save / Save As (toolbar + `Ctrl+N/O/S/Shift+S`). One self-contained `.ggmm` file: `GGMM` magic, JSON header (project, reverb space, zoom, playhead), then one embedded 16-bit WAV per *referenced* buffer (orphans are dropped, armed flags are cleared). Loading decodes the WAVs itself (`decodeWav`) and registers PCM straight into the engine — no dependency on the WebView's media decoders. Ids from a loaded file are reserved so new ids never collide. Header shows `name*` while dirty; New/Open ask before discarding; the browser gets a `beforeunload` prompt and Tauri intercepts the window close (`core:window:allow-close/destroy`, `dialog:allow-ask`). | 9 unit tests (`session.test.ts`: round-trip, orphan GC, arm clearing, bad/truncated/newer files, id reservation) + 3 `decodeWav` tests; 7 browser checks including *save → New → reopen → export renders the same mix* (max sample delta 0.0002) |
 
+| **Voice Synth** (replaces the v2 voice presets) — one AudioWorklet (`public/voice-synth-processor.js`), all time-domain. Five engines run *in parallel*, each with a level: Shift (dual-delay pitch shifter + 20-band formant re-weight), Vocoder (saw chord carrier), Talkbox (buzz carrier + drive), Compuvox (pulse carrier + sample-hold/bit crush), Polyvox (chord harmoniser). Stack: up to 8 detuned unison voices with staggered grain phases, sub and shimmer octave layers. Modulation (block-rate): vibrato LFO, seeded random drift per voice, glide, formant LFO, and a dynamics follower routed to pitch / formant / width. Space: each layer has a home azimuth; `width` scales it, `rear` extends the ring behind the listener, `orbit` rotates the field; ensemble chorus per output channel; ring mod. The formant re-weight runs on the mono input *before* shifting (a pre-shift of F then a pitch shift of P lands where a post-shift F would), so one filterbank serves every layer. 31 k-rate AudioParams; seeded PRNG so renders are reproducible. When the host hands over an empty input (upstream nodes went quiet) the worklet keeps rendering on zeros so tails ring out, and after 0.6 s of silence it resets and idles at zero cost — this made export bit-for-bit repeatable (before, Chromium's tail-time cut landed at a different block on some runs). Presets: Off, Chipmunk, Deep, Robot, Alien, Choir, Daft, Speak & Spell, Cathedral, Orbit, Swarm. Old sessions' `voice` presets migrate to equivalent synth settings. | 41 unit tests run the worklet source in Node (`voice-synth.test.ts`): bit-exact bypass, every engine bounded/non-silent, stack thickens, each modulator changes the sound, glide slews a pitch jump, determinism, empty-input tail == zero-input tail then idle, width/orbit/fold-down, 5.1/7.1 placement, LFE is low-passed, centre send. Browser: Chipmunk changes the render; Choir + 5.1/7.1 export. CPU (Node, this Deck): Chipmunk 2 %, Choir 6–8 %, everything maxed at 7.1 17 % of one core per layer |
+| **Surround output** — `Project.surround` = stereo / 5.1 / 7.1 (Voice Synth → SPACE → OUTPUT; undoable; saved in the session). `MasterBus` (`src/audio/master.ts`) is `gain → limiter → meters → destination` at 2/6/8 channels, pinned explicit+discrete so nothing re-mixes the synth's field; a wide bus gets one limiter per channel (DynamicsCompressor is stereo at most). Live: the bus follows the layout when `destination.maxChannelCount` allows, else stays stereo and the synth folds its field down (status bar says so). Export: always renders the full layout; `encodeWav` writes `WAVE_FORMAT_EXTENSIBLE` with the SMPTE speaker mask for >2 channels (`decodeWav` reads it back). Filename gets a `-5.1`/`-7.1` suffix. | Unit: extensible header + mask + round trip for 6/8 ch. Browser: 5.1 and 7.1 exports are 6/8-channel extensible WAVs; Choir lands on C and the surrounds while LFE sits ≥10 dB under C (this check caught a real bug: the worklet's bypass path copied L into every surround channel). A Chromium probe confirmed the split/limit/merge bus keeps channels discrete |
+
 ### Native Steam Deck build
 
 | Step | Verified how |
@@ -82,10 +85,10 @@ launched on this Steam Deck under KDE/Wayland.
 ### Quality gates (all green, 2026-09-14)
 
 ```
-npm run check         svelte-check: 232 files, 0 errors, 0 warnings
-npm test              vitest: 8 files, 67 tests
-npm run build         vite: ~90 KB main chunk (+15 KB lazy Tauri window chunk)
-npm run test:browser  30/30 checks
+npm run check         svelte-check: 236 files, 0 errors, 0 warnings
+npm test              vitest: 8 files, 103 tests
+npm run build         vite: ~99 KB main chunk (+15 KB lazy Tauri window chunk)
+npm run test:browser  35/35 checks
 ```
 
 ---
@@ -98,6 +101,8 @@ npm run test:browser  30/30 checks
 - Whole files live in RAM as `AudioBuffer`s — fine for songs, not for hour-long sessions. Session files embed audio as 16-bit PCM (~10 MB per stereo minute at 48 kHz), so a long project makes a big `.ggmm`.
 - The Tauri close-guard (`onCloseRequested` → ask) is exercised in a browser only via `beforeunload`; the native path compiles against the granted permissions but has not been clicked through on the Deck yet.
 - Live FX monitoring while recording is not a goal (WebKitGTK → GStreamer latency). Record dry, add FX after.
+- **Surround has only been heard as a fold-down.** Headless Chromium and (very likely) the Deck's WebKitGTK report a 2-channel destination, so the live 5.1/7.1 bus path (`setSurround` → rebuilt master + channels) compiles and is exercised only in its stereo branch; the multichannel WAVs are verified structurally and by per-channel levels, not on a surround rig. The reverb send is stereo (5.1 folds down into it; 7.1's side/back channels are dropped from the send).
+- The Voice Synth is JavaScript on the audio thread; a project with many layers all on the heaviest presets could provoke the D lamp on the Deck. Not yet measured natively.
 - No LICENSE file in the repo.
 - The `.deb` is untested anywhere.
 - Gamepad navigation (Gaming Mode) does not exist yet; the app is touch/trackpad/keyboard only.
@@ -127,15 +132,17 @@ GgMusicMaker/
 │   │   ├── backend.ts             AudioBackend interface: the UI↔runtime seam (swap-in point for a native engine)
 │   │   ├── engine.ts              AudioEngine: AudioContext, master bus (gain→limiter→analyser→out),
 │   │   │                          pre-limiter analyser tap, reverb bus, scheduling, recording, offline render
-│   │   ├── channel.ts             TrackChannel: gain→EQ→pitch worklet→ring-mod→out, + reverb send
+│   │   ├── channel.ts             TrackChannel: gain→EQ→voice synth worklet (N-ch out)→out, + reverb send
+│   │   ├── master.ts              MasterBus: gain→limiter(s)→meters→destination at 2/6/8 channels
 │   │   ├── edits.ts (+test)       Pure clip math: split/trim/move/replace, audibility, project duration
 │   │   ├── recording.ts (+test)   Assemble captured chunks into a take
 │   │   ├── reverb.ts              Synthesised impulse responses: room / hall / plate
 │   │   ├── spectrum.ts (+test)    Pure meter math: dB, block peak/RMS, log-band folding, needle ballistics
 │   │   ├── types.ts               Project / Track / Clip / TransportState model, id + colour helpers
-│   │   └── wav.ts (+test)         WAV encoder + 16-bit PCM decoder (session files)
+│   │   └── wav.ts (+test)         WAV encoder (plain / extensible multichannel) + 16-bit PCM decoder
 │   ├── fx/
-│   │   └── voice.ts (+test)       Voice presets (pitch ratio, ring-mod Hz, mix curves)
+│   │   └── voice-synth.ts (+test) Voice Synth model: params + UI specs, presets, surround layouts,
+│   │                              v1 voice → synth migration. The test also runs the worklet DSP in Node
 │   ├── render/
 │   │   └── peaks.ts               Waveform peak extraction + cache for the timeline canvas
 │   ├── state/
@@ -152,7 +159,7 @@ GgMusicMaker/
 │       ├── Toolbar.svelte         New/Open/Save, Import, Layer, Undo, Redo, Split, Delete, Record, zoom, Export
 │       ├── Timeline.svelte        Ruler + lanes canvas, playhead, clip drag/trim, scroll sync
 │       ├── TrackHead.svelte       Per-layer name, FX button, M/S/arm chips, VOL + RVB faders
-│       ├── FxRack.svelte          EQ, voice presets + amount, reverb space
+│       ├── FxRack.svelte          EQ, Voice Synth (presets, MIX, tabbed sections, chord, OUTPUT layout), reverb
 │       ├── AnalogMeter.svelte     Bottom-left VU dial + PEAK lamp + spectrum (canvas)
 │       ├── MatrixRain.svelte      Falling-glyph backdrop behind the lanes (20 fps; off in ECO / when hidden)
 │       ├── ExportDialog.svelte    Retro export progress popup
@@ -160,7 +167,7 @@ GgMusicMaker/
 │       └── theme.css              Retro pixel / DOOM-status-bar theme, touch-sized controls
 │
 ├── public/                        Served as-is; AudioWorklets must be plain files
-│   ├── pitch-processor.js         Dual-delay-line pitch shifter (voice FX)
+│   ├── voice-synth-processor.js   The Voice Synth DSP (engines, stack, modulation, surround field)
 │   └── recorder-processor.js      Audio-thread capture for recording
 │
 ├── src-tauri/                     NATIVE SHELL (Rust / Tauri v2)
@@ -246,6 +253,12 @@ git tag v0.1.0 && git push origin v0.1.0     # release.yml builds + attaches art
 2. Merge to `main` → CI runs for the first time.
 3. Tag `v0.1.0` → first real release; fix the README download link's target.
 4. On-device manual pass: import via Tauri dialog → play → hear it → record → export via save dialog.
+
+### Next up (asked for 2026-09-14, after testing the Voice Synth)
+
+1. **Better FX-selection UI.** The rack is a row of modules with a tabbed synth in the middle; it should read as an FX *chain* you pick from — a module strip per layer (EQ ▸ Voice Synth ▸ Reverb …) with add/remove/enable per slot, a clearer "what's active" style than the magenta border, and preset browsing that isn't a wall of buttons.
+2. **Duplicate track.** Copy a layer with its clips (same buffers — no audio copied), mix + FX settings and colour; drop it right under the original; undoable. Pairs naturally with the stack: duplicate a vocal, give the copy a different synth preset.
+3. **Width + pan knobs on every effect.** Each module (EQ, Voice Synth, Reverb send, and the dry layer itself) gets its own stereo width and pan, so a layer can sit somewhere in the field and any effect can be placed independently of it. In surround, "pan" means azimuth on the ring — the synth's `setPan` (VBAP on the speaker ring) is the shared primitive; a small pan/width worklet stage (or a StereoPanner for the stereo bus) per module.
 
 ### Near term
 

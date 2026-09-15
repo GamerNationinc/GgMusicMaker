@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { encodeWav, decodeWav, type PcmSource } from "./wav";
+import { encodeWav, decodeWav, speakerMask, type PcmSource } from "./wav";
 import { computePeaks } from "../render/peaks";
 
 function fakeBuffer(channels: Float32Array[], sampleRate = 48000): PcmSource {
@@ -18,6 +18,37 @@ function readStr(view: DataView, offset: number, len: number): string {
 }
 
 describe("encodeWav", () => {
+  it("writes 5.1 and 7.1 as WAVE_FORMAT_EXTENSIBLE with a speaker mask", () => {
+    for (const [channels, mask] of [
+      [6, 0x3f],
+      [8, 0x63f],
+    ] as const) {
+      const chans: Float32Array[] = [];
+      for (let c = 0; c < channels; c++) chans.push(new Float32Array([0.1 * c, -0.1 * c, 0.5]));
+      const wav = encodeWav(fakeBuffer(chans));
+      const view = new DataView(wav);
+      expect(readStr(view, 0, 4)).toBe("RIFF");
+      expect(view.getUint32(16, true)).toBe(40); // extensible fmt size
+      expect(view.getUint16(20, true)).toBe(0xfffe);
+      expect(view.getUint16(22, true)).toBe(channels);
+      expect(view.getUint16(36, true)).toBe(22); // cbSize
+      expect(view.getUint32(40, true)).toBe(mask);
+      expect(speakerMask(channels)).toBe(mask);
+      expect(view.getUint8(44)).toBe(1); // PCM sub-format GUID starts 00000001
+      expect(readStr(view, 60, 4)).toBe("data");
+      expect(view.getUint32(64, true)).toBe(3 * channels * 2);
+      expect(view.getUint32(4, true)).toBe(wav.byteLength - 8);
+
+      // And it decodes back, channel order intact.
+      const back = decodeWav(wav);
+      expect(back.channels.length).toBe(channels);
+      for (let c = 0; c < channels; c++) {
+        expect(back.channels[c][0]).toBeCloseTo(0.1 * c, 3);
+        expect(back.channels[c][2]).toBeCloseTo(0.5, 3);
+      }
+    }
+  });
+
   it("writes a valid RIFF/WAVE header for stereo", () => {
     const left = new Float32Array([0, 0.5, -0.5, 1]);
     const right = new Float32Array([0, -1, 1, 0]);

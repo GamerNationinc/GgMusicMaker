@@ -24,10 +24,21 @@ send on every layer and a master limiter for the final level.
 - 🎛️ Per-layer **volume, mute, solo** and a **reverb send**.
 - 🎚️ **Per-layer FX rack** (the "FX" button on each layer):
   - **3-band EQ** (low shelf / mid peak / high shelf).
-  - **Voice manipulation** — an iZotope-style digital-voice unit with
-    **Chipmunk / Deep / Robot / Alien** presets (pitch shifting via a custom
-    `AudioWorklet`, ring modulation via a native oscillator) plus an amount knob.
+  - **Voice Synth** — a VocalSynth-style vocal engine in one `AudioWorklet`.
+    Five engines that all run at once, each with its own level: **Shift**
+    (pitch + formant), **Vocoder**, **Talkbox**, **Compuvox** (Speak & Spell)
+    and **Polyvox** (chord harmoniser). A **stack** of up to 8 detuned unison
+    voices plus sub (−8vb) and shimmer (+8va) layers. **Modulation**: vibrato,
+    per-voice random drift, glide, a formant LFO, and the voice's own loudness
+    driving pitch / formant / width. **Space**: every layer has its own spot
+    around the listener — width, an *orbit* LFO that spins the field, rear
+    depth, ensemble chorus, centre and LFE sends. Presets: Off, Chipmunk, Deep,
+    Robot, Alien, Choir, Daft, Speak & Spell, Cathedral, Orbit, Swarm.
   - **Reverb** send with selectable **Room / Hall / Plate** spaces.
+- 🔊 **Stereo / 5.1 / 7.1 output** (Voice Synth → SPACE → OUTPUT). The synth's
+  field is VBAP-panned onto a real speaker ring; the exported WAV is a proper
+  multichannel `WAVE_FORMAT_EXTENSIBLE` file with a speaker mask. A stereo
+  device hears the fold-down live.
 - 🌫️ Shared convolution **reverb** bus (synthesised impulse responses).
 - 📈 **Master limiter** + level meter ("mastering level").
 - 🎚️ **Analogue master meter** (bottom-left): VU-style needle with peak hold, a
@@ -48,7 +59,7 @@ send on every layer and a master limiter for the final level.
 
 **Next (v3 ideas):**
 
-- Formant-corrected pitch shifting and real IR reverb files.
+- Real IR reverb files; a multichannel reverb for the surround bus.
 - Movable FX order / more inserts per layer.
 - Steam Deck gamepad navigation.
 
@@ -59,12 +70,13 @@ pixel art) shipped as a small native Linux binary via **Tauri v2**.
 
 ```
 public/
-  pitch-processor.js  AudioWorklet: dual-delay-line pitch shifter (voice FX)
+  voice-synth-processor.js  AudioWorklet: the Voice Synth (5 engines, stack, modulation, surround field)
 src/
   audio/     AudioEngine (AudioContext + master bus + reverb), TrackChannel
-             (per-layer fader + EQ + voice FX + send), Track/Clip model,
-             pure edit ops (split/trim/move), WAV encoder, reverb IR generator
-  fx/        Voice presets + param mapping (pure, unit-tested)
+             (per-layer fader + EQ + voice synth + send), MasterBus (2/6/8 ch),
+             Track/Clip model, pure edit ops (split/trim/move), WAV encoder
+             (plain + extensible multichannel), reverb IR generator
+  fx/        Voice Synth model: params, presets, surround layouts, migration (pure, unit-tested)
   render/    waveform peak extraction + caching
   state/     Svelte stores + all app actions (the UI <-> engine seam)
   ui/        Svelte components: App, Transport, Toolbar, Timeline, TrackHead, FxRack
@@ -77,10 +89,12 @@ Key design choices (see also "Architecture decisions" below and inline comments)
   adjust `offset`/`duration`/`startTime`; source audio is never mutated. The math
   lives in `src/audio/edits.ts` and is fully unit-tested.
 - **Real-time, non-destructive FX** — each track is a `TrackChannel`:
-  `gain → EQ → pitch → ring-mod → out`, with `out → master` (dry) and
+  `gain → EQ → voice synth → out`, with `out → master` (dry) and
   `out → send → convolver → master` (wet); the master bus is
-  `gain → limiter → meter → output`. Export builds the **same** `TrackChannel`
-  graph in an `OfflineAudioContext`, so the render matches playback exactly.
+  `gain → limiter → meter → output` (one limiter per channel on a 5.1/7.1 bus).
+  Export builds the **same** `TrackChannel` + master graph in an
+  `OfflineAudioContext` with the project's channel count, so the render
+  matches playback exactly.
 - **Recording** captures through an `AudioWorklet` (`public/recorder-processor.js`) so it
   runs on the audio thread and stays clean while the UI is busy. If the worklet can't
   load (older WebKitGTK), it falls back automatically to a `ScriptProcessorNode` and the
@@ -108,7 +122,7 @@ npm run tauri dev
 npm run check          # svelte-check / TypeScript
 npm test               # vitest (edit math, WAV encoder, take assembly, undo history, meter math)
 npm run build          # production frontend build
-npm run test:browser   # headless Chromium: boot, import, RECORD, export, voice FX
+npm run test:browser   # headless Chromium: boot, import, RECORD, export, voice synth, 5.1/7.1 export
 
 # Build the Steam Deck AppImage (+ .deb) — tauri build plus scripts/fix-appimage.sh:
 npm run build:deck

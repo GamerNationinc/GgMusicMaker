@@ -18,12 +18,14 @@
 // Pure: no Svelte, no Web Audio, so it is unit-tested with fake buffers. The
 // store handles dialogs and turning decoded PCM back into engine buffers.
 
-import type { Project } from "../audio/types";
+import type { Project, Track } from "../audio/types";
 import type { ReverbSpace } from "../audio/reverb";
 import { encodeWav, decodeWav, type PcmSource, type DecodedPcm } from "../audio/wav";
+import { normalizeSynth, SURROUND_ORDER, type SurroundLayout } from "../fx/voice-synth";
 
 export const SESSION_EXTENSION = "ggmm";
-export const FORMAT_VERSION = 1;
+// v1: tracks had `voice: { preset, mix }`; v2: `synth` (Voice Synth) + project.surround.
+export const FORMAT_VERSION = 2;
 const MAGIC = "GGMM";
 const PREAMBLE = 12;
 
@@ -136,6 +138,7 @@ export function unpackSession(bytes: ArrayBuffer): UnpackedSession {
   if (!header.project || !Array.isArray(header.project.tracks) || !Array.isArray(header.audio)) {
     throw new Error("session header is malformed");
   }
+  header.project = migrateProject(header.project);
 
   const audio = new Map<string, DecodedPcm>();
   for (const entry of header.audio) {
@@ -147,6 +150,17 @@ export function unpackSession(bytes: ArrayBuffer): UnpackedSession {
     if (!audio.has(id)) throw new Error(`session is missing audio for ${id}`);
   }
   return { header, audio };
+}
+
+/** Bring a project from any older format up to date: v1 voice presets become
+ *  Voice Synth settings, missing blocks get defaults, values are clamped. */
+export function migrateProject(project: Project): Project {
+  const tracks = (project.tracks as (Track & { voice?: unknown })[]).map((t) => {
+    const { voice, ...rest } = t;
+    return { ...rest, synth: normalizeSynth(t.synth, voice) } as Track;
+  });
+  const surround: SurroundLayout = SURROUND_ORDER.includes(project.surround) ? project.surround : "stereo";
+  return { ...project, tracks, surround };
 }
 
 /** Strip the path and extension from a session path for display. */

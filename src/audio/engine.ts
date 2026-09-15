@@ -1,11 +1,12 @@
 // AudioEngine — the Web Audio runtime for GgMusicMaker.
 //
 // Owns the single AudioContext, the master bus (gain -> limiter -> meter ->
-// output), a shared convolution-reverb bus, and one TrackChannel per track
-// (fader + 3-band EQ + voice FX + reverb send). Playback schedules an
-// AudioBufferSourceNode per clip on the shared timeline, so layering is
-// inherent. Recording captures mic/line input; export re-renders the whole
-// project offline through the *same* TrackChannel graph.
+// output, 2/6/8 channels — see master.ts), a shared convolution-reverb bus,
+// and one TrackChannel per track (fader + 3-band EQ + voice synth + reverb
+// send). Playback schedules an AudioBufferSourceNode per clip on the shared
+// timeline, so layering is inherent. Recording captures mic/line input;
+// export re-renders the whole project offline through the *same*
+// TrackChannel + master graph, at the project's surround layout.
 
 import type { Project, Track } from "./types";
 import { nextId } from "./types";
@@ -15,20 +16,20 @@ import { TrackChannel } from "./channel";
 import type { AudioBackend, DecodedAudio, MasterMeter } from "./backend";
 import { blockLevels, logBands } from "./spectrum";
 import { assembleTake, type Chunk } from "./recording";
+import { buildMasterBus, deviceChannelsFor, type MasterBus } from "./master";
+import { surroundChannels, type SurroundLayout } from "../fx/voice-synth";
 
-const PITCH_WORKLET_URL = `${import.meta.env.BASE_URL}pitch-processor.js`;
+const SYNTH_WORKLET_URL = `${import.meta.env.BASE_URL}voice-synth-processor.js`;
 const RECORDER_WORKLET_URL = `${import.meta.env.BASE_URL}recorder-processor.js`;
 
 export class AudioEngine implements AudioBackend {
   readonly ctx: AudioContext;
 
-  private masterGain: GainNode;
-  private limiter: DynamicsCompressorNode;
-  private analyser: AnalyserNode;
-  /** Parallel tap on the mix *before* the limiter. The post-limiter analyser
-   *  can never show a peak (that's the limiter's job), so the analogue meter
-   *  reads here to show how hot the mix really is. */
-  private preAnalyser: AnalyserNode;
+  /** gain -> limiter(s) -> meters -> destination. Rebuilt when the surround
+   *  layout changes; `master.input` is what channels and the reverb feed. */
+  private master: MasterBus;
+  private surround: SurroundLayout = "stereo";
+  private masterGainValue = 0.9;
   private convolver: ConvolverNode;
   private reverbReturn: GainNode;
   private reverbSpace: ReverbSpace = "hall";
@@ -41,9 +42,9 @@ export class AudioEngine implements AudioBackend {
   private playStartOffset = 0;
   private _isPlaying = false;
 
-  /** Resolves once the pitch worklet has (or hasn't) loaded. */
-  private pitchReady: Promise<boolean>;
-  pitchAvailable = false;
+  /** Resolves once the synth worklet has (or hasn't) loaded. */
+  private synthReady: Promise<boolean>;
+  synthAvailable = false;
 
   // Recording state
   private recStream: MediaStream | null = null;
@@ -62,40 +63,19 @@ export class AudioEngine implements AudioBackend {
   constructor() {
     this.ctx = new AudioContext();
 
-    this.masterGain = this.ctx.createGain();
-    this.masterGain.gain.value = 0.9;
-
-    // A high-ratio, fast-attack compressor acts as a simple mastering limiter.
-    this.limiter = this.ctx.createDynamicsCompressor();
-    this.limiter.threshold.value = -3;
-    this.limiter.knee.value = 0;
-    this.limiter.ratio.value = 20;
-    this.limiter.attack.value = 0.002;
-    this.limiter.release.value = 0.1;
-
-    this.analyser = this.ctx.createAnalyser();
-    this.analyser.fftSize = 256;
-    this.meterBuf = new Uint8Array(new ArrayBuffer(this.analyser.fftSize));
-
-    this.preAnalyser = this.ctx.createAnalyser();
-    this.preAnalyser.fftSize = 1024; // 512 bins ≈ 47 Hz each at 48 kHz
-    this.preAnalyser.smoothingTimeConstant = 0.6;
-    this.preTimeBuf = new Float32Array(new ArrayBuffer(4 * this.preAnalyser.fftSize));
-    this.preFreqBuf = new Uint8Array(new ArrayBuffer(this.preAnalyser.frequencyBinCount));
+    this.master = buildMasterBus(this.ctx, 2, this.masterGainValue);
+    this.meterBuf = new Uint8Array(new ArrayBuffer(this.master.post.fftSize));
+    this.preTimeBuf = new Float32Array(new ArrayBuffer(4 * this.master.preTap.fftSize));
+    this.preFreqBuf = new Uint8Array(new ArrayBuffer(this.master.preTap.frequencyBinCount));
 
     this.convolver = this.ctx.createConvolver();
     this.convolver.buffer = makeImpulseResponse(this.ctx, this.reverbSpace);
     this.reverbReturn = this.ctx.createGain();
     this.reverbReturn.gain.value = 1;
-
-    this.masterGain.connect(this.limiter);
-    this.masterGain.connect(this.preAnalyser); // tap only; no output
-    this.limiter.connect(this.analyser);
-    this.analyser.connect(this.ctx.destination);
     this.convolver.connect(this.reverbReturn);
-    this.reverbReturn.connect(this.masterGain);
+    this.reverbReturn.connect(this.master.input);
 
-    this.pitchReady = this.loadWorklet(this.ctx);
+    this.synthReady = this.loadWorklet(this.ctx);
   }
 
   get isPlaying(): boolean {
@@ -112,28 +92,86 @@ export class AudioEngine implements AudioBackend {
 
   private async loadWorklet(
     ctx: BaseAudioContext,
-    url = PITCH_WORKLET_URL,
+    url = SYNTH_WORKLET_URL,
   ): Promise<boolean> {
     try {
       if (!("audioWorklet" in ctx) || !ctx.audioWorklet) return false;
       await ctx.audioWorklet.addModule(url);
-      if (ctx === this.ctx && url === PITCH_WORKLET_URL) this.pitchAvailable = true;
+      if (ctx === this.ctx && url === SYNTH_WORKLET_URL) this.synthAvailable = true;
       return true;
     } catch {
-      // WebKitGTK without AudioWorklet: voice pitch degrades gracefully and
-      // recording falls back to the ScriptProcessor path.
+      // WebKitGTK without AudioWorklet: the voice synth is unavailable (dry
+      // passthrough) and recording falls back to the ScriptProcessor path.
       return false;
     }
   }
 
-  /** Resume the context and make sure the pitch worklet had a chance to load. */
+  /** Resume the context and make sure the synth worklet had a chance to load. */
   async ensureRunning(): Promise<void> {
     if (this.ctx.state === "suspended") await this.ctx.resume();
-    await this.pitchReady;
+    await this.synthReady;
   }
 
   setMasterGain(value: number): void {
-    this.masterGain.gain.setTargetAtTime(value, this.ctx.currentTime, 0.01);
+    this.masterGainValue = value;
+    this.master.input.gain.setTargetAtTime(value, this.ctx.currentTime, 0.01);
+  }
+
+  // ---- Surround -----------------------------------------------------------
+
+  get currentSurround(): SurroundLayout {
+    return this.surround;
+  }
+
+  /** Channels the live bus is actually running at (the device may have fewer
+   *  than the layout wants — then the synth folds its field down to what
+   *  there is). Export always renders the full layout. */
+  get liveChannels(): number {
+    return this.master.channels;
+  }
+
+  get deviceMaxChannels(): number {
+    return this.ctx.destination.maxChannelCount || 2;
+  }
+
+  /** Switch the output layout. Rebuilds the master bus and every track
+   *  channel when the live channel count changes, so the worklets get the
+   *  new output width. The store reschedules playback afterwards. */
+  setSurround(layout: SurroundLayout): boolean {
+    this.surround = layout;
+    const wanted = surroundChannels(layout);
+    const live = deviceChannelsFor(wanted, this.deviceMaxChannels);
+    if (live === this.master.channels) return false;
+
+    const dest = this.ctx.destination;
+    try {
+      if (live > 2) {
+        dest.channelCount = live;
+        dest.channelCountMode = "explicit";
+        dest.channelInterpretation = "discrete";
+      } else {
+        dest.channelCountMode = "explicit";
+        dest.channelInterpretation = "speakers";
+        dest.channelCount = 2;
+      }
+    } catch {
+      // The device refused the width; stay where we are.
+      return false;
+    }
+
+    this.stopSources();
+    this.reverbReturn.disconnect();
+    this.master.dispose();
+    this.master = buildMasterBus(this.ctx, live, this.masterGainValue);
+    this.meterBuf = new Uint8Array(new ArrayBuffer(this.master.post.fftSize));
+    this.preTimeBuf = new Float32Array(new ArrayBuffer(4 * this.master.preTap.fftSize));
+    this.preFreqBuf = new Uint8Array(new ArrayBuffer(this.master.preTap.frequencyBinCount));
+    this.reverbReturn.connect(this.master.input);
+    for (const [id, ch] of this.channels) {
+      ch.dispose();
+      this.channels.delete(id);
+    }
+    return true;
   }
 
   setReverbSpace(space: ReverbSpace): void {
@@ -172,8 +210,8 @@ export class AudioEngine implements AudioBackend {
   // ---- Track channels -----------------------------------------------------
 
   private createChannel(trackId: string): TrackChannel {
-    const ch = new TrackChannel(this.ctx, this.pitchAvailable);
-    ch.connect(this.masterGain, this.convolver);
+    const ch = new TrackChannel(this.ctx, this.synthAvailable, this.master.channels);
+    ch.connect(this.master.input, this.convolver);
     this.channels.set(trackId, ch);
     return ch;
   }
@@ -182,8 +220,8 @@ export class AudioEngine implements AudioBackend {
     let ch = this.channels.get(track.id);
     if (!ch) ch = this.createChannel(track.id);
     // Self-heal: if the worklet finished loading after this channel was built
-    // and the track now wants a pitched voice, rebuild it with the pitch node.
-    if (track.voice.preset !== "off" && !ch.hasPitch && this.pitchAvailable) {
+    // and the track now wants the synth, rebuild it with the synth node.
+    if (track.synth.mix > 0 && !ch.hasSynth && this.synthAvailable) {
       ch.dispose();
       this.channels.delete(track.id);
       ch = this.createChannel(track.id);
@@ -275,7 +313,7 @@ export class AudioEngine implements AudioBackend {
   }
 
   masterLevel(): number {
-    this.analyser.getByteTimeDomainData(this.meterBuf);
+    this.master.post.getByteTimeDomainData(this.meterBuf);
     let peak = 0;
     for (let i = 0; i < this.meterBuf.length; i++) {
       const v = Math.abs(this.meterBuf[i] - 128) / 128;
@@ -285,13 +323,13 @@ export class AudioEngine implements AudioBackend {
   }
 
   masterMeter(): MasterMeter {
-    this.preAnalyser.getFloatTimeDomainData(this.preTimeBuf);
+    this.master.preTap.getFloatTimeDomainData(this.preTimeBuf);
     const { peak, rms } = blockLevels(this.preTimeBuf);
-    return { peak, rms, reduction: this.limiter.reduction };
+    return { peak, rms, reduction: this.master.reduction() };
   }
 
   masterSpectrum(out: Float32Array): Float32Array {
-    this.preAnalyser.getByteFrequencyData(this.preFreqBuf);
+    this.master.preTap.getByteFrequencyData(this.preFreqBuf);
     return logBands(this.preFreqBuf, this.ctx.sampleRate, out);
   }
 
@@ -392,7 +430,8 @@ export class AudioEngine implements AudioBackend {
 
   // ---- Offline export -----------------------------------------------------
 
-  /** Re-render the whole project (FX + reverb + master) to one AudioBuffer. */
+  /** Re-render the whole project (FX + reverb + master) to one AudioBuffer
+   *  with as many channels as the project's surround layout (2, 6 or 8). */
   async renderMix(
     project: Project,
     tailSeconds = 3,
@@ -406,29 +445,21 @@ export class AudioEngine implements AudioBackend {
 
     const rate = project.sampleRate || this.ctx.sampleRate;
     const frames = Math.max(1, Math.ceil(duration * rate));
-    const offline = new OfflineAudioContext(2, frames, rate);
-    const hasPitch = await this.loadWorklet(offline);
+    const channels = surroundChannels(project.surround);
+    const offline = new OfflineAudioContext(channels, frames, rate);
+    const hasSynth = await this.loadWorklet(offline);
 
-    const masterGain = offline.createGain();
-    masterGain.gain.value = 0.9;
-    const limiter = offline.createDynamicsCompressor();
-    limiter.threshold.value = -3;
-    limiter.ratio.value = 20;
-    limiter.attack.value = 0.002;
-    limiter.release.value = 0.1;
-    masterGain.connect(limiter);
-    limiter.connect(offline.destination);
-
+    const master = buildMasterBus(offline, channels, this.masterGainValue);
     const convolver = offline.createConvolver();
     convolver.buffer = makeImpulseResponse(offline, this.reverbSpace);
     const reverbReturn = offline.createGain();
     convolver.connect(reverbReturn);
-    reverbReturn.connect(masterGain);
+    reverbReturn.connect(master.input);
 
     for (const track of project.tracks) {
       if (!isTrackAudible(track, hasSolo)) continue;
-      const channel = new TrackChannel(offline, hasPitch);
-      channel.connect(masterGain, convolver);
+      const channel = new TrackChannel(offline, hasSynth, channels);
+      channel.connect(master.input, convolver);
       channel.applyTrack(track, hasSolo, /* smooth */ false);
 
       for (const clip of track.clips) {

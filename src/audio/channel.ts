@@ -3,10 +3,14 @@
 // Signal path:
 //   input(gain: vol/mute/solo)
 //     -> EQ low-shelf -> mid peak -> high-shelf
-//     -> [pitch worklet]            (voice: chipmunk/deep/alien)
-//     -> ring stage                 (voice: robot/alien ring mod)
+//     -> [voice synth worklet]     (stacked vocal engines; N-channel out)
 //     -> output ----------------------------------> master (dry)
 //              \-> send(gain) ------------------->  reverb convolver (wet)
+//
+// The synth worklet is built with as many output channels as the master bus
+// has (2, 6 or 8), so a surround field lands on the bus discretely, with no
+// implicit up/down-mixing in between. The reverb send is stereo: the
+// convolver folds 5.1 down (L + 0.7C + 0.7Ls) and takes L/R of 7.1.
 //
 // One class builds this for BOTH the realtime AudioContext and the offline
 // export context, so the mix you hear is exactly the mix you render. It never
@@ -14,11 +18,13 @@
 
 import type { Track } from "./types";
 import { isTrackAudible } from "./edits";
-import { VOICE_PRESETS, pitchMixFor, ringDepthFor } from "../fx/voice";
+import { DEFAULT_SYNTH, synthIsActive, type SynthKey } from "../fx/voice-synth";
 
 const EQ_LOW_HZ = 220;
 const EQ_MID_HZ = 1200;
 const EQ_HIGH_HZ = 4500;
+
+export const SYNTH_PROCESSOR = "voice-synth-processor";
 
 export class TrackChannel {
   readonly input: GainNode;
@@ -29,12 +35,14 @@ export class TrackChannel {
   private eqMid: BiquadFilterNode;
   private eqHigh: BiquadFilterNode;
 
-  private pitch: AudioWorkletNode | null = null;
-  private ringGain: GainNode;
-  private ringDepth: GainNode;
-  private ringOsc: OscillatorNode;
+  private synth: AudioWorkletNode | null = null;
 
-  constructor(private ctx: BaseAudioContext, hasPitchWorklet: boolean) {
+  constructor(
+    private ctx: BaseAudioContext,
+    hasSynthWorklet: boolean,
+    /** Channels the master bus carries; the synth field is rendered into this many. */
+    readonly busChannels: number,
+  ) {
     this.input = ctx.createGain();
     this.output = ctx.createGain();
     this.send = ctx.createGain();
@@ -51,23 +59,15 @@ export class TrackChannel {
     this.eqHigh.type = "highshelf";
     this.eqHigh.frequency.value = EQ_HIGH_HZ;
 
-    // Ring-mod stage: effective gain = (1 - depth) + depth * osc, so depth 0 is
-    // a clean passthrough and depth 1 is full ring modulation.
-    this.ringGain = ctx.createGain();
-    this.ringGain.gain.value = 1;
-    this.ringDepth = ctx.createGain();
-    this.ringDepth.gain.value = 0;
-    this.ringOsc = ctx.createOscillator();
-    this.ringOsc.frequency.value = 0;
-    this.ringOsc.connect(this.ringDepth);
-    this.ringDepth.connect(this.ringGain.gain);
-    this.ringOsc.start();
-
-    if (hasPitchWorklet) {
+    if (hasSynthWorklet) {
       try {
-        this.pitch = new AudioWorkletNode(ctx as AudioContext, "pitch-shift-processor");
+        this.synth = new AudioWorkletNode(ctx as AudioContext, SYNTH_PROCESSOR, {
+          numberOfInputs: 1,
+          numberOfOutputs: 1,
+          outputChannelCount: [busChannels],
+        });
       } catch {
-        this.pitch = null;
+        this.synth = null;
       }
     }
 
@@ -75,19 +75,18 @@ export class TrackChannel {
     this.input.connect(this.eqLow);
     this.eqLow.connect(this.eqMid);
     this.eqMid.connect(this.eqHigh);
-    if (this.pitch) {
-      this.eqHigh.connect(this.pitch);
-      this.pitch.connect(this.ringGain);
+    if (this.synth) {
+      this.eqHigh.connect(this.synth);
+      this.synth.connect(this.output);
     } else {
-      this.eqHigh.connect(this.ringGain);
+      this.eqHigh.connect(this.output);
     }
-    this.ringGain.connect(this.output);
     this.output.connect(this.send);
   }
 
-  /** True if this channel could construct the pitch-shift node. */
-  get hasPitch(): boolean {
-    return this.pitch !== null;
+  /** True if this channel could construct the voice synth node. */
+  get hasSynth(): boolean {
+    return this.synth !== null;
   }
 
   /** Connect the dry output to the master bus and the send to the reverb bus. */
@@ -110,25 +109,23 @@ export class TrackChannel {
     ramp(this.eqMid.gain, track.eq.mid);
     ramp(this.eqHigh.gain, track.eq.high);
 
-    const preset = VOICE_PRESETS[track.voice.preset];
-    if (this.pitch) {
-      const pitchParam = this.pitch.parameters.get("pitch");
-      const mixParam = this.pitch.parameters.get("mix");
-      if (pitchParam) ramp(pitchParam, preset.pitch);
-      if (mixParam) ramp(mixParam, pitchMixFor(track.voice.preset, track.voice.mix));
+    if (this.synth) {
+      const synth = track.synth;
+      // With no engine up there is nothing wet to hear, so keep the dry
+      // path bit-exact instead of fading it by `mix`.
+      const active = synthIsActive(synth);
+      for (const key of Object.keys(DEFAULT_SYNTH) as SynthKey[]) {
+        const param = this.synth.parameters.get(key);
+        if (!param) continue;
+        const value = key === "mix" && !active ? 0 : synth[key];
+        // Discrete params (mode-like) must not glide through in-between values.
+        if (key === "chord" || key === "unison") param.value = value;
+        else ramp(param, value);
+      }
     }
-    const depth = ringDepthFor(track.voice.preset) * track.voice.mix;
-    ramp(this.ringOsc.frequency, preset.ringHz);
-    ramp(this.ringGain.gain, 1 - depth);
-    ramp(this.ringDepth.gain, depth);
   }
 
   dispose(): void {
-    try {
-      this.ringOsc.stop();
-    } catch {
-      /* already stopped */
-    }
     for (const n of [
       this.input,
       this.output,
@@ -136,10 +133,7 @@ export class TrackChannel {
       this.eqLow,
       this.eqMid,
       this.eqHigh,
-      this.ringGain,
-      this.ringDepth,
-      this.ringOsc,
-      this.pitch,
+      this.synth,
     ]) {
       try {
         n?.disconnect();

@@ -14,6 +14,7 @@
 
 import type { Project, Track } from "./types";
 import type { ReverbSpace } from "./reverb";
+import type { SurroundLayout } from "../fx/voice-synth";
 
 export interface DecodedAudio {
   bufferId: string;
@@ -59,6 +60,14 @@ export interface AudioBackend {
   setMasterGain(value: number): void;
   setReverbSpace(space: ReverbSpace): void;
   readonly currentReverbSpace: ReverbSpace;
+  /** Change the output layout. Returns true when the live graph was rebuilt
+   *  (the caller should reschedule playback). */
+  setSurround(layout: SurroundLayout): boolean;
+  readonly currentSurround: SurroundLayout;
+  /** Channels the live output is really running at; export always renders
+   *  the full layout. */
+  readonly liveChannels: number;
+  readonly deviceMaxChannels: number;
 
   // Transport
   play(project: Project, fromTime: number): void;

@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { DEFAULT_SYNTH } from "../fx/voice-synth";
 import {
   splitClip,
   trimClip,
@@ -105,6 +106,7 @@ describe("clipEnd + projectDuration", () => {
   it("computes project duration as the furthest clip end", () => {
     const project: Project = {
       sampleRate: 48000,
+      surround: "stereo",
       tracks: [
         { clips: [makeClip({ startTime: 0, duration: 3 })] } as Track,
         { clips: [makeClip({ startTime: 5, duration: 4 })] } as Track,
@@ -114,7 +116,7 @@ describe("clipEnd + projectDuration", () => {
   });
 
   it("is zero for an empty project", () => {
-    expect(projectDuration({ sampleRate: 48000, tracks: [] })).toBe(0);
+    expect(projectDuration({ sampleRate: 48000, surround: "stereo", tracks: [] })).toBe(0);
   });
 });
 
@@ -128,7 +130,7 @@ describe("solo / mute audibility", () => {
     armed: false,
     reverbSend: 0,
     eq: { low: 0, mid: 0, high: 0 },
-    voice: { preset: "off", mix: 1 },
+    synth: { ...DEFAULT_SYNTH },
     color: "#fff",
     clips: [],
     ...over,
@@ -151,10 +153,11 @@ describe("solo / mute audibility", () => {
   it("anySoloed detects solo state", () => {
     const p: Project = {
       sampleRate: 48000,
+      surround: "stereo",
       tracks: [base({}), base({ soloed: true })],
     };
     expect(anySoloed(p)).toBe(true);
-    expect(anySoloed({ sampleRate: 48000, tracks: [base({})] })).toBe(false);
+    expect(anySoloed({ sampleRate: 48000, surround: "stereo", tracks: [base({})] })).toBe(false);
   });
 });
 

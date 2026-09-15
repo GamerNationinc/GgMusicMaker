@@ -3,17 +3,47 @@
     project,
     selectedTrackId,
     setEq,
-    setVoicePreset,
-    setVoiceMix,
+    setSynthParam,
+    applySynthPreset,
+    setSurround,
     setReverbSend,
     setReverbSpace,
     reverbSpace,
+    liveChannels,
   } from "../state/store";
-  import { VOICE_PRESET_ORDER, VOICE_PRESETS } from "../fx/voice";
+  import {
+    SYNTH_PRESETS,
+    SYNTH_SECTIONS,
+    CHORD_NAMES,
+    SURROUND,
+    SURROUND_ORDER,
+    matchingPreset,
+    synthIsActive,
+    type ParamSpec,
+    type SynthKey,
+  } from "../fx/voice-synth";
   import type { ReverbSpace } from "../audio/reverb";
 
   let track = $derived($project.tracks.find((t) => t.id === $selectedTrackId));
   const spaces: ReverbSpace[] = ["room", "hall", "plate"];
+
+  // One section of the synth visible at a time keeps the rack short enough
+  // for the Deck's 800 px screen; the preset row + MIX are always shown.
+  let tab = $state(0);
+  const preset = $derived(track ? matchingPreset(track.synth) : null);
+  const active = $derived(track ? synthIsActive(track.synth) : false);
+  const surroundWant = $derived(SURROUND[$project.surround].channels);
+  const folded = $derived($liveChannels < surroundWant);
+
+  function fmt(spec: ParamSpec, v: number): string {
+    const digits = spec.step >= 1 ? 0 : spec.step >= 0.1 ? 1 : 2;
+    const s = v.toFixed(digits);
+    return spec.unit ? `${s}${spec.unit}` : s;
+  }
+
+  function onSlider(key: SynthKey, e: Event) {
+    if (track) setSynthParam(track.id, key, Number((e.target as HTMLInputElement).value));
+  }
 </script>
 
 {#if track}
@@ -46,30 +76,96 @@
         </div>
       </section>
 
-      <!-- Voice manipulation -->
-      <section class="module voice">
-        <span class="label">VOICE FX</span>
+      <!-- Voice Synth -->
+      <section class="module synth" class:live={active}>
+        <div class="synth-head">
+          <span class="label">VOICE SYNTH</span>
+          <span class="lamp" class:on={active}>●</span>
+          <div class="mix">
+            <span class="tiny">MIX</span>
+            <input
+              type="range"
+              min="0"
+              max="1"
+              step="0.01"
+              value={track.synth.mix}
+              oninput={(e) => onSlider("mix", e)}
+            />
+            <span class="readout">{Math.round(track.synth.mix * 100)}%</span>
+          </div>
+        </div>
+
         <div class="presets">
-          {#each VOICE_PRESET_ORDER as preset}
+          {#each SYNTH_PRESETS as p}
             <button
               class="btn"
-              class:magenta={track.voice.preset === preset}
-              onclick={() => void setVoicePreset(track!.id, preset)}
+              class:magenta={preset === p.name}
+              onclick={() => void applySynthPreset(track!.id, p.name)}
             >
-              {VOICE_PRESETS[preset].label}
+              {p.name}
             </button>
           {/each}
         </div>
-        <div class="mix">
-          <span class="tiny">AMOUNT</span>
-          <input
-            type="range"
-            min="0"
-            max="1"
-            step="0.01"
-            value={track.voice.mix}
-            oninput={(e) => setVoiceMix(track!.id, Number((e.target as HTMLInputElement).value))}
-          />
+
+        <div class="tabs">
+          {#each SYNTH_SECTIONS as section, i}
+            <button class="tab" class:on={tab === i} onclick={() => (tab = i)}>{section.title}</button>
+          {/each}
+        </div>
+
+        <div class="params">
+          {#each SYNTH_SECTIONS[tab].params as spec (spec.key)}
+            <label class="param">
+              <span class="tiny">{spec.label}</span>
+              <input
+                type="range"
+                min={spec.min}
+                max={spec.max}
+                step={spec.step}
+                value={track.synth[spec.key]}
+                oninput={(e) => onSlider(spec.key, e)}
+              />
+              <span class="readout">{fmt(spec, track.synth[spec.key])}</span>
+            </label>
+          {/each}
+
+          {#if SYNTH_SECTIONS[tab].title === "PITCH"}
+            <div class="param row">
+              <span class="tiny">CHORD</span>
+              <div class="choices">
+                {#each CHORD_NAMES as name, i}
+                  <button
+                    class="btn small"
+                    class:accent={track.synth.chord === i}
+                    onclick={() => setSynthParam(track!.id, "chord", i)}
+                  >{name}</button>
+                {/each}
+              </div>
+            </div>
+          {/if}
+
+          {#if SYNTH_SECTIONS[tab].title === "SPACE"}
+            <div class="param row">
+              <span class="tiny">OUTPUT</span>
+              <div class="choices">
+                {#each SURROUND_ORDER as layout}
+                  <button
+                    class="btn small surround"
+                    class:accent={$project.surround === layout}
+                    onclick={() => void setSurround(layout)}
+                    title={SURROUND[layout].names.join(" ")}
+                  >{SURROUND[layout].label}</button>
+                {/each}
+              </div>
+              <span class="readout note" title="Export always renders every channel of the layout.">
+                {#if folded}
+                  device: {$liveChannels} ch fold-down
+                {:else}
+                  {SURROUND[$project.surround].names.join(" ")}
+                {/if}
+              </span>
+            </div>
+          {/if}
         </div>
       </section>
 
@@ -124,6 +220,7 @@
     display: flex;
     gap: 12px;
     flex-wrap: wrap;
+    align-items: flex-start;
   }
   .module {
     background: var(--panel-lo);
@@ -156,11 +253,42 @@
     letter-spacing: 1px;
     color: var(--ink-dim);
   }
-  .voice {
-    min-width: 240px;
+  .readout {
+    font-size: 10px;
+    color: var(--green);
+    min-width: 44px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* --- Voice Synth ------------------------------------------------------ */
+  .synth {
+    flex: 1 1 520px;
+    min-width: 320px;
+  }
+  .synth.live {
+    border-color: var(--magenta);
+  }
+  .synth-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .lamp {
+    color: var(--bevel-dark);
+    font-size: 10px;
+  }
+  .lamp.on {
+    color: var(--magenta);
+    text-shadow: 0 0 6px var(--magenta);
+  }
+  .synth-head .mix {
+    margin-left: auto;
+    min-width: 180px;
   }
   .presets,
-  .spaces {
+  .spaces,
+  .choices {
     display: flex;
     gap: 4px;
     flex-wrap: wrap;
@@ -171,6 +299,61 @@
     padding: 0 8px;
     font-size: 11px;
     text-transform: uppercase;
+  }
+  .btn.small {
+    min-height: 26px;
+    padding: 0 6px;
+    font-size: 10px;
+    text-transform: uppercase;
+  }
+  .tabs {
+    display: flex;
+    gap: 2px;
+    border-bottom: 2px solid var(--bevel-dark);
+  }
+  .tab {
+    font-family: var(--font);
+    font-size: 10px;
+    letter-spacing: 1px;
+    min-height: 28px;
+    padding: 0 10px;
+    border: 2px solid var(--bevel-dark);
+    border-bottom: none;
+    background: var(--panel-lo);
+    color: var(--ink-dim);
+    cursor: pointer;
+  }
+  .tab.on {
+    background: var(--panel);
+    color: var(--green);
+  }
+  .params {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(220px, 1fr));
+    gap: 2px 16px;
+  }
+  .param {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 24px;
+  }
+  .param .tiny {
+    min-width: 88px;
+  }
+  .param input {
+    flex: 1 1 auto;
+  }
+  .param.row {
+    grid-column: 1 / -1;
+  }
+  .note {
+    min-width: 0;
+    text-align: left;
+    color: var(--amber);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    font-size: 9px;
   }
   .mix {
     display: flex;

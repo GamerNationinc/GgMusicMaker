@@ -272,6 +272,45 @@ async function main() {
     `${a16.length} vs ${b16.length} samples, max delta ${(maxDelta / 32768).toFixed(4)}`,
   );
 
+  // --- Voice Synth stack + surround export ----------------------------------
+  // Choir = 6 unison voices + harmonies spread to the rear, LFE and centre
+  // sends. Rendered at 5.1 and 7.1 the WAV must be WAVE_FORMAT_EXTENSIBLE
+  // with the right channel count/mask, and the stack must actually reach
+  // the centre, surround and LFE channels.
+  await page.click(".chip.fx");
+  await page.waitForTimeout(200);
+  await page.click("button:has-text('Choir')");
+  await page.click("button.tab:has-text('SPACE')");
+  await page.waitForTimeout(100);
+  async function exportSurround(label, channels, mask) {
+    await page.click(`button.surround:has-text('${label}')`);
+    await page.waitForTimeout(300);
+    const bytes = await exportBytes();
+    const v = new DataView(bytes.buffer, bytes.byteOffset, bytes.length);
+    const fmtOk = v.getUint16(20, true) === 0xfffe && v.getUint16(22, true) === channels && v.getUint32(40, true) === mask;
+    check(`${label} export is a ${channels}-channel extensible WAV`, fmtOk, `fmt ${v.getUint16(20, true).toString(16)}, ${v.getUint16(22, true)} ch, mask ${v.getUint32(40, true).toString(16)}`);
+    const dataAt = 68; // 12 RIFF + (8 + 40) fmt + 8 data header
+    const pcm = new Int16Array(bytes.buffer, bytes.byteOffset + dataAt, (bytes.length - dataAt) >> 1);
+    const rms = new Array(channels).fill(0);
+    for (let i = 0; i < pcm.length; i++) rms[i % channels] += pcm[i] * pcm[i];
+    const frames = pcm.length / channels;
+    const db = rms.map((s) => (s ? 20 * Math.log10(Math.sqrt(s / frames) / 32768) : -Infinity));
+    // Centre and surrounds carry the stack; LFE is only the low-passed sub,
+    // so it must sit well below the centre (a leak would make them equal).
+    const placed = db[2] > -40 && db[channels - 2] > -50 && db[channels - 1] > -50;
+    const lfeIsSub = db[3] > -80 && db[3] < db[2] - 10;
+    check(`${label} render puts the stack on centre + surrounds, sub only on LFE`, placed && lfeIsSub, db.map((d) => d.toFixed(0)).join(" "));
+    await page.waitForTimeout(300);
+    await page.click(".dialog button");
+    await page.waitForTimeout(200);
+    return db;
+  }
+  await exportSurround("5.1", 6, 0x3f);
+  await exportSurround("7.1", 8, 0x63f);
+  await page.click("button.surround:has-text('Stereo')");
+  await page.waitForTimeout(200);
+  check("surround change is undoable", await page.isEnabled("button.undo"));
+
   // --- load meter + low-power mode ------------------------------------------
   await page.waitForTimeout(600);
   const cpu = (await page.textContent("[data-role=cpu]")).trim();

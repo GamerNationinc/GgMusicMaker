@@ -4,7 +4,7 @@
 // AudioBuffers live separately in the AudioEngine's buffer store, keyed by
 // `bufferId`, so the project model stays lightweight and easy to reason about.
 
-import type { VoicePreset } from "../fx/voice";
+import type { VoiceSynthParams, SurroundLayout } from "../fx/voice-synth";
 
 /** A region of a source buffer placed on the timeline. Non-destructive:
  *  split/trim only adjust offset/duration/startTime — the buffer is untouched. */
@@ -28,13 +28,6 @@ export interface EqParams {
   high: number;
 }
 
-/** Voice-manipulation FX settings for a track. */
-export interface VoiceParams {
-  preset: VoicePreset;
-  /** How much of the shifted signal to blend in, 0..1. */
-  mix: number;
-}
-
 /** One layer/track: a stack of clips plus mix + FX params. */
 export interface Track {
   id: string;
@@ -49,8 +42,8 @@ export interface Track {
   reverbSend: number;
   /** 3-band EQ (v2 FX rack). */
   eq: EqParams;
-  /** Voice manipulation (v2 FX rack). */
-  voice: VoiceParams;
+  /** Voice Synth (stacked vocal engines + surround field). */
+  synth: VoiceSynthParams;
   /** UI accent colour for the track's clips. */
   color: string;
   clips: Clip[];
@@ -60,6 +53,9 @@ export interface Project {
   tracks: Track[];
   /** Sample rate the project renders at. */
   sampleRate: number;
+  /** Output layout: stereo, 5.1 or 7.1. Drives the live bus when the device
+   *  has the channels, and the channel count of an exported WAV. */
+  surround: SurroundLayout;
 }
 
 /** Live transport state, kept separate from the (undoable) project model. */
