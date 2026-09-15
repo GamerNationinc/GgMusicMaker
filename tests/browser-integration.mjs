@@ -272,6 +272,40 @@ async function main() {
     `${a16.length} vs ${b16.length} samples, max delta ${(maxDelta / 32768).toFixed(4)}`,
   );
 
+  // --- duplicate layer --------------------------------------------------------
+  // Copy layer 1 (tone + Chipmunk): it lands right under the original with
+  // the FX intact, so the render gets louder; Ctrl+Z takes it away again.
+  await page.click(".head:nth-child(1) .chip.dup");
+  await page.waitForTimeout(200);
+  const namesDup = await page.$$eval(".head .name", (els) => els.map((e) => e.value));
+  check("duplicate inserts a copy under the original", namesDup.length === 4 && namesDup[1] === "tone copy", namesDup.join(", "));
+  const dupStatus = (await page.textContent(".statusbar")).trim();
+  check("status reports the duplicate", dupStatus === "Duplicated tone → tone copy.", dupStatus);
+  const withDup = await exportBytes();
+  await page.waitForTimeout(300);
+  await page.click(".dialog button");
+  await page.waitForTimeout(200);
+  const energy = (buf) => {
+    const s16 = new Int16Array(buf.buffer, buf.byteOffset + 44, (buf.length - 44) >> 1);
+    let e = 0;
+    for (let i = 0; i < s16.length; i++) e += s16[i] * s16[i];
+    return e;
+  };
+  // The copy doubles the tone (+6 dB) but the master limiter eats most of
+  // that, so expect "louder and different", not "twice the energy".
+  let dupDiff = 0;
+  for (let i = 44; i < Math.min(withDup.length, reopened.length); i++) if (withDup[i] !== reopened[i]) dupDiff++;
+  check("the copy plays (render is louder and different)", energy(withDup) > energy(reopened) * 1.02 && dupDiff > 1000, `${(energy(withDup) / energy(reopened)).toFixed(2)}x, ${dupDiff} bytes differ`);
+  await page.click(".chip.fx"); // open layer 1's rack…
+  await page.waitForTimeout(150);
+  await page.click(".head:nth-child(2) .chip.fx"); // …then the copy's: Chipmunk must be lit there too
+  await page.waitForTimeout(150);
+  check("the copy carries the Voice Synth preset", (await page.$("button.magenta:has-text('Chipmunk')")) !== null);
+  await page.click(".rack-title .chip"); // close the rack so Ctrl+D below has no rack target
+  await page.keyboard.press("Control+z");
+  await page.waitForTimeout(150);
+  check("Ctrl+Z removes the duplicate", (await page.$$(".head")).length === 3);
+
   // --- Voice Synth stack + surround export ----------------------------------
   // Choir = 6 unison voices + harmonies spread to the rear, LFE and centre
   // sends. Rendered at 5.1 and 7.1 the WAV must be WAVE_FORMAT_EXTENSIBLE

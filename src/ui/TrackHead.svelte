@@ -8,6 +8,7 @@
     armTrack,
     removeTrack,
     renameTrack,
+    duplicateTrack,
     toggleFxRack,
     selectedTrackId,
   } from "../state/store";
@@ -29,6 +30,7 @@
       onclick={() => toggleFxRack(track.id)}
       title="Open FX rack"
     >FX</button>
+    <button class="chip dup" onclick={() => duplicateTrack(track.id)} title="Duplicate layer (Ctrl+D)">⧉</button>
     <button class="chip" onclick={() => removeTrack(track.id)} title="Remove layer">✕</button>
   </div>
 

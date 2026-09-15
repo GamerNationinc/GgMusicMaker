@@ -15,6 +15,7 @@
     stopRecording,
     undo,
     redo,
+    duplicateSelectedTrack,
     status,
     transport,
     saveSession,
@@ -91,6 +92,9 @@
       } else if (k === "y") {
         e.preventDefault();
         redo();
+      } else if (k === "d") {
+        e.preventDefault();
+        duplicateSelectedTrack();
       }
       return;
     }

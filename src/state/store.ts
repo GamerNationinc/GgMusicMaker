@@ -15,6 +15,9 @@ import {
   timeInsideClip,
   projectDuration,
   replaceClip,
+  cloneTrack,
+  copyName,
+  insertTrackAfter,
 } from "../audio/edits";
 import { AudioEngine } from "../audio/engine";
 import type { AudioBackend, MasterMeter } from "../audio/backend";
@@ -222,6 +225,30 @@ export function removeTrack(trackId: string): void {
   engine.removeTrack(trackId);
   updateProject((p) => ({ ...p, tracks: p.tracks.filter((t) => t.id !== trackId) }));
   selectedTrackId.update((cur) => (cur === trackId ? null : cur));
+}
+
+/** Copy a layer — clips (sharing the audio), mix, FX, colour — and drop it
+ *  right under the original. Undoable; audible at once if playing. */
+export function duplicateTrack(trackId: string): string | null {
+  const src = get(project).tracks.find((t) => t.id === trackId);
+  if (!src) return null;
+  const copy = cloneTrack(src, copyName(src.name, get(project).tracks.map((t) => t.name)));
+  updateProject((p) => ({ ...p, tracks: insertTrackAfter(p.tracks, trackId, copy) }));
+  if (get(transport).isPlaying) engine.play(get(project), get(transport).playhead);
+  status.set(`Duplicated ${src.name} → ${copy.name}.`);
+  return copy.id;
+}
+
+/** Ctrl+D: duplicate the layer whose FX rack is open, else the selected clip's layer. */
+export function duplicateSelectedTrack(): void {
+  const p = get(project);
+  const clipId = get(selectedClipId);
+  const id = get(selectedTrackId) ?? p.tracks.find((t) => t.clips.some((c) => c.id === clipId))?.id;
+  if (!id) {
+    status.set("Select a layer (open its FX) or a clip to duplicate.");
+    return;
+  }
+  duplicateTrack(id);
 }
 
 export function setTrackGain(trackId: string, gain: number): void {

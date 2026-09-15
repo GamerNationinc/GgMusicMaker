@@ -112,3 +112,34 @@ export function replaceClip(clips: Clip[], id: string, replacement: Clip[]): Cli
   }
   return out;
 }
+
+/** Name for a copy of `name` that doesn't collide with `taken`:
+ *  "Vocal" → "Vocal copy", then "Vocal copy 2", … */
+export function copyName(name: string, taken: Iterable<string>): string {
+  const used = new Set(taken);
+  const base = `${name.replace(/ copy( \d+)?$/, "")} copy`;
+  if (!used.has(base)) return base;
+  for (let n = 2; ; n++) if (!used.has(`${base} ${n}`)) return `${base} ${n}`;
+}
+
+/** A copy of a track: fresh track/clip ids, the same audio buffers (nothing is
+ *  re-decoded), every mix + FX setting copied, and never armed (arming is
+ *  transport state — the copy shouldn't steal the next take). */
+export function cloneTrack(track: Track, name: string): Track {
+  return {
+    ...track,
+    id: nextId("track"),
+    name,
+    armed: false,
+    eq: { ...track.eq },
+    synth: { ...track.synth },
+    clips: track.clips.map((c) => ({ ...c, id: nextId("clip") })),
+  };
+}
+
+/** Insert `copy` directly after the track with id `afterId`. */
+export function insertTrackAfter(tracks: Track[], afterId: string, copy: Track): Track[] {
+  const i = tracks.findIndex((t) => t.id === afterId);
+  if (i < 0) return [...tracks, copy];
+  return [...tracks.slice(0, i + 1), copy, ...tracks.slice(i + 1)];
+}

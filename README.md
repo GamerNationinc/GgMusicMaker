@@ -22,6 +22,8 @@ send on every layer and a master limiter for the final level.
 - ✂️ Non-destructive **cut / split / trim / move / delete** on a timeline.
 - 🎙️ **Record** from the mic / line-in straight onto an armed layer.
 - 🎛️ Per-layer **volume, mute, solo** and a **reverb send**.
+- ⧉ **Duplicate a layer** (⧉ on the head, or `Ctrl+D`): clips, mix and FX copied,
+  audio shared — handy for stacking a vocal with a second Voice Synth preset.
 - 🎚️ **Per-layer FX rack** (the "FX" button on each layer):
   - **3-band EQ** (low shelf / mid peak / high shelf).
   - **Voice Synth** — a VocalSynth-style vocal engine in one `AudioWorklet`.
@@ -180,6 +182,7 @@ swapped in behind the same interface while the entire UI stays as-is.
 | `S`       | Split at playhead   |
 | `R`       | Record / stop       |
 | `Delete`  | Delete selected clip|
+| `Ctrl+D`  | Duplicate layer (open FX rack or selected clip) |
 | `Ctrl+Z`  | Undo                |
 | `Ctrl+Shift+Z` / `Ctrl+Y` | Redo |
 | `Ctrl+S`  | Save session        |

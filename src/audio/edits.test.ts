@@ -7,6 +7,9 @@ import {
   clipEnd,
   projectDuration,
   isTrackAudible,
+  cloneTrack,
+  copyName,
+  insertTrackAfter,
   anySoloed,
   replaceClip,
 } from "./edits";
@@ -169,5 +172,59 @@ describe("replaceClip", () => {
       makeClip({ id: "b2" }),
     ]);
     expect(result.map((c) => c.id)).toEqual(["a", "b1", "b2", "c"]);
+  });
+});
+
+describe("duplicate track", () => {
+  const src: Track = {
+    id: "track_src",
+    name: "Vocal",
+    gain: 0.8,
+    muted: true,
+    soloed: false,
+    armed: true,
+    reverbSend: 0.3,
+    eq: { low: 2, mid: -1, high: 3 },
+    synth: { ...DEFAULT_SYNTH, mix: 1, pitch: 7 },
+    color: "#ff3ca0",
+    clips: [
+      { id: "clip_a", bufferId: "buf_1", startTime: 0, offset: 0, duration: 2, name: "a" },
+      { id: "clip_b", bufferId: "buf_2", startTime: 3, offset: 0.5, duration: 1, name: "b" },
+    ],
+  };
+
+  it("copies mix + FX + clips with fresh ids and the same buffers, never armed", () => {
+    const copy = cloneTrack(src, "Vocal copy");
+    expect(copy.id).not.toBe(src.id);
+    expect(copy.name).toBe("Vocal copy");
+    expect(copy.armed).toBe(false);
+    expect(copy).toMatchObject({ gain: 0.8, muted: true, reverbSend: 0.3, color: "#ff3ca0" });
+    expect(copy.eq).toEqual(src.eq);
+    expect(copy.synth).toEqual(src.synth);
+    expect(copy.clips.map((c) => c.bufferId)).toEqual(["buf_1", "buf_2"]);
+    expect(copy.clips.map((c) => c.id)).not.toContain("clip_a");
+    expect(new Set(copy.clips.map((c) => c.id)).size).toBe(2);
+    // Deep copies: editing the clone can't reach into the original.
+    copy.eq.low = 9;
+    copy.synth.pitch = -3;
+    copy.clips[0].startTime = 5;
+    expect(src.eq.low).toBe(2);
+    expect(src.synth.pitch).toBe(7);
+    expect(src.clips[0].startTime).toBe(0);
+  });
+
+  it("names copies without collisions", () => {
+    expect(copyName("Vocal", ["Vocal"])).toBe("Vocal copy");
+    expect(copyName("Vocal", ["Vocal", "Vocal copy"])).toBe("Vocal copy 2");
+    expect(copyName("Vocal copy", ["Vocal", "Vocal copy"])).toBe("Vocal copy 2");
+    expect(copyName("Vocal copy 2", ["Vocal", "Vocal copy", "Vocal copy 2"])).toBe("Vocal copy 3");
+  });
+
+  it("inserts the copy directly under the original", () => {
+    const a = { ...src, id: "a" }, b = { ...src, id: "b" }, c = { ...src, id: "c" };
+    const copy = cloneTrack(a, "x");
+    expect(insertTrackAfter([a, b, c], "a", copy).map((t) => t.id)).toEqual(["a", copy.id, "b", "c"]);
+    expect(insertTrackAfter([a, b, c], "c", copy).map((t) => t.id)).toEqual(["a", "b", "c", copy.id]);
+    expect(insertTrackAfter([a, b], "missing", copy).map((t) => t.id)).toEqual(["a", "b", copy.id]);
   });
 });
