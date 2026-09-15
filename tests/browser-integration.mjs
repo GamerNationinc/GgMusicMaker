@@ -219,6 +219,76 @@ async function main() {
   for (let i = 44; i < n; i++) if (dry[i] !== wet[i]) diff++;
   check("voice FX changes the rendered mix", diff > 1000, `${diff} bytes differ`);
 
+  // --- session save / open ------------------------------------------------
+  // Three layers (tone, take, 4 s tone), Chipmunk on the first, one muted at
+  // some point. Save, wipe with New, reopen from the file, and prove the
+  // reopened project renders the same mix.
+  page.on("dialog", (d) => d.accept());
+  const sessionLabel = () => page.textContent(".app-header .session").then((t) => t.trim());
+  check("unsaved session shows as untitled*", (await sessionLabel()) === "untitled*", await sessionLabel());
+  const layersBefore = (await page.$$(".head")).length;
+  const namesBefore = await page.$$eval(".head .name", (els) => els.map((e) => e.value));
+
+  const dlSession = page.waitForEvent("download", { timeout: 15000 });
+  await page.click("button.session-save");
+  const sessionFile = await (await dlSession).path();
+  const sessionBytes = await readFile(sessionFile);
+  check(
+    "saves a .ggmm session file",
+    sessionBytes.slice(0, 4).toString() === "GGMM" && sessionBytes.length > 44 * 3,
+    `${(sessionBytes.length / 1024).toFixed(0)} KB`,
+  );
+  await page.waitForTimeout(200);
+  check("saving clears the dirty marker", (await sessionLabel()) === "untitled", await sessionLabel());
+
+  await page.click("button.session-new");
+  await page.waitForTimeout(200);
+  check("New empties the workspace", (await page.$$(".head")).length === 0);
+
+  await page.setInputFiles("input[data-role=session-file]", [sessionFile]);
+  await page.waitForTimeout(800);
+  const namesAfter = await page.$$eval(".head .name", (els) => els.map((e) => e.value));
+  check(
+    "Open restores every layer by name",
+    layersBefore === 3 && namesAfter.length === 3 && namesAfter.join("|") === namesBefore.join("|"),
+    namesAfter.join(", "),
+  );
+  const openedStatus = (await page.textContent(".statusbar")).trim();
+  // (Playwright hands the download back under a random temp name, so only
+  // the shape of the message is checked here, not the session's name.)
+  check("status reports the opened session", /^Opened .* — 3 layers\.$/.test(openedStatus), openedStatus);
+
+  const reopened = await exportBytes();
+  const a16 = new Int16Array(wet.buffer, wet.byteOffset + 44, (wet.length - 44) >> 1);
+  const b16 = new Int16Array(reopened.buffer, reopened.byteOffset + 44, (reopened.length - 44) >> 1);
+  let maxDelta = 0;
+  for (let i = 0; i < Math.min(a16.length, b16.length); i++) {
+    const d = Math.abs(a16[i] - b16[i]);
+    if (d > maxDelta) maxDelta = d;
+  }
+  check(
+    "reopened session renders the same mix (FX, gains, clips intact)",
+    a16.length === b16.length && maxDelta < 0.01 * 32768,
+    `${a16.length} vs ${b16.length} samples, max delta ${(maxDelta / 32768).toFixed(4)}`,
+  );
+
+  // --- load meter + low-power mode ------------------------------------------
+  await page.waitForTimeout(600);
+  const cpu = (await page.textContent("[data-role=cpu]")).trim();
+  check("load meter shows a CPU percentage", /^\d{1,3}%$/.test(cpu), cpu);
+  check("no dropout lamp after an ordinary session", !(await page.$(".lamp.lit")));
+  check("backdrop rain is on by default", (await page.$("canvas.rain")) !== null);
+  await page.click("button.eco");
+  await page.waitForTimeout(150);
+  check("ECO removes the backdrop rain", (await page.$("canvas.rain")) === null);
+  check(
+    "ECO is remembered",
+    (await page.evaluate(() => localStorage.getItem("ggmm.lowPower"))) === "1",
+  );
+  await page.click("button.eco");
+  await page.waitForTimeout(150);
+  check("ECO off brings the rain back", (await page.$("canvas.rain")) !== null);
+
   await browser.close();
   server.close();
 

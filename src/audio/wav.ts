@@ -63,3 +63,65 @@ export function encodeWav(buffer: PcmSource): ArrayBuffer {
   }
   return out;
 }
+
+/** Decoded PCM: one Float32Array per channel, all the same length. */
+export interface DecodedPcm {
+  sampleRate: number;
+  channels: Float32Array[];
+}
+
+/**
+ * Decode a 16-bit PCM WAV (the only kind `encodeWav` writes). Walks the RIFF
+ * chunks so a WAV with extra chunks (LIST, fact) still decodes. Session files
+ * embed these, so loading must not depend on the WebView's media stack.
+ */
+export function decodeWav(bytes: ArrayBuffer): DecodedPcm {
+  const view = new DataView(bytes);
+  const readStr = (offset: number, len: number) => {
+    let s = "";
+    for (let i = 0; i < len; i++) s += String.fromCharCode(view.getUint8(offset + i));
+    return s;
+  };
+  if (bytes.byteLength < 12 || readStr(0, 4) !== "RIFF" || readStr(8, 4) !== "WAVE") {
+    throw new Error("not a WAV file");
+  }
+
+  let channels = 0;
+  let sampleRate = 0;
+  let bits = 0;
+  let format = 0;
+  let dataOffset = -1;
+  let dataSize = 0;
+  let pos = 12;
+  while (pos + 8 <= bytes.byteLength) {
+    const id = readStr(pos, 4);
+    const size = view.getUint32(pos + 4, true);
+    const body = pos + 8;
+    if (id === "fmt ") {
+      format = view.getUint16(body, true);
+      channels = view.getUint16(body + 2, true);
+      sampleRate = view.getUint32(body + 4, true);
+      bits = view.getUint16(body + 14, true);
+    } else if (id === "data") {
+      dataOffset = body;
+      dataSize = Math.min(size, bytes.byteLength - body);
+      break;
+    }
+    pos = body + size + (size & 1); // chunks are word-aligned
+  }
+  if (dataOffset < 0 || !channels || !sampleRate) throw new Error("WAV is missing fmt/data");
+  if (format !== 1 || bits !== 16) throw new Error(`unsupported WAV (format ${format}, ${bits}-bit)`);
+
+  const frames = Math.floor(dataSize / (channels * 2));
+  const out: Float32Array[] = [];
+  for (let c = 0; c < channels; c++) out.push(new Float32Array(frames));
+  let p = dataOffset;
+  for (let i = 0; i < frames; i++) {
+    for (let c = 0; c < channels; c++) {
+      const s = view.getInt16(p, true);
+      out[c][i] = s < 0 ? s / 0x8000 : s / 0x7fff;
+      p += 2;
+    }
+  }
+  return { sampleRate, channels: out };
+}

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { encodeWav, type PcmSource } from "./wav";
+import { encodeWav, decodeWav, type PcmSource } from "./wav";
 import { computePeaks } from "../render/peaks";
 
 function fakeBuffer(channels: Float32Array[], sampleRate = 48000): PcmSource {
@@ -69,5 +69,41 @@ describe("computePeaks", () => {
       4,
     );
     expect(Array.from(peaks)).toEqual([0, 0, 0, 0, 0, 0, 0, 0]);
+  });
+});
+
+describe("decodeWav", () => {
+  it("round-trips what encodeWav writes", () => {
+    const left = new Float32Array([0, 0.5, -0.5, 1, -1]);
+    const right = new Float32Array([0.1, -0.1, 0.9, -0.9, 0]);
+    const wav = encodeWav(fakeBuffer([left, right], 44100));
+    const { sampleRate, channels } = decodeWav(wav);
+    expect(sampleRate).toBe(44100);
+    expect(channels.length).toBe(2);
+    for (let i = 0; i < left.length; i++) {
+      expect(channels[0][i]).toBeCloseTo(left[i], 3);
+      expect(channels[1][i]).toBeCloseTo(right[i], 3);
+    }
+  });
+
+  it("skips unknown chunks before the data chunk", () => {
+    const wav = encodeWav(fakeBuffer([new Float32Array([0.5, -0.5])]));
+    // Splice a 6-byte (odd → padded to 8) LIST chunk between fmt and data.
+    const src = new Uint8Array(wav);
+    const junk = new Uint8Array([0x4c, 0x49, 0x53, 0x54, 5, 0, 0, 0, 1, 2, 3, 4, 5, 0]);
+    const out = new Uint8Array(src.length + junk.length);
+    out.set(src.subarray(0, 36), 0);
+    out.set(junk, 36);
+    out.set(src.subarray(36), 36 + junk.length);
+    const { channels } = decodeWav(out.buffer);
+    expect(channels[0][0]).toBeCloseTo(0.5, 3);
+    expect(channels[0][1]).toBeCloseTo(-0.5, 3);
+  });
+
+  it("rejects non-WAV and non-16-bit input", () => {
+    expect(() => decodeWav(new TextEncoder().encode("hello world!").buffer)).toThrow(/not a WAV/);
+    const wav = encodeWav(fakeBuffer([new Float32Array([0])]));
+    new DataView(wav).setUint16(34, 24, true);
+    expect(() => decodeWav(wav)).toThrow(/unsupported/);
   });
 });

@@ -13,14 +13,34 @@
     canRedo,
     transport,
     pixelsPerSecond,
+    newSession,
+    openSession,
+    saveSession,
+    loadSessionFile,
+    confirmDiscardForOpen,
   } from "../state/store";
+  import { SESSION_EXTENSION } from "../state/session";
 
   let fileInput: HTMLInputElement;
+  let sessionInput: HTMLInputElement;
 
   function onFiles(e: Event) {
     const files = (e.target as HTMLInputElement).files;
     if (files && files.length) void importFiles(files);
     (e.target as HTMLInputElement).value = "";
+  }
+
+  async function onOpen() {
+    // No native dialog (plain browser): fall back to the file input.
+    if (await openSession()) return;
+    if (await confirmDiscardForOpen()) sessionInput.click();
+  }
+
+  function onSessionFile(e: Event) {
+    const input = e.target as HTMLInputElement;
+    const file = input.files?.[0];
+    if (file) void loadSessionFile(file);
+    input.value = "";
   }
 
   function toggleRecord() {
@@ -42,6 +62,20 @@
     onchange={onFiles}
     hidden
   />
+  <input
+    bind:this={sessionInput}
+    type="file"
+    accept=".{SESSION_EXTENSION}"
+    onchange={onSessionFile}
+    hidden
+    data-role="session-file"
+  />
+  <button class="btn session-new" onclick={() => void newSession()} title="New session (Ctrl+N)">▢ New</button>
+  <button class="btn session-open" onclick={() => void onOpen()} title="Open session (Ctrl+O)">▤ Open</button>
+  <button class="btn session-save" onclick={() => void saveSession()} title="Save session (Ctrl+S; Ctrl+Shift+S = Save As)">▣ Save</button>
+
+  <span class="divider"></span>
+
   <button class="btn magenta" onclick={() => fileInput.click()}>＋ Import</button>
   <button class="btn" onclick={addEmptyTrack}>＋ Layer</button>
 
@@ -80,10 +114,15 @@
   .toolbar {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 8px 12px;
+    gap: 6px;
+    padding: 8px 10px;
     flex: 0 0 auto;
     flex-wrap: wrap;
+  }
+  /* Slightly tighter than the global button so the whole strip fits one
+     row at the Deck's 1280 px without wrapping Export onto a second line. */
+  .toolbar > :global(button.btn) {
+    padding: 0 10px;
   }
   .divider {
     width: 2px;

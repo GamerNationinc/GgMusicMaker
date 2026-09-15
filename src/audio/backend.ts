@@ -46,6 +46,10 @@ export interface AudioBackend {
   // Buffer store
   decodeBytes(bytes: ArrayBuffer): Promise<DecodedAudio>;
   registerBuffer(buffer: AudioBuffer): string;
+  /** Build a buffer from raw PCM (one Float32Array per channel) and register
+   *  it. Used when reopening a session, so loading never depends on the
+   *  WebView's media decoders. */
+  registerPcm(sampleRate: number, channels: Float32Array[]): string;
   getBuffer(id: string): AudioBuffer | undefined;
 
   // Mixer / FX
@@ -62,6 +66,9 @@ export interface AudioBackend {
   readonly isPlaying: boolean;
   /** Playhead position in seconds. */
   currentTime(): number;
+  /** The audio device's own clock, in seconds. Advances only while the
+   *  device is running; used to detect dropouts (see state/load.ts). */
+  audioClock(): number;
   /** Peak master level, 0..1, for the meter. */
   masterLevel(): number;
   /** Pre-limiter peak/RMS and limiter gain reduction, for the analogue meter. */

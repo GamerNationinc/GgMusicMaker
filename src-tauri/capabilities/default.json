@@ -1,11 +1,14 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capabilities for the GgMusicMaker main window: open audio files and save exported mixes.",
+  "description": "Capabilities for the GgMusicMaker main window: open audio files and sessions, save exported mixes and sessions, and ask before closing with unsaved work.",
   "windows": ["main"],
   "permissions": [
     "core:default",
+    "core:window:allow-close",
+    "core:window:allow-destroy",
     "dialog:default",
+    "dialog:allow-ask",
     "fs:default",
     "fs:allow-read-file",
     "fs:allow-write-file",

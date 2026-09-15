@@ -7,7 +7,7 @@
 
 import { writable, get } from "svelte/store";
 import type { Project, Track, Clip, TransportState } from "../audio/types";
-import { nextId, TRACK_COLORS } from "../audio/types";
+import { nextId, reserveIds, TRACK_COLORS } from "../audio/types";
 import {
   splitClip,
   trimClip,
@@ -22,6 +22,14 @@ import * as history from "./history";
 import { encodeWav } from "../audio/wav";
 import type { VoicePreset } from "../fx/voice";
 import type { ReverbSpace } from "../audio/reverb";
+import {
+  packSession,
+  unpackSession,
+  sessionDisplayName,
+  SESSION_EXTENSION,
+} from "./session";
+import { saveBytes, openBytes, confirmDialog, isTauri } from "./platform";
+import { INITIAL_LOAD, type LoadState, frameUtilisation, ema, audioDropout } from "./load";
 
 /** The audio runtime. Typed as the interface, not the class, so a future
  *  native backend can be swapped in without touching the store or the UI. */
@@ -61,6 +69,34 @@ export const canRedo = writable<boolean>(false);
 /** Timeline zoom, in pixels per second. */
 export const pixelsPerSecond = writable<number>(80);
 export const reverbSpace = writable<ReverbSpace>(engine.currentReverbSpace);
+/** Ableton-style load readout: UI-thread utilisation + audio dropout lamp. */
+export const systemLoad = writable<LoadState>(INITIAL_LOAD);
+const LOW_POWER_KEY = "ggmm.lowPower";
+function readLowPower(): boolean {
+  try {
+    return localStorage.getItem(LOW_POWER_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+/** Eco mode for battery: no backdrop animation, meters at a lower rate. */
+export const lowPower = writable<boolean>(readLowPower());
+export function toggleLowPower(): void {
+  lowPower.update((on) => {
+    const next = !on;
+    try {
+      localStorage.setItem(LOW_POWER_KEY, next ? "1" : "0");
+    } catch {
+      /* private mode etc. — the toggle still works for this run */
+    }
+    status.set(next ? "Low-power mode on: backdrop off, meters slowed." : "Low-power mode off.");
+    return next;
+  });
+}
+/** Where the session was last saved/opened (null = never saved). */
+export const sessionPath = writable<string | null>(null);
+/** True when the project has changed since it was last saved or opened. */
+export const dirty = writable<boolean>(false);
 
 // ---- internal helpers -----------------------------------------------------
 
@@ -84,6 +120,7 @@ function updateProject(fn: (p: Project) => Project, opts: EditOptions = {}): voi
     if (next === p) return p;
     if (opts.history !== false) {
       setHistory(history.push(hist, p, opts.history ?? null, performance.now()));
+      dirty.set(true);
     }
     engine.syncAll(next);
     return next;
@@ -206,6 +243,7 @@ export async function setVoicePreset(trackId: string, preset: VoicePreset): Prom
 export function setReverbSpace(space: ReverbSpace): void {
   engine.setReverbSpace(space);
   reverbSpace.set(space);
+  dirty.set(true);
   status.set(`Reverb space: ${space}.`);
 }
 
@@ -340,10 +378,93 @@ let rafId = 0;
 
 const spectrumBuf = new Float32Array(SPECTRUM_BANDS);
 
-function tick(): void {
+// ---- frame pacing ----------------------------------------------------------
+// The loop runs every animation frame, but the *work* is gated: idle (nothing
+// playing, recording, or sounding for a while) drops the meters to a few Hz
+// and, once they have decayed to silence, stops pushing identical values —
+// every push repaints the ASCII VU and the LED strip, which is the single
+// heaviest thing this app does at rest. Low-power mode caps the rate too.
+const IDLE_AFTER_MS = 2500;
+const IDLE_FPS = 8;
+const LOW_POWER_FPS = 20;
+const SILENCE = 1e-4;
+let lastActivityAt = 0;
+let lastMeterAt = 0;
+let meterSilent = false;
+
+// Load probe state (see state/load.ts).
+let prevFrameAt = 0;
+let cpuEma = 0;
+let loadPublishedAt = 0;
+let dropoutUntil = 0;
+let dropouts = 0;
+let clockCheckAt = 0;
+let clockCheckAudio = 0;
+const LOAD_PUBLISH_MS = 250;
+const CLOCK_CHECK_MS = 1000;
+const DROPOUT_LAMP_MS = 1500;
+
+function probeLoad(now: number): void {
+  const interval = now - prevFrameAt;
+  prevFrameAt = now;
+  // Busy time: from the top of this frame until a zero-delay timer can run,
+  // i.e. after our tick, the Svelte effects it queued, and this frame's
+  // layout + paint. That is the main thread's real cost per frame.
+  const start = performance.now();
+  setTimeout(() => {
+    const busy = performance.now() - start;
+    if (interval > 0 && interval < 1000) cpuEma = ema(cpuEma, frameUtilisation(busy, interval), 0.08);
+  }, 0);
+
+  // Audio clock vs wall clock, once a second, only while the device runs.
+  if (engine.isAudioReady) {
+    if (clockCheckAt === 0) {
+      clockCheckAt = now;
+      clockCheckAudio = engine.audioClock();
+    } else if (now - clockCheckAt >= CLOCK_CHECK_MS) {
+      const wall = (now - clockCheckAt) / 1000;
+      const audio = engine.audioClock() - clockCheckAudio;
+      // Only judge while something is actually being rendered; an idle
+      // context in some WebViews parks its clock without any "dropout".
+      if ((get(transport).isPlaying || get(transport).isRecording) && audioDropout(audio, wall)) {
+        dropouts += 1;
+        dropoutUntil = now + DROPOUT_LAMP_MS;
+      }
+      clockCheckAt = now;
+      clockCheckAudio = engine.audioClock();
+    }
+  } else {
+    clockCheckAt = 0;
+  }
+
+  if (now - loadPublishedAt >= LOAD_PUBLISH_MS) {
+    loadPublishedAt = now;
+    systemLoad.set({ cpu: cpuEma, dropout: now < dropoutUntil, dropouts });
+  }
+}
+
+function tick(now: number): void {
+  rafId = requestAnimationFrame(tick);
+  probeLoad(now);
+
   const t = get(transport);
-  masterLevel.set(engine.masterLevel());
-  masterMeter.set(engine.masterMeter());
+  const active = t.isPlaying || t.isRecording;
+  if (active) lastActivityAt = now;
+  const idle = now - lastActivityAt > IDLE_AFTER_MS;
+  const fps = idle ? IDLE_FPS : get(lowPower) ? LOW_POWER_FPS : Infinity;
+  if (now - lastMeterAt < 1000 / fps) return;
+  lastMeterAt = now;
+
+  const level = engine.masterLevel();
+  const meter = engine.masterMeter();
+  const sounding = level > SILENCE || meter.peak > SILENCE;
+  if (sounding) lastActivityAt = now;
+  // Nothing has changed and nothing is moving: leave the meters as drawn.
+  if (idle && !sounding && meterSilent) return;
+  meterSilent = idle && !sounding;
+
+  masterLevel.set(level);
+  masterMeter.set(meter);
   masterSpectrum.set(engine.masterSpectrum(spectrumBuf));
   if (t.isPlaying) {
     const now = engine.currentTime();
@@ -355,7 +476,6 @@ function tick(): void {
       transport.update((s) => ({ ...s, playhead: now }));
     }
   }
-  rafId = requestAnimationFrame(tick);
 }
 
 export function startMeterLoop(): void {
@@ -468,34 +588,16 @@ export async function exportMix(): Promise<void> {
     await new Promise((r) => setTimeout(r, 30));
     const bytes = new Uint8Array(encodeWav(rendered));
 
-    const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-    let where: string;
-    if (isTauri) {
-      const { save } = await import("@tauri-apps/plugin-dialog");
-      const { writeFile } = await import("@tauri-apps/plugin-fs");
-      setExport("saving", 1);
-      const path = await save({
-        defaultPath: "ggmusicmaker-mix.wav",
-        filters: [{ name: "WAV audio", extensions: ["wav"] }],
-      });
-      if (!path) {
-        dismissExport();
-        status.set("Export cancelled.");
-        return;
-      }
-      await writeFile(path, bytes);
-      where = path;
-    } else {
-      // Browser fallback: trigger a download.
-      setExport("saving", 1);
-      const blob = new Blob([bytes], { type: "audio/wav" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "ggmusicmaker-mix.wav";
-      a.click();
-      URL.revokeObjectURL(url);
-      where = "ggmusicmaker-mix.wav";
+    setExport("saving", 1);
+    const where = await saveBytes(bytes, {
+      defaultName: "ggmusicmaker-mix.wav",
+      filters: [{ name: "WAV audio", extensions: ["wav"] }],
+      mime: "audio/wav",
+    });
+    if (!where) {
+      dismissExport();
+      status.set("Export cancelled.");
+      return;
     }
     const secs = rendered.duration.toFixed(1);
     setExport("done", 1, `${secs}s → ${where}`);
@@ -506,4 +608,130 @@ export async function exportMix(): Promise<void> {
     setExport("error", 0, msg);
     status.set(`Export failed: ${msg}`);
   }
+}
+
+// ---- sessions -------------------------------------------------------------
+
+const SESSION_FILTERS = [{ name: "GgMusicMaker session", extensions: [SESSION_EXTENSION] }];
+
+/** Tear down the current project: stop, drop every channel, clear history. */
+function resetWorkspace(next: Project): void {
+  if (get(transport).isRecording) void engine.stopRecording().catch(() => undefined);
+  stop();
+  for (const t of get(project).tracks) engine.removeTrack(t.id);
+  project.set(next);
+  engine.syncAll(next);
+  setHistory(history.createHistory<Project>());
+  selectedClipId.set(null);
+  selectedTrackId.set(null);
+  transport.update((s) => ({ ...s, isRecording: false, playhead: 0 }));
+}
+
+/** Ask before throwing away unsaved work. Resolves true when it's safe to go on. */
+async function confirmDiscard(): Promise<boolean> {
+  if (!get(dirty)) return true;
+  return confirmDialog(
+    `${sessionDisplayName(get(sessionPath))} has unsaved changes. Discard them?`,
+    "Unsaved changes",
+  );
+}
+
+/** Start over with an empty project. */
+export async function newSession(): Promise<void> {
+  if (!(await confirmDiscard())) return;
+  resetWorkspace({ tracks: [], sampleRate: engine.sampleRate });
+  sessionPath.set(null);
+  dirty.set(false);
+  status.set("New session.");
+}
+
+/** Save the session to its file, or ask where if it has none / `as` is set. */
+export async function saveSession(as = false): Promise<void> {
+  const p = get(project);
+  try {
+    status.set("Saving session…");
+    const t = get(transport);
+    const file = packSession(
+      p,
+      { reverbSpace: get(reverbSpace), pixelsPerSecond: get(pixelsPerSecond), playhead: t.playhead },
+      (id) => engine.getBuffer(id),
+    );
+    const current = get(sessionPath);
+    // Save As starts from the current file so the dialog opens in its folder.
+    const where = await saveBytes(new Uint8Array(file), {
+      defaultName: current ?? `untitled.${SESSION_EXTENSION}`,
+      filters: SESSION_FILTERS,
+      path: as ? null : current,
+    });
+    if (!where) {
+      status.set("Save cancelled.");
+      return;
+    }
+    sessionPath.set(where);
+    dirty.set(false);
+    const mb = (file.byteLength / 1048576).toFixed(1);
+    status.set(`Saved ${sessionDisplayName(where)} (${mb} MB).`);
+  } catch (err) {
+    status.set(`Save failed: ${(err as Error).message}`);
+  }
+}
+
+/** Replace the workspace with the session in `bytes`. */
+export async function loadSessionBytes(bytes: ArrayBuffer, path: string | null): Promise<void> {
+  const { header, audio } = unpackSession(bytes);
+  // Audio goes into the engine under fresh ids; clips are pointed at those.
+  const idMap = new Map<string, string>();
+  for (const [id, pcm] of audio) idMap.set(id, engine.registerPcm(pcm.sampleRate, pcm.channels));
+  const loaded: Project = {
+    ...header.project,
+    sampleRate: engine.sampleRate,
+    tracks: header.project.tracks.map((t) => ({
+      ...t,
+      clips: t.clips.map((c) => ({ ...c, bufferId: idMap.get(c.bufferId) ?? c.bufferId })),
+    })),
+  };
+  reserveIds(loaded.tracks.flatMap((t) => [t.id, ...t.clips.map((c) => c.id)]));
+  colorIdx = loaded.tracks.length;
+
+  resetWorkspace(loaded);
+  if (header.reverbSpace) setReverbSpace(header.reverbSpace);
+  if (header.pixelsPerSecond) pixelsPerSecond.set(header.pixelsPerSecond);
+  seek(header.playhead ?? 0);
+  sessionPath.set(path);
+  dirty.set(false);
+  const n = loaded.tracks.length;
+  status.set(`Opened ${sessionDisplayName(path)} — ${n} layer${n === 1 ? "" : "s"}.`);
+}
+
+/** Open a session from a File (browser file input; the caller has already
+ *  confirmed discarding unsaved work via `confirmDiscardForOpen`). */
+export async function loadSessionFile(file: File): Promise<void> {
+  try {
+    await loadSessionBytes(await file.arrayBuffer(), file.name);
+  } catch (err) {
+    status.set(`Couldn't open ${file.name}: ${(err as Error).message}`);
+  }
+}
+
+/** Browser flow: ask about unsaved work *before* the file picker appears. */
+export async function confirmDiscardForOpen(): Promise<boolean> {
+  return confirmDiscard();
+}
+
+/** Open a session via the native dialog. Returns false when the platform has
+ *  no dialog (browser), so the caller can fall back to a file input. */
+export async function openSession(): Promise<boolean> {
+  if (!isTauri()) return false;
+  if (!(await confirmDiscard())) return true;
+  try {
+    const picked = await openBytes(SESSION_FILTERS);
+    if (!picked) {
+      status.set("Open cancelled.");
+      return true;
+    }
+    await loadSessionBytes(picked.bytes, picked.path);
+  } catch (err) {
+    status.set(`Couldn't open session: ${(err as Error).message}`);
+  }
+  return true;
 }

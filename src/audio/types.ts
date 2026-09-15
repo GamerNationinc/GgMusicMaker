@@ -88,6 +88,15 @@ export function nextId(prefix: string): string {
   return `${prefix}_${idCounter}`;
 }
 
+/** Move the counter past any ids in `ids` (e.g. from a loaded session) so
+ *  freshly generated ids can never collide with them. */
+export function reserveIds(ids: Iterable<string>): void {
+  for (const id of ids) {
+    const n = Number(id.slice(id.lastIndexOf("_") + 1));
+    if (Number.isFinite(n) && n > idCounter) idCounter = n;
+  }
+}
+
 /** Reset the id counter — test helper only. */
 export function __resetIds(): void {
   idCounter = 0;

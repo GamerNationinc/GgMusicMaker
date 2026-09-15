@@ -62,15 +62,27 @@
     const ro = new ResizeObserver(resize);
     ro.observe(canvas.parentElement!);
     let timer = 0;
+    // A hidden window still runs timers (throttled); painting into it is
+    // pure waste, so the rain sleeps while the document is hidden.
+    const start = () => {
+      if (!timer && !document.hidden) timer = window.setInterval(tick, TICK_MS);
+    };
+    const pause = () => {
+      clearInterval(timer);
+      timer = 0;
+    };
+    const onVisibility = () => (document.hidden ? pause() : start());
     if (!reduce) {
       // Prime a few rows so it doesn't start blank.
       for (let i = 0; i < 30; i++) tick();
-      timer = window.setInterval(tick, TICK_MS);
+      start();
+      document.addEventListener("visibilitychange", onVisibility);
     } else {
       for (let i = 0; i < 60; i++) tick();
     }
     return () => {
-      clearInterval(timer);
+      pause();
+      document.removeEventListener("visibilitychange", onVisibility);
       ro.disconnect();
     };
   });

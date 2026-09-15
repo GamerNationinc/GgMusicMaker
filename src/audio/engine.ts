@@ -158,6 +158,13 @@ export class AudioEngine implements AudioBackend {
     return id;
   }
 
+  registerPcm(sampleRate: number, channels: Float32Array[]): string {
+    const length = channels[0]?.length ?? 0;
+    const buffer = this.ctx.createBuffer(Math.max(1, channels.length), Math.max(1, length), sampleRate);
+    channels.forEach((data, c) => buffer.copyToChannel(data as Float32Array<ArrayBuffer>, c));
+    return this.registerBuffer(buffer);
+  }
+
   getBuffer(id: string): AudioBuffer | undefined {
     return this.buffers.get(id);
   }
@@ -261,6 +268,10 @@ export class AudioEngine implements AudioBackend {
     if (!this._isPlaying) return this.playStartOffset;
     const elapsed = this.ctx.currentTime - this.playStartCtxTime;
     return this.playStartOffset + Math.max(0, elapsed);
+  }
+
+  audioClock(): number {
+    return this.ctx.currentTime;
   }
 
   masterLevel(): number {

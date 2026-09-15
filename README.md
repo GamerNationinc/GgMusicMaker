@@ -37,6 +37,14 @@ send on every layer and a master limiter for the final level.
   and FX changes); fader drags collapse into one step.
 - 💾 **Export** the whole mix to a WAV file — rendered offline through the *same*
   FX graph you hear (native save dialog under Tauri).
+- ⚡ **Load meter + ECO mode** (header, Ableton-style): `CPU` shows UI-thread load, the
+  **D** lamp flashes when the audio clock fell behind (a dropout), and **ECO** switches off
+  the backdrop animation and slows the meters for battery life. The meters also idle
+  automatically: a few Hz when nothing is playing, and no repaints at all once silent.
+- 📁 **Sessions** — **New / Open / Save / Save As** a project as one self-contained
+  `.ggmm` file (layers, clips, mixer + FX settings *and* the audio itself, so it survives
+  the original files being moved). The header shows the session name with a `*` when there
+  are unsaved changes, and closing with unsaved work asks first.
 
 **Next (v3 ideas):**
 
@@ -160,6 +168,10 @@ swapped in behind the same interface while the entire UI stays as-is.
 | `Delete`  | Delete selected clip|
 | `Ctrl+Z`  | Undo                |
 | `Ctrl+Shift+Z` / `Ctrl+Y` | Redo |
+| `Ctrl+S`  | Save session        |
+| `Ctrl+Shift+S` | Save session as… |
+| `Ctrl+O`  | Open session        |
+| `Ctrl+N`  | New session         |
 
 ## Known runtime dependency: GStreamer
 

@@ -3,7 +3,7 @@
 The single place that says **what this repo is, what is proven to work, where
 everything lives, and where it is going.** Keep it current when features land.
 
-_Last updated: 2026-09-13 (branch `rename-ggmusicmaker`, commit `e6cfe7b`)._
+_Last updated: 2026-09-14 (branch `main`)._
 
 ---
 
@@ -62,6 +62,13 @@ launched on this Steam Deck under KDE/Wayland.
 | **Undo / Redo** — toolbar buttons + `Ctrl+Z` / `Ctrl+Shift+Z` / `Ctrl+Y`. Covers import, layers, split/delete/move/trim, takes, mixer + FX changes. Fader drags coalesce into one step. Arming is deliberately not undoable. Restoring while playing reschedules audio; restoring a deleted layer recreates its audio channel. | 7 unit tests (`history.test.ts`: order, branch discard, coalescing, window, cap); 6 browser checks (button + keyboard) |
 | **Analogue master meter** (bottom-left): VU-style needle with ballistics, peak-hold tick, **PEAK** lamp (amber = limiter working, red = over full scale), 20-band spectrum strip. Reads the mix **before** the limiter — the post-limiter meter can never show a peak. | 9 unit tests (`spectrum.test.ts`); browser check that the lamp lights on a hot signal (3 consecutive runs); visible in native app |
 
+### Added 2026-09-14
+
+| Feature | Verified how |
+|---|---|
+| **Load meter + low-power mode** — header readout like Ableton's: `CPU nn%` (UI-thread utilisation: per-frame busy time from the top of the rAF tick until a zero-delay timer runs, EMA-smoothed, published at 4 Hz), a **D** lamp when the audio clock advanced <97 % of wall time during playback/recording (= the audio thread starved), and an **ECO** toggle (persisted in `localStorage`) that unmounts the Matrix rain and caps meters at 20 fps. Independently, the meter loop now idles: after 2.5 s with nothing playing/recording/sounding it drops to 8 Hz and, once the VU has decayed to silence, stops pushing values (each push repaints the ASCII VU + LED strip). The rain also pauses while the document is hidden. | 7 unit tests (`load.test.ts`); 6 browser checks (readout, no false dropout, ECO on/off/remembered). Measured in headless Chromium, idle after a 4 s playback: main-thread busy **10.7 % → 3.4 %** (→ 1.3 % with ECO) |
+| **Sessions** — New / Open / Save / Save As (toolbar + `Ctrl+N/O/S/Shift+S`). One self-contained `.ggmm` file: `GGMM` magic, JSON header (project, reverb space, zoom, playhead), then one embedded 16-bit WAV per *referenced* buffer (orphans are dropped, armed flags are cleared). Loading decodes the WAVs itself (`decodeWav`) and registers PCM straight into the engine — no dependency on the WebView's media decoders. Ids from a loaded file are reserved so new ids never collide. Header shows `name*` while dirty; New/Open ask before discarding; the browser gets a `beforeunload` prompt and Tauri intercepts the window close (`core:window:allow-close/destroy`, `dialog:allow-ask`). | 9 unit tests (`session.test.ts`: round-trip, orphan GC, arm clearing, bad/truncated/newer files, id reservation) + 3 `decodeWav` tests; 7 browser checks including *save → New → reopen → export renders the same mix* (max sample delta 0.0002) |
+
 ### Native Steam Deck build
 
 | Step | Verified how |
@@ -72,13 +79,13 @@ launched on this Steam Deck under KDE/Wayland.
 | `scripts/install-steamdeck.sh` installs AppImage + icons + menu entry under `$HOME`, no sudo | Ran it; `desktop-file-validate` passes |
 | Window reports `WM_CLASS = ggmusicmaker` and groups with its icon in the KDE taskbar | Measured with `xwininfo`; `StartupWMClass` set to match |
 
-### Quality gates (all green at `e6cfe7b`)
+### Quality gates (all green, 2026-09-14)
 
 ```
-npm run check         svelte-check: 213 files, 0 errors, 0 warnings
-npm test              vitest: 6 files, 48 tests
-npm run build         vite: ~90 KB total
-npm run test:browser  13/13 checks
+npm run check         svelte-check: 232 files, 0 errors, 0 warnings
+npm test              vitest: 8 files, 67 tests
+npm run build         vite: ~90 KB main chunk (+15 KB lazy Tauri window chunk)
+npm run test:browser  30/30 checks
 ```
 
 ---
@@ -88,11 +95,13 @@ npm run test:browser  13/13 checks
 - **Native playback and recording end-to-end.** The audio node exists and the UI works natively, but nobody has yet imported a file through the Tauri file dialog on the Deck, pressed play, and *heard* it, or recorded through WebKitGTK's mic permission path. This is the first thing to do by hand.
 - **CI has never run** on the new commits — they are unpushed (see §6). `ci.yml` and `release.yml` are believed correct but unproven on GitHub's runners.
 - No GitHub release exists yet; the README's "download the AppImage" link is dead until a `v*` tag is pushed.
-- Whole files live in RAM as `AudioBuffer`s — fine for songs, not for hour-long sessions.
+- Whole files live in RAM as `AudioBuffer`s — fine for songs, not for hour-long sessions. Session files embed audio as 16-bit PCM (~10 MB per stereo minute at 48 kHz), so a long project makes a big `.ggmm`.
+- The Tauri close-guard (`onCloseRequested` → ask) is exercised in a browser only via `beforeunload`; the native path compiles against the granted permissions but has not been clicked through on the Deck yet.
 - Live FX monitoring while recording is not a goal (WebKitGTK → GStreamer latency). Record dry, add FX after.
 - No LICENSE file in the repo.
 - The `.deb` is untested anywhere.
 - Gamepad navigation (Gaming Mode) does not exist yet; the app is touch/trackpad/keyboard only.
+- The CPU readout is **UI-thread** load, not audio-thread load — a WebView cannot see the audio thread. The D lamp is the only audio-side signal, and it has not yet been provoked on the Deck (it is verified only to stay off during a normal session).
 
 ---
 
@@ -124,22 +133,29 @@ GgMusicMaker/
 │   │   ├── reverb.ts              Synthesised impulse responses: room / hall / plate
 │   │   ├── spectrum.ts (+test)    Pure meter math: dB, block peak/RMS, log-band folding, needle ballistics
 │   │   ├── types.ts               Project / Track / Clip / TransportState model, id + colour helpers
-│   │   └── wav.ts (+test)         WAV encoder
+│   │   └── wav.ts (+test)         WAV encoder + 16-bit PCM decoder (session files)
 │   ├── fx/
 │   │   └── voice.ts (+test)       Voice presets (pitch ratio, ring-mod Hz, mix curves)
 │   ├── render/
 │   │   └── peaks.ts               Waveform peak extraction + cache for the timeline canvas
 │   ├── state/
 │   │   ├── store.ts               ALL app actions + Svelte stores. Only file that talks to the engine.
-│   │   └── history.ts (+test)     Pure undo/redo snapshot stack with coalescing
+│   │   ├── history.ts (+test)     Pure undo/redo snapshot stack with coalescing
+│   │   ├── session.ts (+test)     Pure .ggmm container: pack/unpack project + embedded WAVs
+│   │   ├── load.ts (+test)        Pure load maths: frame utilisation, EMA, audio-clock dropout test
+│   │   └── platform.ts            Tauri dialogs/fs with browser fallbacks (download, confirm)
 │   └── ui/                        Svelte 5 components (runes)
-│       ├── App.svelte             Layout: header / toolbar / timeline / fx rack / bottom row; global hotkeys
+│       ├── App.svelte             Layout: header (+ session name/dirty) / toolbar / timeline / fx rack /
+│       │                          bottom row; global hotkeys; unsaved-changes close guard
+│       ├── LoadMeter.svelte       Header CPU % bar, dropout "D" lamp, ECO toggle
 │       ├── Transport.svelte       Play/stop, time readout, LED meter, master fader
-│       ├── Toolbar.svelte         Import, Layer, Undo, Redo, Split, Delete, Record, zoom, Export
+│       ├── Toolbar.svelte         New/Open/Save, Import, Layer, Undo, Redo, Split, Delete, Record, zoom, Export
 │       ├── Timeline.svelte        Ruler + lanes canvas, playhead, clip drag/trim, scroll sync
 │       ├── TrackHead.svelte       Per-layer name, FX button, M/S/arm chips, VOL + RVB faders
 │       ├── FxRack.svelte          EQ, voice presets + amount, reverb space
 │       ├── AnalogMeter.svelte     Bottom-left VU dial + PEAK lamp + spectrum (canvas)
+│       ├── MatrixRain.svelte      Falling-glyph backdrop behind the lanes (20 fps; off in ECO / when hidden)
+│       ├── ExportDialog.svelte    Retro export progress popup
 │       ├── constants.ts           LANE_HEIGHT, HEAD_WIDTH, RULER_HEIGHT (keep heads and lanes aligned)
 │       └── theme.css              Retro pixel / DOOM-status-bar theme, touch-sized controls
 │
@@ -153,7 +169,7 @@ GgMusicMaker/
 │   ├── build.rs                   tauri_build::build()
 │   ├── tauri.conf.json            productName, identifier, 1280×800 window, CSP, bundle targets
 │   │                              (appimage+deb), bundleMediaFramework=true, icons
-│   ├── capabilities/default.json  Permissions: dialog open/save, fs write (export)
+│   ├── capabilities/default.json  Permissions: dialog open/save/ask, fs read+write ($HOME etc.), window close
 │   ├── icons/                     32, 128, 128@2x, icon.png — generated by scripts/gen_icons.py
 │   ├── src/main.rs                → ggmusicmaker_lib::run()
 │   └── src/lib.rs                 Sets WEBKIT_DISABLE_DMABUF_RENDERER=1; registers dialog+fs plugins;
@@ -172,7 +188,7 @@ GgMusicMaker/
 │   └── gen_icons.py               Pure-Python PNG icon generator (mixer-fader motif)
 │
 ├── tests/
-│   ├── browser-integration.mjs    Headless Chromium: boot, import, undo/redo, meter, record, export, FX
+│   ├── browser-integration.mjs    Headless Chromium: boot, import, undo/redo, meter, record, export, FX, sessions
 │   └── fixtures/tone.wav          Test tone (peaks right at the limiter threshold — see test comments)
 │
 ├── docs/
@@ -236,7 +252,7 @@ git tag v0.1.0 && git push origin v0.1.0     # release.yml builds + attaches art
 - **Gamepad navigation** so the app is usable in Gaming Mode (Steam Input → keyboard is the cheap first step; a focus ring + D-pad model is the real one).
 - LICENSE file.
 - A real screenshot for the README (the current one predates the meter/undo).
-- Persist/restore a session (project JSON + referenced files) — the app currently forgets everything on close.
+- ~~Persist/restore a session~~ — done 2026-09-14 (`.ggmm` files). Possible follow-ups: autosave/crash recovery to IndexedDB, a "recent sessions" list, and a Deck manual pass of the native close-guard.
 - Track re-ordering and multi-select.
 
 ### v3 ideas (from the original roadmap)
