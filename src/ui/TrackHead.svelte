@@ -13,6 +13,7 @@
     selectedTrackId,
   } from "../state/store";
   import { LANE_HEIGHT } from "./constants";
+  import { anyFxLit } from "../fx/chain";
 
   let { track }: { track: Track } = $props();
 </script>
@@ -27,8 +28,9 @@
     <button
       class="chip fx"
       class:on={$selectedTrackId === track.id}
+      class:lit={anyFxLit(track)}
       onclick={() => toggleFxRack(track.id)}
-      title="Open FX rack"
+      title={anyFxLit(track) ? "FX rack (effects active)" : "Open FX rack"}
     >FX</button>
     <button class="chip dup" onclick={() => duplicateTrack(track.id)} title="Duplicate layer (Ctrl+D)">⧉</button>
     <button class="chip" onclick={() => removeTrack(track.id)} title="Remove layer">✕</button>
@@ -98,9 +100,16 @@
     min-height: 30px;
     font-size: 12px;
   }
+  /* Lit = some effect is engaged on this layer; on = its rack is open. */
+  .chip.fx.lit {
+    color: var(--magenta);
+    box-shadow: 2px 2px 0 #000, inset 0 0 0 2px var(--magenta);
+    text-shadow: 0 0 6px rgba(255, 60, 160, 0.6);
+  }
   .chip.fx.on {
     background: var(--magenta);
     color: #10121a;
+    text-shadow: none;
   }
   .knob {
     flex: 1 1 auto;

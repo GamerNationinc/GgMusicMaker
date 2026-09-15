@@ -211,13 +211,32 @@ async function main() {
 
   await page.click(".chip.fx");
   await page.waitForTimeout(200);
-  await page.click("button:has-text('Chipmunk')");
+  check("rack opens on the Voice Synth slot", (await page.$(".slot.synth.selected")) !== null);
+  await page.click("button.preset-browse");
+  await page.waitForTimeout(100);
+  await page.click(".browser button:has-text('Chipmunk')");
   await page.waitForTimeout(400);
+  check("preset browser closes on pick and the screen shows it", (await page.$(".browser")) === null && (await page.textContent(".preset-name")).trim() === "Chipmunk");
+  const synthSummary = (await page.textContent(".slot.synth .summary")).trim();
+  check("chain strip summarises the synth", synthSummary === "Chipmunk · 100%", synthSummary);
+  check("FX chip on the head lights up", (await page.$(".head:nth-child(1) .chip.fx.lit")) !== null);
   const wet = await exportBytes();
   let diff = 0;
   const n = Math.min(dry.length, wet.length);
   for (let i = 44; i < n; i++) if (dry[i] !== wet[i]) diff++;
   check("voice FX changes the rendered mix", diff > 1000, `${diff} bytes differ`);
+  await page.click(".slot.synth .power");
+  await page.waitForTimeout(300);
+  check("bypassed slot dims and keeps its summary", (await page.$(".slot.synth.off")) !== null && (await page.textContent(".slot.synth .summary")).trim() === "Chipmunk · 100%");
+  const bypassed = await exportBytes();
+  let bypassDiff = 0;
+  for (let i = 44; i < Math.min(dry.length, bypassed.length); i++) if (dry[i] !== bypassed[i]) bypassDiff++;
+  check("bypassing the synth renders the dry mix again", bypassDiff === 0, `${bypassDiff} bytes differ from dry`);
+  await page.waitForTimeout(300);
+  await page.click(".dialog button");
+  await page.waitForTimeout(200);
+  await page.click(".slot.synth .power"); // back on
+  await page.waitForTimeout(200);
 
   // --- session save / open ------------------------------------------------
   // Three layers (tone, take, 4 s tone), Chipmunk on the first, one muted at
@@ -300,7 +319,7 @@ async function main() {
   await page.waitForTimeout(150);
   await page.click(".head:nth-child(2) .chip.fx"); // …then the copy's: Chipmunk must be lit there too
   await page.waitForTimeout(150);
-  check("the copy carries the Voice Synth preset", (await page.$("button.magenta:has-text('Chipmunk')")) !== null);
+  check("the copy carries the Voice Synth preset", (await page.textContent(".preset-name")).trim() === "Chipmunk");
   await page.click(".rack-title .chip"); // close the rack so Ctrl+D below has no rack target
   await page.keyboard.press("Control+z");
   await page.waitForTimeout(150);
@@ -317,9 +336,11 @@ async function main() {
   await page.click(".head:nth-child(1) .chip.solo");
   await page.click(".chip.fx");
   await page.waitForTimeout(200);
-  await setRange(".rack .place input.pan", -1);
+  await page.click(".slot.place .pick");
+  await page.waitForTimeout(100);
+  await setRange(".rack .editor.place input.pan", -1);
   await page.waitForTimeout(300);
-  const panReadout = (await page.textContent(".rack .place .readout")).trim();
+  const panReadout = (await page.textContent(".rack .editor.place .readout")).trim();
   check("layer pan readout", panReadout === "L 100", panReadout);
   const panned = await exportBytes();
   await page.waitForTimeout(300);
@@ -352,7 +373,9 @@ async function main() {
   // the centre, surround and LFE channels.
   await page.click(".chip.fx");
   await page.waitForTimeout(200);
-  await page.click("button:has-text('Choir')");
+  await page.click(".slot.synth .pick");
+  await page.click("button.preset-browse");
+  await page.click(".browser button:has-text('Choir')");
   await page.click("button.tab:has-text('SPACE')");
   await page.waitForTimeout(100);
   async function exportSurround(label, channels, mask) {

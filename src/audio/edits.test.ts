@@ -138,6 +138,7 @@ describe("solo / mute audibility", () => {
     reverbWidth: 1,
     eq: { low: 0, mid: 0, high: 0 },
     synth: { ...DEFAULT_SYNTH },
+    fx: { place: true, eq: true, synth: true, reverb: true },
     color: "#fff",
     clips: [],
     ...over,
@@ -194,6 +195,7 @@ describe("duplicate track", () => {
     reverbWidth: 0.5,
     eq: { low: 2, mid: -1, high: 3 },
     synth: { ...DEFAULT_SYNTH, mix: 1, pitch: 7 },
+    fx: { place: true, eq: true, synth: false, reverb: true },
     color: "#ff3ca0",
     clips: [
       { id: "clip_a", bufferId: "buf_1", startTime: 0, offset: 0, duration: 2, name: "a" },
@@ -209,15 +211,18 @@ describe("duplicate track", () => {
     expect(copy).toMatchObject({ gain: 0.8, muted: true, reverbSend: 0.3, color: "#ff3ca0" });
     expect(copy.eq).toEqual(src.eq);
     expect(copy.synth).toEqual(src.synth);
+    expect(copy.fx).toEqual(src.fx);
     expect(copy.clips.map((c) => c.bufferId)).toEqual(["buf_1", "buf_2"]);
     expect(copy.clips.map((c) => c.id)).not.toContain("clip_a");
     expect(new Set(copy.clips.map((c) => c.id)).size).toBe(2);
     // Deep copies: editing the clone can't reach into the original.
     copy.eq.low = 9;
     copy.synth.pitch = -3;
+    copy.fx.synth = true;
     copy.clips[0].startTime = 5;
     expect(src.eq.low).toBe(2);
     expect(src.synth.pitch).toBe(7);
+    expect(src.fx.synth).toBe(false);
     expect(src.clips[0].startTime).toBe(0);
   });
 

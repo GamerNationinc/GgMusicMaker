@@ -24,7 +24,11 @@ send on every layer and a master limiter for the final level.
 - 🎛️ Per-layer **volume, mute, solo** and a **reverb send**.
 - ⧉ **Duplicate a layer** (⧉ on the head, or `Ctrl+D`): clips, mix and FX copied,
   audio shared — handy for stacking a vocal with a second Voice Synth preset.
-- 🎚️ **Per-layer FX rack** (the "FX" button on each layer):
+- 🎚️ **Per-layer FX rack** (the "FX" button on each layer — it lights when the
+  layer has effects engaged). The rack is a chain `LAYER ▸ EQ ▸ VOICE SYNTH ▸ REVERB`:
+  every slot has a power switch (bypass keeps your settings), a lamp that only lights
+  when the module is on and doing something, and a one-line summary; pick a slot to
+  edit it full-width.
   - **3-band EQ** (low shelf / mid peak / high shelf).
   - **Voice Synth** — a VocalSynth-style vocal engine in one `AudioWorklet`.
     Five engines that all run at once, each with its own level: **Shift**
@@ -34,8 +38,9 @@ send on every layer and a master limiter for the final level.
     per-voice random drift, glide, a formant LFO, and the voice's own loudness
     driving pitch / formant / width. **Space**: every layer has its own spot
     around the listener — width, an *orbit* LFO that spins the field, rear
-    depth, ensemble chorus, centre and LFE sends. Presets: Off, Chipmunk, Deep,
-    Robot, Alien, Choir, Daft, Speak & Spell, Cathedral, Orbit, Swarm.
+    depth, ensemble chorus, centre and LFE sends. Presets on a ◀ ▶ screen with a
+    categorised browser: Classic (Off, Chipmunk, Deep, Robot, Alien), Stacks (Choir,
+    Cathedral, Swarm), Synth (Daft, Speak & Spell), Space (Orbit).
   - **Reverb** send with selectable **Room / Hall / Plate** spaces, and its own
     **pan / width** so the wet image can sit somewhere else than the dry layer.
   - **LAYER pan / width** on the whole layer (dry + FX); the Voice Synth has its

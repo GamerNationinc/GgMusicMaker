@@ -22,11 +22,13 @@ import type { Project, Track } from "../audio/types";
 import type { ReverbSpace } from "../audio/reverb";
 import { encodeWav, decodeWav, type PcmSource, type DecodedPcm } from "../audio/wav";
 import { normalizeSynth, SURROUND_ORDER, type SurroundLayout } from "../fx/voice-synth";
+import { normalizeFx } from "../fx/chain";
 
 export const SESSION_EXTENSION = "ggmm";
 // v1: tracks had `voice: { preset, mix }`; v2: `synth` (Voice Synth) + project.surround;
-// v3: per-track pan/width + reverbPan/reverbWidth. Older files are migrated on open.
-export const FORMAT_VERSION = 3;
+// v3: per-track pan/width + reverbPan/reverbWidth; v4: per-module power switches (`fx`).
+// Older files are migrated on open.
+export const FORMAT_VERSION = 4;
 const MAGIC = "GGMM";
 const PREAMBLE = 12;
 
@@ -168,6 +170,8 @@ export function migrateProject(project: Project): Project {
       reverbPan: num(t.reverbPan, -1, 1, 0),
       reverbWidth: num(t.reverbWidth, 0, 2, 1),
       synth: normalizeSynth(t.synth, voice),
+      // v3 → v4: power switches, all on.
+      fx: normalizeFx(t.fx),
     } as Track;
   });
   const surround: SurroundLayout = SURROUND_ORDER.includes(project.surround) ? project.surround : "stereo";

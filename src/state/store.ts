@@ -34,6 +34,7 @@ import {
   type SurroundLayout,
 } from "../fx/voice-synth";
 import type { ReverbSpace } from "../audio/reverb";
+import { FX_ALL_ON, type FxSlot } from "../fx/chain";
 import {
   packSession,
   unpackSession,
@@ -211,6 +212,7 @@ function makeTrack(name: string): Track {
     reverbWidth: 1,
     eq: { low: 0, mid: 0, high: 0 },
     synth: { ...DEFAULT_SYNTH },
+    fx: { ...FX_ALL_ON },
     color,
     clips: [],
   };
@@ -264,6 +266,11 @@ export function setReverbSend(trackId: string, amount: number): void {
 }
 
 // ---- FX rack (v2) ---------------------------------------------------------
+
+/** Power switch for one FX module (bypass; settings are kept). */
+export function toggleFx(trackId: string, slot: FxSlot): void {
+  updateTrack(trackId, (t) => ({ ...t, fx: { ...t.fx, [slot]: !t.fx[slot] } }));
+}
 
 export type PlaceKey = "pan" | "width" | "reverbPan" | "reverbWidth";
 

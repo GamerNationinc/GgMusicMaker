@@ -110,30 +110,33 @@ export class TrackChannel {
     const ramp = (p: AudioParam, v: number) =>
       smooth ? p.setTargetAtTime(v, t, 0.01) : (p.value = v);
 
+    // A bypassed module keeps its settings but is pushed to its neutral
+    // values, so the graph never changes shape — only the numbers do.
+    const fx = track.fx;
     const audible = isTrackAudible(track, projectHasSolo);
     ramp(this.input.gain, audible ? track.gain : 0);
-    ramp(this.send.gain, audible ? track.reverbSend : 0);
+    ramp(this.send.gain, audible && fx.reverb ? track.reverbSend : 0);
 
-    ramp(this.eqLow.gain, track.eq.low);
-    ramp(this.eqMid.gain, track.eq.mid);
-    ramp(this.eqHigh.gain, track.eq.high);
+    ramp(this.eqLow.gain, fx.eq ? track.eq.low : 0);
+    ramp(this.eqMid.gain, fx.eq ? track.eq.mid : 0);
+    ramp(this.eqHigh.gain, fx.eq ? track.eq.high : 0);
 
     if (this.place && this.sendPlace) {
       const set = (node: AudioWorkletNode, name: string, v: number) => {
         const param = node.parameters.get(name);
         if (param) ramp(param, v);
       };
-      set(this.place, "pan", track.pan);
-      set(this.place, "width", track.width);
-      set(this.sendPlace, "pan", track.reverbPan);
-      set(this.sendPlace, "width", track.reverbWidth);
+      set(this.place, "pan", fx.place ? track.pan : 0);
+      set(this.place, "width", fx.place ? track.width : 1);
+      set(this.sendPlace, "pan", fx.reverb ? track.reverbPan : 0);
+      set(this.sendPlace, "width", fx.reverb ? track.reverbWidth : 1);
     }
 
     if (this.synth) {
       const synth = track.synth;
-      // With no engine up there is nothing wet to hear, so keep the dry
-      // path bit-exact instead of fading it by `mix`.
-      const active = synthIsActive(synth);
+      // With no engine up (or the module switched off) there is nothing wet
+      // to hear, so keep the dry path bit-exact instead of fading it by `mix`.
+      const active = fx.synth && synthIsActive(synth);
       for (const key of Object.keys(DEFAULT_SYNTH) as SynthKey[]) {
         const param = this.synth.parameters.get(key);
         if (!param) continue;

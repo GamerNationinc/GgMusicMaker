@@ -186,21 +186,26 @@ export function synthIsActive(p: VoiceSynthParams): boolean {
 
 // ---- presets ---------------------------------------------------------------
 
+export type PresetCategory = "Classic" | "Stacks" | "Synth" | "Space";
+export const PRESET_CATEGORIES: PresetCategory[] = ["Classic", "Stacks", "Synth", "Space"];
+
 export interface SynthPreset {
   name: string;
+  category: PresetCategory;
   params: Partial<VoiceSynthParams>;
 }
 
 /** Factory presets. The first five keep the v1 voice-FX names so muscle
  *  memory (and the browser test) still find "Chipmunk". */
 export const SYNTH_PRESETS: SynthPreset[] = [
-  { name: "Off", params: { mix: 0 } },
-  { name: "Chipmunk", params: { mix: 1, shift: 1, pitch: 7, formant: 3, width: 0.2 } },
-  { name: "Deep", params: { mix: 1, shift: 1, pitch: -7, formant: -4, sub: 0.3, lfe: 0.5, width: 0.2 } },
-  { name: "Robot", params: { mix: 1, shift: 0, vocoder: 1, chord: 0, character: 0.6, width: 0.3 } },
-  { name: "Alien", params: { mix: 1, shift: 1, pitch: 5, formant: 6, ring: 90, formantRate: 0.3, formantDepth: 2, width: 0.5 } },
+  { name: "Off", category: "Classic", params: { mix: 0 } },
+  { name: "Chipmunk", category: "Classic", params: { mix: 1, shift: 1, pitch: 7, formant: 3, width: 0.2 } },
+  { name: "Deep", category: "Classic", params: { mix: 1, shift: 1, pitch: -7, formant: -4, sub: 0.3, lfe: 0.5, width: 0.2 } },
+  { name: "Robot", category: "Classic", params: { mix: 1, shift: 0, vocoder: 1, chord: 0, character: 0.6, width: 0.3 } },
+  { name: "Alien", category: "Classic", params: { mix: 1, shift: 1, pitch: 5, formant: 6, ring: 90, formantRate: 0.3, formantDepth: 2, width: 0.5 } },
   {
     name: "Choir",
+    category: "Stacks",
     params: {
       mix: 0.7, shift: 1, unison: 6, detune: 18, drift: 8, polyvox: 0.7, chord: 3, shimmer: 0.25,
       vibratoRate: 5.5, vibratoDepth: 12, ensemble: 0.5, width: 1, rear: 0.6, center: 0.4, lfe: 0.2,
@@ -208,14 +213,17 @@ export const SYNTH_PRESETS: SynthPreset[] = [
   },
   {
     name: "Daft",
+    category: "Synth",
     params: { mix: 1, shift: 0, talkbox: 1, chord: 3, character: 0.7, unison: 1, width: 0.6, envFormant: 0.5, glide: 0.2 },
   },
   {
     name: "Speak & Spell",
+    category: "Synth",
     params: { mix: 1, shift: 0, compuvox: 1, chord: 0, character: 0.8, width: 0 },
   },
   {
     name: "Cathedral",
+    category: "Stacks",
     params: {
       mix: 0.6, shift: 1, unison: 4, detune: 8, sub: 0.6, shimmer: 0.5, vocoder: 0.4, chord: 6,
       ensemble: 0.8, width: 1, rear: 1, center: 0.5, lfe: 0.6, orbitRate: 0.05, orbitDepth: 0.4,
@@ -223,6 +231,7 @@ export const SYNTH_PRESETS: SynthPreset[] = [
   },
   {
     name: "Orbit",
+    category: "Space",
     params: {
       mix: 0.8, shift: 1, unison: 3, detune: 25, polyvox: 0.5, chord: 2,
       orbitRate: 0.5, orbitDepth: 1, width: 1, rear: 1, envWidth: 0.6, envPitch: 0.3, vibratoDepth: 8,
@@ -230,6 +239,7 @@ export const SYNTH_PRESETS: SynthPreset[] = [
   },
   {
     name: "Swarm",
+    category: "Stacks",
     params: {
       mix: 1, shift: 1, unison: 8, detune: 60, drift: 40, glide: 0.4, ensemble: 1, width: 1, rear: 0.8,
       envPitch: -0.5, vibratoRate: 0.8, vibratoDepth: 30,

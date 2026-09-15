@@ -80,6 +80,8 @@ launched on this Steam Deck under KDE/Wayland.
 
 | **Pan + width on every effect** — a `placer-processor` worklet (`public/placer-processor.js`) sits after each layer's chain (LAYER module: PAN / WIDTH) and on the reverb send (REVERB: PAN / WIDTH), and the Voice Synth gained PAN (rotates its field; stacks with orbit). Stereo: mid/side width (0 mono · 1 as is · 2 exaggerated) then constant-power balance (unity at centre, +3 dB at the extremes). 5.1/7.1: every speaker feed is a virtual source at its speaker's azimuth, scaled by width and rotated by pan (±1 = ±180°), VBAP-re-panned — so pan 0 / width 1 is an exact identity on any bus; LFE passes through. Memoryless: no tail, bit-exact bypass. Fields `pan`/`width`/`reverbPan`/`reverbWidth` on `Track`, coalesced undo, session format v3 (v1/v2 files migrate to centred/natural). EQ deliberately has no knobs: it is inline tone-shaping, so a pan there would just be the layer pan under another name. | 9 unit tests run the placer DSP in Node (identity, mono fold, side doubling, hard pan, 5.1/7.1 identity, width-0 fold onto C, 180° rotation lands on the surrounds with constant power) + a synth pan test; browser: hard-left layer exports with R = 0, undo restores L = R |
 
+| **FX chain rack** (replaces the row of modules) — the rack is a chain strip `LAYER ▸ EQ ▸ VOICE SYNTH ▸ REVERB` plus one full-width editor for the picked slot. Each slot has a **power switch** (real per-module bypass: `Track.fx.{place,eq,synth,reverb}`; settings are kept, the graph never changes shape — the module is pushed to its neutral values), a **lamp** that lights only when the module is on *and* doing something, and a one-line **summary** (`Choir · 70%`, `+4 / 0 / -3.5 dB`, `hall · 30%`, `L 40 · 120%`). The track head's FX chip lights when any module is engaged. Voice Synth presets moved from a wall of 11 buttons to a hardware-style screen (`◀ CHOIR / Stacks ▶`, shows `custom · edited` once touched) with a **BROWSE** popover grouped by category (Classic / Stacks / Synth / Space; Esc closes). Pure summary/lamp logic in `src/fx/chain.ts`. Session format v4 (v1–v3 files open with every module on). | 5 unit tests (`chain.test.ts`: neutral layer, summaries, lamp needs on+engaged, readouts, normalize); browser: rack opens on the synth slot, browser pick closes and updates the screen, strip summary, head chip lit, bypassing the synth renders **bit-identical to dry** and keeps the summary, the duplicate's rack shows the same preset; 49/49 ×2. One CSS class collision found by measuring (`.eq` editor height leaking onto the `.slot.eq` strip cell) |
+
 ### Native Steam Deck build
 
 | Step | Verified how |
@@ -94,9 +96,9 @@ launched on this Steam Deck under KDE/Wayland.
 
 ```
 npm run check         svelte-check: 236 files, 0 errors, 0 warnings
-npm test              vitest: 9 files, 115 tests
+npm test              vitest: 10 files, 120 tests
 npm run build         vite: ~99 KB main chunk (+15 KB lazy Tauri window chunk)
-npm run test:browser  43/43 checks
+npm run test:browser  49/49 checks
 ```
 
 ---
@@ -153,7 +155,8 @@ GgMusicMaker/
 │   ├── fx/
 │   │   ├── voice-synth.ts (+test) Voice Synth model: params + UI specs, presets, surround layouts,
 │   │   │                          v1 voice → synth migration. The test also runs the worklet DSP in Node
-│   │   └── placer.test.ts         Runs public/placer-processor.js in Node (pan/width stage)
+│   │   ├── placer.test.ts         Runs public/placer-processor.js in Node (pan/width stage)
+│   │   └── chain.ts (+test)       FX chain strip model: slots, power switches, lamp + summary logic
 │   ├── render/
 │   │   └── peaks.ts               Waveform peak extraction + cache for the timeline canvas
 │   ├── state/
@@ -170,7 +173,8 @@ GgMusicMaker/
 │       ├── Toolbar.svelte         New/Open/Save, Import, Layer, Undo, Redo, Split, Delete, Record, zoom, Export
 │       ├── Timeline.svelte        Ruler + lanes canvas, playhead, clip drag/trim, scroll sync
 │       ├── TrackHead.svelte       Per-layer name, FX button, M/S/arm chips, VOL + RVB faders
-│       ├── FxRack.svelte          LAYER pan/width, EQ, Voice Synth (presets, MIX, tabs, chord, OUTPUT), reverb send/pan/width
+│       ├── FxRack.svelte          Chain strip (power/lamp/summary per slot) + one editor: LAYER, EQ, Voice Synth
+│       │                          (preset screen + browser, MIX, tabs, chord, OUTPUT), REVERB (space, send, pan, width)
 │       ├── AnalogMeter.svelte     Bottom-left VU dial + PEAK lamp + spectrum (canvas)
 │       ├── MatrixRain.svelte      Falling-glyph backdrop behind the lanes (20 fps; off in ECO / when hidden)
 │       ├── ExportDialog.svelte    Retro export progress popup
@@ -268,7 +272,7 @@ git tag v0.1.0 && git push origin v0.1.0     # release.yml builds + attaches art
 
 ### Next up (asked for 2026-09-14, after testing the Voice Synth)
 
-1. **Better FX-selection UI.** The rack is a row of modules with a tabbed synth in the middle; it should read as an FX *chain* you pick from — a module strip per layer (EQ ▸ Voice Synth ▸ Reverb …) with add/remove/enable per slot, a clearer "what's active" style than the magenta border, and preset browsing that isn't a wall of buttons.
+1. ~~**Better FX-selection UI.**~~ Done 2026-09-15 (see §2): chain strip with power/lamp/summary per slot, single editor, categorised preset browser. Not done: re-ordering slots or adding a second instance of a module — the chain order is the audio graph's order. If that is wanted, `TrackChannel` needs a generic slot list instead of fixed nodes.
 2. ~~**Duplicate track.**~~ Done 2026-09-15 (see §2).
 3. ~~**Width + pan knobs on every effect.**~~ Done 2026-09-15 (see §2). Possible follow-up: a *spatial EQ* — per-band pan/width on the 3-band EQ (lows mono, highs wide), which is the version of "EQ pan" that would actually mean something.
 

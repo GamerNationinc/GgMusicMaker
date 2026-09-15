@@ -5,6 +5,7 @@
 // `bufferId`, so the project model stays lightweight and easy to reason about.
 
 import type { VoiceSynthParams, SurroundLayout } from "../fx/voice-synth";
+import type { FxEnabled } from "../fx/chain";
 
 /** A region of a source buffer placed on the timeline. Non-destructive:
  *  split/trim only adjust offset/duration/startTime — the buffer is untouched. */
@@ -52,6 +53,8 @@ export interface Track {
   eq: EqParams;
   /** Voice Synth (stacked vocal engines + surround field). */
   synth: VoiceSynthParams;
+  /** Power switch per FX module (bypass keeps the settings). */
+  fx: FxEnabled;
   /** UI accent colour for the track's clips. */
   color: string;
   clips: Clip[];
