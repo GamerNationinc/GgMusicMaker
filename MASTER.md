@@ -78,6 +78,8 @@ launched on this Steam Deck under KDE/Wayland.
 |---|---|
 | **Duplicate layer** — ⧉ on the track head, or `Ctrl+D` for the layer whose FX rack is open (else the selected clip's layer). The copy lands directly under the original with its clips (sharing the audio buffers — nothing re-decoded), gain/mute/solo/send, EQ, Voice Synth settings and colour; never armed; named "X copy" / "X copy 2"…; one undo step; audible immediately if playing. Pure pieces in `edits.ts`: `cloneTrack`, `copyName`, `insertTrackAfter`. | 3 unit tests (deep copy + fresh ids + shared buffers + not armed; collision-free names; insertion position); 5 browser checks (position + name, status, the copy renders — louder and ~210 KB different, the copy's rack shows the same preset, Ctrl+Z removes it) |
 
+| **Pan + width on every effect** — a `placer-processor` worklet (`public/placer-processor.js`) sits after each layer's chain (LAYER module: PAN / WIDTH) and on the reverb send (REVERB: PAN / WIDTH), and the Voice Synth gained PAN (rotates its field; stacks with orbit). Stereo: mid/side width (0 mono · 1 as is · 2 exaggerated) then constant-power balance (unity at centre, +3 dB at the extremes). 5.1/7.1: every speaker feed is a virtual source at its speaker's azimuth, scaled by width and rotated by pan (±1 = ±180°), VBAP-re-panned — so pan 0 / width 1 is an exact identity on any bus; LFE passes through. Memoryless: no tail, bit-exact bypass. Fields `pan`/`width`/`reverbPan`/`reverbWidth` on `Track`, coalesced undo, session format v3 (v1/v2 files migrate to centred/natural). EQ deliberately has no knobs: it is inline tone-shaping, so a pan there would just be the layer pan under another name. | 9 unit tests run the placer DSP in Node (identity, mono fold, side doubling, hard pan, 5.1/7.1 identity, width-0 fold onto C, 180° rotation lands on the surrounds with constant power) + a synth pan test; browser: hard-left layer exports with R = 0, undo restores L = R |
+
 ### Native Steam Deck build
 
 | Step | Verified how |
@@ -92,9 +94,9 @@ launched on this Steam Deck under KDE/Wayland.
 
 ```
 npm run check         svelte-check: 236 files, 0 errors, 0 warnings
-npm test              vitest: 8 files, 106 tests
+npm test              vitest: 9 files, 115 tests
 npm run build         vite: ~99 KB main chunk (+15 KB lazy Tauri window chunk)
-npm run test:browser  40/40 checks
+npm run test:browser  43/43 checks
 ```
 
 ---
@@ -138,7 +140,8 @@ GgMusicMaker/
 │   │   ├── backend.ts             AudioBackend interface: the UI↔runtime seam (swap-in point for a native engine)
 │   │   ├── engine.ts              AudioEngine: AudioContext, master bus (gain→limiter→analyser→out),
 │   │   │                          pre-limiter analyser tap, reverb bus, scheduling, recording, offline render
-│   │   ├── channel.ts             TrackChannel: gain→EQ→voice synth worklet (N-ch out)→out, + reverb send
+│   │   ├── channel.ts             TrackChannel: gain→EQ→voice synth→placer (layer pan/width)→out,
+│   │   │                          out→placer (reverb pan/width)→send
 │   │   ├── master.ts              MasterBus: gain→limiter(s)→meters→destination at 2/6/8 channels
 │   │   ├── edits.ts (+test)       Pure clip math: split/trim/move/replace, audibility, project duration,
 │   │   │                          track duplication (cloneTrack / copyName / insertTrackAfter)
@@ -148,8 +151,9 @@ GgMusicMaker/
 │   │   ├── types.ts               Project / Track / Clip / TransportState model, id + colour helpers
 │   │   └── wav.ts (+test)         WAV encoder (plain / extensible multichannel) + 16-bit PCM decoder
 │   ├── fx/
-│   │   └── voice-synth.ts (+test) Voice Synth model: params + UI specs, presets, surround layouts,
-│   │                              v1 voice → synth migration. The test also runs the worklet DSP in Node
+│   │   ├── voice-synth.ts (+test) Voice Synth model: params + UI specs, presets, surround layouts,
+│   │   │                          v1 voice → synth migration. The test also runs the worklet DSP in Node
+│   │   └── placer.test.ts         Runs public/placer-processor.js in Node (pan/width stage)
 │   ├── render/
 │   │   └── peaks.ts               Waveform peak extraction + cache for the timeline canvas
 │   ├── state/
@@ -166,7 +170,7 @@ GgMusicMaker/
 │       ├── Toolbar.svelte         New/Open/Save, Import, Layer, Undo, Redo, Split, Delete, Record, zoom, Export
 │       ├── Timeline.svelte        Ruler + lanes canvas, playhead, clip drag/trim, scroll sync
 │       ├── TrackHead.svelte       Per-layer name, FX button, M/S/arm chips, VOL + RVB faders
-│       ├── FxRack.svelte          EQ, Voice Synth (presets, MIX, tabbed sections, chord, OUTPUT layout), reverb
+│       ├── FxRack.svelte          LAYER pan/width, EQ, Voice Synth (presets, MIX, tabs, chord, OUTPUT), reverb send/pan/width
 │       ├── AnalogMeter.svelte     Bottom-left VU dial + PEAK lamp + spectrum (canvas)
 │       ├── MatrixRain.svelte      Falling-glyph backdrop behind the lanes (20 fps; off in ECO / when hidden)
 │       ├── ExportDialog.svelte    Retro export progress popup
@@ -175,6 +179,7 @@ GgMusicMaker/
 │
 ├── public/                        Served as-is; AudioWorklets must be plain files
 │   ├── voice-synth-processor.js   The Voice Synth DSP (engines, stack, modulation, surround field)
+│   ├── placer-processor.js        Pan + width for a whole signal, stereo (M/S + balance) or surround (VBAP rotate)
 │   └── recorder-processor.js      Audio-thread capture for recording
 │
 ├── src-tauri/                     NATIVE SHELL (Rust / Tauri v2)
@@ -265,7 +270,7 @@ git tag v0.1.0 && git push origin v0.1.0     # release.yml builds + attaches art
 
 1. **Better FX-selection UI.** The rack is a row of modules with a tabbed synth in the middle; it should read as an FX *chain* you pick from — a module strip per layer (EQ ▸ Voice Synth ▸ Reverb …) with add/remove/enable per slot, a clearer "what's active" style than the magenta border, and preset browsing that isn't a wall of buttons.
 2. ~~**Duplicate track.**~~ Done 2026-09-15 (see §2).
-3. **Width + pan knobs on every effect.** Each module (EQ, Voice Synth, Reverb send, and the dry layer itself) gets its own stereo width and pan, so a layer can sit somewhere in the field and any effect can be placed independently of it. In surround, "pan" means azimuth on the ring — the synth's `setPan` (VBAP on the speaker ring) is the shared primitive; a small pan/width worklet stage (or a StereoPanner for the stereo bus) per module.
+3. ~~**Width + pan knobs on every effect.**~~ Done 2026-09-15 (see §2). Possible follow-up: a *spatial EQ* — per-band pan/width on the 3-band EQ (lows mono, highs wide), which is the version of "EQ pan" that would actually mean something.
 
 ### Near term
 

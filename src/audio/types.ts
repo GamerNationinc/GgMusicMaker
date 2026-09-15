@@ -40,6 +40,14 @@ export interface Track {
   armed: boolean;
   /** Reverb send amount, 0..1. */
   reverbSend: number;
+  /** Where the whole layer (dry + FX) sits: pan -1..1, width 0..2 (1 = as is).
+   *  On a surround bus pan rotates the field (±1 = ±180°). */
+  pan: number;
+  width: number;
+  /** Placement of the reverb send, same ranges, so the wet image can sit
+   *  somewhere else than the dry layer. */
+  reverbPan: number;
+  reverbWidth: number;
   /** 3-band EQ (v2 FX rack). */
   eq: EqParams;
   /** Voice Synth (stacked vocal engines + surround field). */

@@ -31,7 +31,8 @@
 //   formant LFO · the voice's own loudness → pitch / formant / width.
 //
 // Placement: every layer has a home azimuth. `width` scales it, `rear` lets
-// the ring extend behind the listener, `orbit` rotates the whole field.
+// the ring extend behind the listener, `pan` rotates the whole field and
+// `orbit` keeps it turning.
 // Output channel count selects the speaker ring: 2 = stereo (constant-power
 // pan, rear folds forward), 6 = 5.1 (L R C LFE Ls Rs), 8 = 7.1 (L R C LFE
 // Lb Rb Ls Rs, SMPTE order). Layers are VBAP-panned between the two nearest
@@ -282,6 +283,7 @@ const PARAMS = [
       // space
       kParam("width", 0.6, 0, 1), kParam("orbitRate", 0.2, 0, 4), kParam("orbitDepth", 0, 0, 1), kParam("ensemble", 0, 0, 1),
       kParam("rear", 0.3, 0, 1), kParam("lfe", 0, 0, 1), kParam("center", 0, 0, 1), kParam("ring", 0, 0, 400),
+      kParam("pan", 0, -1, 1),
 ];
 const PARAM_NAMES = PARAMS.map((d) => d.name);
 
@@ -415,7 +417,8 @@ class VoiceSynthProcessor extends AudioWorkletProcessor {
 
     // --- space ---
     this.orbitPhase += p.orbitRate * t; if (this.orbitPhase >= 1) this.orbitPhase -= 1;
-    const orbit = p.orbitDepth * 180 * Math.sin(2 * Math.PI * this.orbitPhase);
+    // Static rotation (`pan`, ±1 = ±180°) plus the orbit LFO on top.
+    const orbit = p.pan * 180 + p.orbitDepth * 180 * Math.sin(2 * Math.PI * this.orbitPhase);
     const reach = (60 + 120 * p.rear) * clamp01(p.width + p.envWidth * d);
     const place = (layer, frac) => this.setPan(layer, frac * reach + orbit, nCh);
 

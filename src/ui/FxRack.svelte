@@ -3,6 +3,7 @@
     project,
     selectedTrackId,
     setEq,
+    setPlacement,
     setSynthParam,
     applySynthPreset,
     setSurround,
@@ -44,6 +45,10 @@
   function onSlider(key: SynthKey, e: Event) {
     if (track) setSynthParam(track.id, key, Number((e.target as HTMLInputElement).value));
   }
+
+  // Pan reads L 50 … C … R 50; width reads as a percentage (100% = as is).
+  const panText = (v: number) => (Math.abs(v) < 0.005 ? "C" : `${v < 0 ? "L" : "R"} ${Math.round(Math.abs(v) * 100)}`);
+  const widthText = (v: number) => `${Math.round(v * 100)}%`;
 </script>
 
 {#if track}
@@ -54,6 +59,38 @@
     </div>
 
     <div class="modules">
+      <!-- Layer placement: where the whole layer (dry + FX) sits -->
+      <section class="module place">
+        <span class="label">LAYER</span>
+        <label class="param">
+          <span class="tiny">PAN</span>
+          <input
+            class="pan"
+            type="range"
+            min="-1"
+            max="1"
+            step="0.01"
+            value={track.pan}
+            oninput={(e) => setPlacement(track!.id, "pan", Number((e.target as HTMLInputElement).value))}
+          />
+          <span class="readout">{panText(track.pan)}</span>
+        </label>
+        <label class="param">
+          <span class="tiny">WIDTH</span>
+          <input
+            class="width"
+            type="range"
+            min="0"
+            max="2"
+            step="0.01"
+            value={track.width}
+            oninput={(e) => setPlacement(track!.id, "width", Number((e.target as HTMLInputElement).value))}
+          />
+          <span class="readout">{widthText(track.width)}</span>
+        </label>
+        <span class="tiny hint">{$liveChannels > 2 ? "pan turns the field" : "M/S width · balance"}</span>
+      </section>
+
       <!-- 3-band EQ -->
       <section class="module">
         <span class="label">EQUALIZER</span>
@@ -181,7 +218,7 @@
             >{space}</button>
           {/each}
         </div>
-        <div class="mix">
+        <label class="param">
           <span class="tiny">SEND</span>
           <input
             type="range"
@@ -191,7 +228,34 @@
             value={track.reverbSend}
             oninput={(e) => setReverbSend(track!.id, Number((e.target as HTMLInputElement).value))}
           />
-        </div>
+          <span class="readout">{Math.round(track.reverbSend * 100)}%</span>
+        </label>
+        <label class="param">
+          <span class="tiny">PAN</span>
+          <input
+            class="reverb-pan"
+            type="range"
+            min="-1"
+            max="1"
+            step="0.01"
+            value={track.reverbPan}
+            oninput={(e) => setPlacement(track!.id, "reverbPan", Number((e.target as HTMLInputElement).value))}
+          />
+          <span class="readout">{panText(track.reverbPan)}</span>
+        </label>
+        <label class="param">
+          <span class="tiny">WIDTH</span>
+          <input
+            class="reverb-width"
+            type="range"
+            min="0"
+            max="2"
+            step="0.01"
+            value={track.reverbWidth}
+            oninput={(e) => setPlacement(track!.id, "reverbWidth", Number((e.target as HTMLInputElement).value))}
+          />
+          <span class="readout">{widthText(track.reverbWidth)}</span>
+        </label>
       </section>
     </div>
   </div>
@@ -340,6 +404,18 @@
   }
   .param .tiny {
     min-width: 88px;
+  }
+  .place,
+  .module:last-child {
+    min-width: 230px;
+  }
+  .place .param .tiny,
+  .module:last-child .param .tiny {
+    min-width: 44px;
+  }
+  .hint {
+    margin-top: auto;
+    color: var(--amber);
   }
   .param input {
     flex: 1 1 auto;

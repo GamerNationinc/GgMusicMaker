@@ -293,6 +293,15 @@ describe("voice-synth-processor", () => {
       expect(lo).toBeLessThan(0.1);
     });
 
+    it("pan rotates the field: hard left/right in stereo, around the ring in 5.1", () => {
+      const [l, r] = run({ width: 0, pan: -0.5 }, input); // −90°: hard left
+      expect(rms(r, settle)).toBeLessThan(1e-6);
+      expect(rms(l, settle)).toBeGreaterThan(0.01);
+      const six = run({ width: 0, pan: 1 }, input, 6); // 180°: between Ls and Rs
+      expect(rms(six[4], settle) + rms(six[5], settle)).toBeGreaterThan(0.02);
+      expect(rms(six[2], settle)).toBeLessThan(1e-6);
+    });
+
     it("rear layers fold forward into stereo rather than vanishing", () => {
       const [l, r] = run({ width: 1, rear: 1, unison: 8, detune: 20 }, input);
       expect(rms(l, settle) + rms(r, settle)).toBeGreaterThan(0.05);

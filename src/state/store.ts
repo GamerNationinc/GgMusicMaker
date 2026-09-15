@@ -205,6 +205,10 @@ function makeTrack(name: string): Track {
     soloed: false,
     armed: false,
     reverbSend: 0,
+    pan: 0,
+    width: 1,
+    reverbPan: 0,
+    reverbWidth: 1,
     eq: { low: 0, mid: 0, high: 0 },
     synth: { ...DEFAULT_SYNTH },
     color,
@@ -260,6 +264,15 @@ export function setReverbSend(trackId: string, amount: number): void {
 }
 
 // ---- FX rack (v2) ---------------------------------------------------------
+
+export type PlaceKey = "pan" | "width" | "reverbPan" | "reverbWidth";
+
+/** Pan (-1..1) / width (0..2) of the layer or of its reverb send. */
+export function setPlacement(trackId: string, key: PlaceKey, value: number): void {
+  const isPan = key === "pan" || key === "reverbPan";
+  const v = Number.isFinite(value) ? Math.min(isPan ? 1 : 2, Math.max(isPan ? -1 : 0, value)) : isPan ? 0 : 1;
+  updateTrack(trackId, (t) => (t[key] === v ? t : { ...t, [key]: v }), { history: `place:${key}:${trackId}` });
+}
 
 export function setEq(trackId: string, band: "low" | "mid" | "high", db: number): void {
   updateTrack(trackId, (t) => ({ ...t, eq: { ...t.eq, [band]: db } }), {

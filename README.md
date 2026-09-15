@@ -36,7 +36,11 @@ send on every layer and a master limiter for the final level.
     around the listener — width, an *orbit* LFO that spins the field, rear
     depth, ensemble chorus, centre and LFE sends. Presets: Off, Chipmunk, Deep,
     Robot, Alien, Choir, Daft, Speak & Spell, Cathedral, Orbit, Swarm.
-  - **Reverb** send with selectable **Room / Hall / Plate** spaces.
+  - **Reverb** send with selectable **Room / Hall / Plate** spaces, and its own
+    **pan / width** so the wet image can sit somewhere else than the dry layer.
+  - **LAYER pan / width** on the whole layer (dry + FX); the Voice Synth has its
+    own PAN too. Stereo: mid/side width + constant-power balance. On a 5.1/7.1
+    bus, pan turns the field around the listener.
 - 🔊 **Stereo / 5.1 / 7.1 output** (Voice Synth → SPACE → OUTPUT). The synth's
   field is VBAP-panned onto a real speaker ring; the exported WAV is a proper
   multichannel `WAVE_FORMAT_EXTENSIBLE` file with a speaker mask. A stereo
@@ -73,6 +77,7 @@ pixel art) shipped as a small native Linux binary via **Tauri v2**.
 ```
 public/
   voice-synth-processor.js  AudioWorklet: the Voice Synth (5 engines, stack, modulation, surround field)
+  placer-processor.js       AudioWorklet: pan + width (M/S + balance in stereo, VBAP rotation in surround)
 src/
   audio/     AudioEngine (AudioContext + master bus + reverb), TrackChannel
              (per-layer fader + EQ + voice synth + send), MasterBus (2/6/8 ch),
@@ -91,8 +96,8 @@ Key design choices (see also "Architecture decisions" below and inline comments)
   adjust `offset`/`duration`/`startTime`; source audio is never mutated. The math
   lives in `src/audio/edits.ts` and is fully unit-tested.
 - **Real-time, non-destructive FX** — each track is a `TrackChannel`:
-  `gain → EQ → voice synth → out`, with `out → master` (dry) and
-  `out → send → convolver → master` (wet); the master bus is
+  `gain → EQ → voice synth → placer (pan/width) → out`, with `out → master` (dry) and
+  `out → placer → send → convolver → master` (wet); the master bus is
   `gain → limiter → meter → output` (one limiter per channel on a 5.1/7.1 bus).
   Export builds the **same** `TrackChannel` + master graph in an
   `OfflineAudioContext` with the project's channel count, so the render

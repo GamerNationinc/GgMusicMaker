@@ -33,6 +33,10 @@ const project: Project = {
       soloed: true,
       armed: true,
       reverbSend: 0.3,
+      pan: -0.4,
+      width: 1.3,
+      reverbPan: 0.2,
+      reverbWidth: 0.7,
       eq: { low: 2, mid: -1, high: 4 },
       synth: { ...DEFAULT_SYNTH, mix: 0.7, shift: 1, pitch: 7 },
       color: "#ff3ca0",
@@ -49,6 +53,10 @@ const project: Project = {
       soloed: false,
       armed: false,
       reverbSend: 0,
+      pan: 0,
+      width: 1,
+      reverbPan: 0,
+      reverbWidth: 1,
       eq: { low: 0, mid: 0, high: 0 },
       synth: { ...DEFAULT_SYNTH },
       color: "#5af096",
@@ -80,6 +88,7 @@ describe("session container", () => {
     expect(header.project.tracks.map((t) => t.name)).toEqual(["Vocal", "Beat"]);
     expect(header.project.tracks[0].clips).toEqual(project.tracks[0].clips);
     expect(header.project.tracks[0].synth).toEqual({ ...DEFAULT_SYNTH, mix: 0.7, shift: 1, pitch: 7 });
+    expect(header.project.tracks[0]).toMatchObject({ pan: -0.4, width: 1.3, reverbPan: 0.2, reverbWidth: 0.7 });
     expect(header.project.tracks[0].eq).toEqual({ low: 2, mid: -1, high: 4 });
 
     const a = audio.get("buf_1")!;
@@ -172,5 +181,7 @@ describe("session migration", () => {
     expect(t.voice).toBeUndefined();
     expect(t.synth).toMatchObject({ mix: 0.5, shift: 1, pitch: 7 });
     expect(header.project.surround).toBe("stereo");
+    // v1/v2 tracks have no placement: centred, natural width.
+    expect(t).toMatchObject({ pan: 0, width: 1, reverbPan: 0, reverbWidth: 1 });
   });
 });

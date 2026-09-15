@@ -73,6 +73,8 @@ export interface VoiceSynthParams {
   center: number;
   /** Ring-modulation carrier in Hz, 0 = off. */
   ring: number;
+  /** Rotates the whole field, -1..1 = ±180°. In stereo: left .. right. */
+  pan: number;
 }
 
 export type SynthKey = keyof VoiceSynthParams;
@@ -84,7 +86,7 @@ export const DEFAULT_SYNTH: VoiceSynthParams = {
   unison: 1, detune: 12, sub: 0, shimmer: 0,
   vibratoRate: 5, vibratoDepth: 0, drift: 0, formantRate: 0.5, formantDepth: 0,
   envPitch: 0, envFormant: 0, envWidth: 0,
-  width: 0.6, orbitRate: 0.2, orbitDepth: 0, ensemble: 0, rear: 0.3, lfe: 0, center: 0, ring: 0,
+  width: 0.6, orbitRate: 0.2, orbitDepth: 0, ensemble: 0, rear: 0.3, lfe: 0, center: 0, ring: 0, pan: 0,
 };
 
 export const CHORD_NAMES = ["Unison", "Octave", "Fifth", "Major", "Minor", "Sus4", "Wide"] as const;
@@ -151,6 +153,7 @@ export const SYNTH_SECTIONS: { title: string; params: ParamSpec[] }[] = [
   {
     title: "SPACE",
     params: [
+      spec("pan", "PAN", -1, 1, 0.01),
       spec("width", "WIDTH", 0, 1, 0.01),
       spec("orbitRate", "ORBIT RATE", 0, 4, 0.01, "Hz"),
       spec("orbitDepth", "ORBIT", 0, 1, 0.01),

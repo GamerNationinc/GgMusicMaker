@@ -24,8 +24,9 @@ import { encodeWav, decodeWav, type PcmSource, type DecodedPcm } from "../audio/
 import { normalizeSynth, SURROUND_ORDER, type SurroundLayout } from "../fx/voice-synth";
 
 export const SESSION_EXTENSION = "ggmm";
-// v1: tracks had `voice: { preset, mix }`; v2: `synth` (Voice Synth) + project.surround.
-export const FORMAT_VERSION = 2;
+// v1: tracks had `voice: { preset, mix }`; v2: `synth` (Voice Synth) + project.surround;
+// v3: per-track pan/width + reverbPan/reverbWidth. Older files are migrated on open.
+export const FORMAT_VERSION = 3;
 const MAGIC = "GGMM";
 const PREAMBLE = 12;
 
@@ -155,9 +156,19 @@ export function unpackSession(bytes: ArrayBuffer): UnpackedSession {
 /** Bring a project from any older format up to date: v1 voice presets become
  *  Voice Synth settings, missing blocks get defaults, values are clamped. */
 export function migrateProject(project: Project): Project {
+  const num = (v: unknown, lo: number, hi: number, dflt: number) =>
+    typeof v === "number" && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : dflt;
   const tracks = (project.tracks as (Track & { voice?: unknown })[]).map((t) => {
     const { voice, ...rest } = t;
-    return { ...rest, synth: normalizeSynth(t.synth, voice) } as Track;
+    return {
+      ...rest,
+      // v2 → v3: layer + reverb-send placement.
+      pan: num(t.pan, -1, 1, 0),
+      width: num(t.width, 0, 2, 1),
+      reverbPan: num(t.reverbPan, -1, 1, 0),
+      reverbWidth: num(t.reverbWidth, 0, 2, 1),
+      synth: normalizeSynth(t.synth, voice),
+    } as Track;
   });
   const surround: SurroundLayout = SURROUND_ORDER.includes(project.surround) ? project.surround : "stereo";
   return { ...project, tracks, surround };

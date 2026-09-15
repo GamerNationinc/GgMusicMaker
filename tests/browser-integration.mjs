@@ -306,6 +306,45 @@ async function main() {
   await page.waitForTimeout(150);
   check("Ctrl+Z removes the duplicate", (await page.$$(".head")).length === 3);
 
+  // --- layer pan / width -------------------------------------------------------
+  // Solo layer 1, pan it hard left through the real placer worklet and export:
+  // the right channel must be (near) silent. Then Ctrl+Z brings it back.
+  const setRange = (sel, v) =>
+    page.$eval(sel, (el, value) => {
+      el.value = String(value);
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    }, v);
+  await page.click(".head:nth-child(1) .chip.solo");
+  await page.click(".chip.fx");
+  await page.waitForTimeout(200);
+  await setRange(".rack .place input.pan", -1);
+  await page.waitForTimeout(300);
+  const panReadout = (await page.textContent(".rack .place .readout")).trim();
+  check("layer pan readout", panReadout === "L 100", panReadout);
+  const panned = await exportBytes();
+  await page.waitForTimeout(300);
+  await page.click(".dialog button");
+  await page.waitForTimeout(200);
+  const lr = (buf) => {
+    const s16 = new Int16Array(buf.buffer, buf.byteOffset + 44, (buf.length - 44) >> 1);
+    let l = 0, r = 0;
+    for (let i = 0; i < s16.length; i += 2) { l += s16[i] * s16[i]; r += s16[i + 1] * s16[i + 1]; }
+    return [Math.sqrt(l), Math.sqrt(r)];
+  };
+  const [pl, pr] = lr(panned);
+  check("hard-left layer renders with a silent right channel", pl > 1000 && pr < pl * 0.01, `L ${pl.toFixed(0)} R ${pr.toFixed(0)}`);
+  await page.click(".rack-title .chip");
+  await page.keyboard.press("Control+z"); // pan back to centre
+  await page.waitForTimeout(150);
+  await page.click(".head:nth-child(1) .chip.solo");
+  await page.waitForTimeout(150);
+  const centred = await exportBytes();
+  await page.waitForTimeout(300);
+  await page.click(".dialog button");
+  await page.waitForTimeout(200);
+  const [cl, cr] = lr(centred);
+  check("undo restores a centred layer", Math.abs(cl - cr) < cl * 0.05, `L ${cl.toFixed(0)} R ${cr.toFixed(0)}`);
+
   // --- Voice Synth stack + surround export ----------------------------------
   // Choir = 6 unison voices + harmonies spread to the rear, LFE and centre
   // sends. Rendered at 5.1 and 7.1 the WAV must be WAVE_FORMAT_EXTENSIBLE

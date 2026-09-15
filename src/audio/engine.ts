@@ -20,6 +20,7 @@ import { buildMasterBus, deviceChannelsFor, type MasterBus } from "./master";
 import { surroundChannels, type SurroundLayout } from "../fx/voice-synth";
 
 const SYNTH_WORKLET_URL = `${import.meta.env.BASE_URL}voice-synth-processor.js`;
+const PLACER_WORKLET_URL = `${import.meta.env.BASE_URL}placer-processor.js`;
 const RECORDER_WORKLET_URL = `${import.meta.env.BASE_URL}recorder-processor.js`;
 
 export class AudioEngine implements AudioBackend {
@@ -75,7 +76,7 @@ export class AudioEngine implements AudioBackend {
     this.convolver.connect(this.reverbReturn);
     this.reverbReturn.connect(this.master.input);
 
-    this.synthReady = this.loadWorklet(this.ctx);
+    this.synthReady = this.loadFxWorklets(this.ctx);
   }
 
   get isPlaying(): boolean {
@@ -90,20 +91,25 @@ export class AudioEngine implements AudioBackend {
     return this.ctx.state === "running";
   }
 
-  private async loadWorklet(
-    ctx: BaseAudioContext,
-    url = SYNTH_WORKLET_URL,
-  ): Promise<boolean> {
+  private async loadWorklet(ctx: BaseAudioContext, url: string): Promise<boolean> {
     try {
       if (!("audioWorklet" in ctx) || !ctx.audioWorklet) return false;
       await ctx.audioWorklet.addModule(url);
-      if (ctx === this.ctx && url === SYNTH_WORKLET_URL) this.synthAvailable = true;
       return true;
     } catch {
-      // WebKitGTK without AudioWorklet: the voice synth is unavailable (dry
-      // passthrough) and recording falls back to the ScriptProcessor path.
+      // WebKitGTK without AudioWorklet: the voice synth + placement are
+      // unavailable (dry passthrough) and recording falls back to the
+      // ScriptProcessor path.
       return false;
     }
+  }
+
+  /** Register the FX worklets (synth + placer) on a context. */
+  private async loadFxWorklets(ctx: BaseAudioContext): Promise<boolean> {
+    const ok =
+      (await this.loadWorklet(ctx, SYNTH_WORKLET_URL)) && (await this.loadWorklet(ctx, PLACER_WORKLET_URL));
+    if (ctx === this.ctx && ok) this.synthAvailable = true;
+    return ok;
   }
 
   /** Resume the context and make sure the synth worklet had a chance to load. */
@@ -219,9 +225,11 @@ export class AudioEngine implements AudioBackend {
   private ensureChannel(track: Track): TrackChannel {
     let ch = this.channels.get(track.id);
     if (!ch) ch = this.createChannel(track.id);
-    // Self-heal: if the worklet finished loading after this channel was built
-    // and the track now wants the synth, rebuild it with the synth node.
-    if (track.synth.mix > 0 && !ch.hasSynth && this.synthAvailable) {
+    // Self-heal: if the worklets finished loading after this channel was
+    // built and the track now needs them, rebuild it with the worklet nodes.
+    const needsWorklets =
+      track.synth.mix > 0 || track.pan !== 0 || track.width !== 1 || track.reverbPan !== 0 || track.reverbWidth !== 1;
+    if (needsWorklets && !ch.hasSynth && this.synthAvailable) {
       ch.dispose();
       this.channels.delete(track.id);
       ch = this.createChannel(track.id);
@@ -447,7 +455,7 @@ export class AudioEngine implements AudioBackend {
     const frames = Math.max(1, Math.ceil(duration * rate));
     const channels = surroundChannels(project.surround);
     const offline = new OfflineAudioContext(channels, frames, rate);
-    const hasSynth = await this.loadWorklet(offline);
+    const hasSynth = await this.loadFxWorklets(offline);
 
     const master = buildMasterBus(offline, channels, this.masterGainValue);
     const convolver = offline.createConvolver();

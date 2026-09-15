@@ -4,8 +4,9 @@
 //   input(gain: vol/mute/solo)
 //     -> EQ low-shelf -> mid peak -> high-shelf
 //     -> [voice synth worklet]     (stacked vocal engines; N-channel out)
+//     -> [placer: layer pan/width]
 //     -> output ----------------------------------> master (dry)
-//              \-> send(gain) ------------------->  reverb convolver (wet)
+//              \-> [placer: reverb pan/width] -> send(gain) -> reverb convolver (wet)
 //
 // The synth worklet is built with as many output channels as the master bus
 // has (2, 6 or 8), so a surround field lands on the bus discretely, with no
@@ -25,6 +26,7 @@ const EQ_MID_HZ = 1200;
 const EQ_HIGH_HZ = 4500;
 
 export const SYNTH_PROCESSOR = "voice-synth-processor";
+export const PLACER_PROCESSOR = "placer-processor";
 
 export class TrackChannel {
   readonly input: GainNode;
@@ -36,10 +38,13 @@ export class TrackChannel {
   private eqHigh: BiquadFilterNode;
 
   private synth: AudioWorkletNode | null = null;
+  private place: AudioWorkletNode | null = null;
+  private sendPlace: AudioWorkletNode | null = null;
 
   constructor(
     private ctx: BaseAudioContext,
-    hasSynthWorklet: boolean,
+    /** Whether the synth + placer worklets are registered on `ctx`. */
+    hasWorklets: boolean,
     /** Channels the master bus carries; the synth field is rendered into this many. */
     readonly busChannels: number,
   ) {
@@ -59,15 +64,16 @@ export class TrackChannel {
     this.eqHigh.type = "highshelf";
     this.eqHigh.frequency.value = EQ_HIGH_HZ;
 
-    if (hasSynthWorklet) {
+    if (hasWorklets) {
+      const opts = { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [busChannels] };
       try {
-        this.synth = new AudioWorkletNode(ctx as AudioContext, SYNTH_PROCESSOR, {
-          numberOfInputs: 1,
-          numberOfOutputs: 1,
-          outputChannelCount: [busChannels],
-        });
+        this.synth = new AudioWorkletNode(ctx as AudioContext, SYNTH_PROCESSOR, opts);
+        this.place = new AudioWorkletNode(ctx as AudioContext, PLACER_PROCESSOR, opts);
+        this.sendPlace = new AudioWorkletNode(ctx as AudioContext, PLACER_PROCESSOR, opts);
       } catch {
         this.synth = null;
+        this.place = null;
+        this.sendPlace = null;
       }
     }
 
@@ -75,16 +81,19 @@ export class TrackChannel {
     this.input.connect(this.eqLow);
     this.eqLow.connect(this.eqMid);
     this.eqMid.connect(this.eqHigh);
-    if (this.synth) {
+    if (this.synth && this.place && this.sendPlace) {
       this.eqHigh.connect(this.synth);
-      this.synth.connect(this.output);
+      this.synth.connect(this.place);
+      this.place.connect(this.output);
+      this.output.connect(this.sendPlace);
+      this.sendPlace.connect(this.send);
     } else {
       this.eqHigh.connect(this.output);
+      this.output.connect(this.send);
     }
-    this.output.connect(this.send);
   }
 
-  /** True if this channel could construct the voice synth node. */
+  /** True if this channel could construct the worklet nodes (synth + placers). */
   get hasSynth(): boolean {
     return this.synth !== null;
   }
@@ -108,6 +117,17 @@ export class TrackChannel {
     ramp(this.eqLow.gain, track.eq.low);
     ramp(this.eqMid.gain, track.eq.mid);
     ramp(this.eqHigh.gain, track.eq.high);
+
+    if (this.place && this.sendPlace) {
+      const set = (node: AudioWorkletNode, name: string, v: number) => {
+        const param = node.parameters.get(name);
+        if (param) ramp(param, v);
+      };
+      set(this.place, "pan", track.pan);
+      set(this.place, "width", track.width);
+      set(this.sendPlace, "pan", track.reverbPan);
+      set(this.sendPlace, "width", track.reverbWidth);
+    }
 
     if (this.synth) {
       const synth = track.synth;
@@ -134,6 +154,8 @@ export class TrackChannel {
       this.eqMid,
       this.eqHigh,
       this.synth,
+      this.place,
+      this.sendPlace,
     ]) {
       try {
         n?.disconnect();
