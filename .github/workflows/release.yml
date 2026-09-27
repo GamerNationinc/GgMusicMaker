@@ -26,8 +26,8 @@ jobs:
       - name: System packages
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev xvfb libgbm1 libnss3 libxss1 libgtk-3-0 desktop-file-utils
-          printf 'pcm.!default { type null }\nctl.!default { type hw card 0 }\n' > ~/.asoundrc
+          sudo apt-get install -y libasound2-dev pulseaudio libasound2-plugins xvfb libgbm1 libnss3 libxss1 libgtk-3-0 desktop-file-utils
+          bash scripts/ci-audio.sh
 
       - uses: actions/setup-node@v4
         with:

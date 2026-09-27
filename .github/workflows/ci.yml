@@ -5,7 +5,7 @@ name: CI
 # (including native-vs-JS DSP parity, which needs the engine built), the
 # production build, Chromium + WebKit browser checks, and the real Electron
 # app driven end to end under a virtual display (including the native engine
-# playing through ALSA's null device, since runners have no sound card).
+# playing through a PulseAudio null sink, since runners have no sound card).
 #
 # ubuntu-22.04 on purpose: glibc 2.35 matches the release build and SteamOS.
 
@@ -24,10 +24,11 @@ jobs:
       - name: System packages (ALSA headers for the engine, display for Electron)
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev xvfb libgbm1 libnss3 libxss1 libgtk-3-0
-          # No sound card on the runner: point ALSA's default at the null PCM
-          # so the native engine can open a device and run its clock.
-          printf 'pcm.!default { type null }\nctl.!default { type hw card 0 }\n' > ~/.asoundrc
+          sudo apt-get install -y libasound2-dev pulseaudio libasound2-plugins xvfb libgbm1 libnss3 libxss1 libgtk-3-0
+          # No sound card on the runner: a real-time virtual one (PulseAudio
+          # null sink behind ALSA's default), so the native engine's clock
+          # runs at wall speed — ALSA's plain null device doesn't pace.
+          bash scripts/ci-audio.sh
 
       - uses: actions/setup-node@v4
         with:
