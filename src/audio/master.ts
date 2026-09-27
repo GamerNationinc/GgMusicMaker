@@ -9,11 +9,17 @@
 //
 // Built the same way for the realtime AudioContext and the offline export
 // context, so what the meters show is what the WAV gets.
+//
+// `binaural`: the live bus on a stereo device can still run at 6/8 channels
+// and end in the binaural monitor worklet (public/binaural-processor.js),
+// which renders the speaker ring for headphones. Never used for export.
 
 export interface MasterBus {
   /** Where the track channels and the reverb return connect. */
   readonly input: GainNode;
   readonly channels: number;
+  /** True when the bus ends in the binaural headphone monitor. */
+  readonly binaural: boolean;
   /** Parallel tap on the mix *before* the limiter (for the analogue meter). */
   readonly preTap: AnalyserNode;
   /** Post-limiter analyser (for the LED meter). */
@@ -40,7 +46,9 @@ function pin(node: AudioNode, channels: number): void {
   node.channelInterpretation = "discrete";
 }
 
-export function buildMasterBus(ctx: BaseAudioContext, channels: number, gain = 0.9): MasterBus {
+export const BINAURAL_PROCESSOR = "binaural-processor";
+
+export function buildMasterBus(ctx: BaseAudioContext, channels: number, gain = 0.9, binaural = false): MasterBus {
   const input = ctx.createGain();
   input.gain.value = gain;
   const preTap = ctx.createAnalyser();
@@ -78,11 +86,31 @@ export function buildMasterBus(ctx: BaseAudioContext, channels: number, gain = 0
     merger.connect(post);
     nodes.push(splitter, merger);
   }
-  post.connect(ctx.destination);
+  let virtual = false;
+  if (binaural && channels > 2) {
+    try {
+      const node = new AudioWorkletNode(ctx as AudioContext, BINAURAL_PROCESSOR, {
+        numberOfInputs: 1,
+        numberOfOutputs: 1,
+        outputChannelCount: [2],
+        channelCount: channels,
+        channelCountMode: "explicit",
+        channelInterpretation: "discrete",
+      });
+      post.connect(node);
+      node.connect(ctx.destination);
+      nodes.push(node);
+      virtual = true;
+    } catch {
+      /* worklet missing: fall through to a plain connection (device downmix) */
+    }
+  }
+  if (!virtual) post.connect(ctx.destination);
 
   return {
     input,
     channels,
+    binaural: virtual,
     preTap,
     post,
     reduction() {

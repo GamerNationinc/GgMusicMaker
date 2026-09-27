@@ -29,6 +29,12 @@
   import { sessionDisplayName } from "../state/session";
   import { isTauri } from "../state/platform";
   import { onMount } from "svelte";
+  import { theme, cycleTheme } from "./themeStore";
+
+  function onTheme() {
+    const t = cycleTheme();
+    status.set(`Theme: ${t.label} (T to cycle).`);
+  }
 
   const sessionName = $derived(sessionDisplayName($sessionPath));
 
@@ -111,6 +117,10 @@
       case "Backspace":
         deleteSelectedClip();
         break;
+      case "t":
+      case "T":
+        onTheme();
+        break;
       case "r":
       case "R":
         if ($transport.isRecording) void stopRecording();
@@ -122,7 +132,7 @@
 
 <svelte:window on:keydown={onKey} on:beforeunload={onBeforeUnload} />
 
-<header class="app-header panel">
+<header class="app-header box" data-title="ggmusicmaker" data-title-right={$theme.label.toLowerCase()}>
   <div class="brand">
     <span class="logo">▶</span>
     <span class="title">GgMusic<span class="accent">Maker</span></span>
@@ -131,12 +141,15 @@
     </span>
   </div>
   <LoadMeter />
+  <button class="btn theme-btn" onclick={onTheme} title="Cycle colour mode (T)" data-role="theme">
+    <span class="theme-icon">◐</span> {$theme.label}
+  </button>
   <Transport />
 </header>
 
 <Toolbar />
 
-<main class="workspace">
+<main class="workspace box" data-title="layers">
   {#if !$lowPower}
     <MatrixRain />
   {/if}
@@ -146,8 +159,17 @@
 <FxRack />
 
 <footer class="bottom">
-  <AnalogMeter />
-  <div class="statusbar screen">{$status}</div>
+  <div class="box meter-box" data-title="vu · pre-limit">
+    <AnalogMeter />
+  </div>
+  <div class="box status-box" data-title="status">
+    <div class="keys" aria-label="Keyboard shortcuts">
+      {#each [["space", "play"], ["s", "split"], ["r", "rec"], ["del", "delete"], ["t", "theme"], ["^z", "undo"], ["^d", "dup layer"], ["^s", "save"]] as [k, what]}
+        <span class="key"><b>{k}</b> {what}</span>
+      {/each}
+    </div>
+    <div class="statusbar screen">{$status}</div>
+  </div>
 </footer>
 
 <ExportDialog />
@@ -156,9 +178,19 @@
   .app-header {
     display: flex;
     align-items: center;
-    gap: 18px;
-    padding: 8px 12px;
+    gap: 14px;
+    padding: 8px 10px 6px;
+    margin: 8px 6px 0;
     flex: 0 0 auto;
+  }
+  .theme-btn {
+    font-size: 11px;
+    padding: 0 10px;
+    min-width: 128px;
+    color: var(--box-title);
+  }
+  .theme-icon {
+    color: var(--magenta);
   }
   .brand {
     display: flex;
@@ -168,14 +200,13 @@
   .logo {
     color: var(--green);
     font-size: 22px;
-    text-shadow: 0 0 8px rgba(90, 240, 150, 0.6);
+    text-shadow: var(--glow);
   }
   .title {
     font-weight: bold;
     letter-spacing: 2px;
     font-size: 20px;
-    color: var(--magenta);
-    text-shadow: 2px 2px 0 var(--panel-lo);
+    color: var(--ink);
   }
   .accent {
     color: var(--cyan);
@@ -194,24 +225,51 @@
   .workspace {
     flex: 1 1 auto;
     min-height: 0;
+    min-width: 0;
     display: flex;
-    overflow: hidden;
     position: relative; /* rain canvas anchors here, behind the timeline */
     background: var(--bg);
+    margin: 8px 6px 0;
   }
+  /* No overflow:hidden here — it would clip the box title; the rain is
+     inset:0 and the timeline scrolls inside itself. */
   .workspace > :global(.timeline) {
     position: relative;
     z-index: 1;
   }
   .title {
-    text-shadow: 2px 2px 0 var(--panel-lo), var(--glow);
+    text-shadow: var(--glow);
   }
   .bottom {
     flex: 0 0 auto;
     display: flex;
-    align-items: flex-end;
+    align-items: stretch;
     gap: 6px;
-    margin: 6px;
+    margin: 8px 6px 6px;
+  }
+  .meter-box {
+    padding: 11px 2px 2px;
+    display: flex;
+  }
+  .status-box {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 12px 6px 6px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    gap: 6px;
+  }
+  .keys {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+    font-size: 11px;
+    color: var(--ink-dim);
+    padding: 0 4px;
+  }
+  .key b {
+    color: var(--box-title);
   }
   .statusbar {
     flex: 1 1 auto;
@@ -220,5 +278,6 @@
     min-height: 26px;
     display: flex;
     align-items: center;
+    flex: 0 0 auto;
   }
 </style>

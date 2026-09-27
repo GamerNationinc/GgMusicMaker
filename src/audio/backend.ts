@@ -68,6 +68,12 @@ export interface AudioBackend {
    *  the full layout. */
   readonly liveChannels: number;
   readonly deviceMaxChannels: number;
+  /** Headphone 3D monitor: on a device with fewer channels than the layout,
+   *  run the bus at full width and render it binaurally instead of folding
+   *  it down. Returns true when the live graph was rebuilt. */
+  setHeadphones3d(on: boolean): boolean;
+  /** True while the live bus ends in the binaural monitor. */
+  readonly binauralMonitor: boolean;
 
   // Transport
   play(project: Project, fromTime: number): void;

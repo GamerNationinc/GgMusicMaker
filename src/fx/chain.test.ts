@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { DEFAULT_MORPH } from "./morph";
 import type { Track } from "../audio/types";
 import { DEFAULT_SYNTH, SYNTH_PRESETS, presetParams } from "./voice-synth";
 import { FX_ALL_ON, anyFxLit, normalizeFx, panText, slotEngaged, slotLit, slotSummary, widthText } from "./chain";
@@ -17,6 +18,7 @@ const base = (over: Partial<Track> = {}): Track => ({
   reverbWidth: 1,
   eq: { low: 0, mid: 0, high: 0 },
   synth: { ...DEFAULT_SYNTH },
+  morph: { ...DEFAULT_MORPH },
   fx: { ...FX_ALL_ON },
   color: "#fff",
   clips: [],
@@ -70,6 +72,6 @@ describe("fx chain strip", () => {
 
   it("normalizeFx defaults missing switches to on and ignores junk", () => {
     expect(normalizeFx(undefined)).toEqual(FX_ALL_ON);
-    expect(normalizeFx({ eq: false, synth: "yes" })).toEqual({ place: true, eq: false, synth: true, reverb: true });
+    expect(normalizeFx({ eq: false, synth: "yes" })).toEqual({ place: true, eq: false, morph: true, synth: true, reverb: true });
   });
 });

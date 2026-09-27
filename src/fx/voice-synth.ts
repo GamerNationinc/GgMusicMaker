@@ -75,6 +75,10 @@ export interface VoiceSynthParams {
   ring: number;
   /** Rotates the whole field, -1..1 = ±180°. In stereo: left .. right. */
   pan: number;
+  /** Index into ORBIT_PATHS: the shape the orbit moves the field in. */
+  path: number;
+  /** Per-speaker decorrelation, 0..1: the field envelops instead of pin-pointing. */
+  diffuse: number;
 }
 
 export type SynthKey = keyof VoiceSynthParams;
@@ -86,8 +90,11 @@ export const DEFAULT_SYNTH: VoiceSynthParams = {
   unison: 1, detune: 12, sub: 0, shimmer: 0,
   vibratoRate: 5, vibratoDepth: 0, drift: 0, formantRate: 0.5, formantDepth: 0,
   envPitch: 0, envFormant: 0, envWidth: 0,
-  width: 0.6, orbitRate: 0.2, orbitDepth: 0, ensemble: 0, rear: 0.3, lfe: 0, center: 0, ring: 0, pan: 0,
+  width: 0.6, orbitRate: 0.2, orbitDepth: 0, ensemble: 0, rear: 0.3, lfe: 0, center: 0, ring: 0, pan: 0, path: 0, diffuse: 0,
 };
+
+/** Orbit shapes, in worklet index order (0 = the original pendulum swing). */
+export const ORBIT_PATHS = ["PENDULUM", "CIRCLE", "FLY-OVER", "FIGURE-8", "SWARM"] as const;
 
 export const CHORD_NAMES = ["Unison", "Octave", "Fifth", "Major", "Minor", "Sus4", "Wide"] as const;
 
@@ -158,6 +165,7 @@ export const SYNTH_SECTIONS: { title: string; params: ParamSpec[] }[] = [
       spec("orbitRate", "ORBIT RATE", 0, 4, 0.01, "Hz"),
       spec("orbitDepth", "ORBIT", 0, 1, 0.01),
       spec("ensemble", "ENSEMBLE", 0, 1, 0.01),
+      spec("diffuse", "DIFFUSE", 0, 1, 0.01),
       spec("rear", "REAR", 0, 1, 0.01),
       spec("center", "CENTER", 0, 1, 0.01),
       spec("lfe", "LFE", 0, 1, 0.01),
@@ -166,7 +174,7 @@ export const SYNTH_SECTIONS: { title: string; params: ParamSpec[] }[] = [
 ];
 
 export const SYNTH_SPECS: Record<SynthKey, ParamSpec> = Object.fromEntries(
-  [...SYNTH_SECTIONS.flatMap((s) => s.params), spec("mix", "MIX", 0, 1, 0.01), spec("chord", "CHORD", 0, 6, 1)].map(
+  [...SYNTH_SECTIONS.flatMap((s) => s.params), spec("mix", "MIX", 0, 1, 0.01), spec("chord", "CHORD", 0, 6, 1), spec("path", "PATH", 0, 4, 1)].map(
     (s) => [s.key, s],
   ),
 ) as Record<SynthKey, ParamSpec>;
@@ -186,8 +194,8 @@ export function synthIsActive(p: VoiceSynthParams): boolean {
 
 // ---- presets ---------------------------------------------------------------
 
-export type PresetCategory = "Classic" | "Stacks" | "Synth" | "Space";
-export const PRESET_CATEGORIES: PresetCategory[] = ["Classic", "Stacks", "Synth", "Space"];
+export type PresetCategory = "Classic" | "Stacks" | "Synth" | "Space" | "Immersive";
+export const PRESET_CATEGORIES: PresetCategory[] = ["Classic", "Stacks", "Synth", "Space", "Immersive"];
 
 export interface SynthPreset {
   name: string;
@@ -243,6 +251,48 @@ export const SYNTH_PRESETS: SynthPreset[] = [
     params: {
       mix: 1, shift: 1, unison: 8, detune: 60, drift: 40, glide: 0.4, ensemble: 1, width: 1, rear: 0.8,
       envPitch: -0.5, vibratoRate: 0.8, vibratoDepth: 30,
+    },
+  },
+  // Immersive: built for 5.1/7.1 (or the 3D headphone monitor) — layers
+  // wrapped all the way round, moving, and diffused so there is no "hole".
+  {
+    name: "Halo 360",
+    category: "Immersive",
+    params: {
+      mix: 0.75, shift: 1, unison: 8, detune: 14, drift: 10, shimmer: 0.3, polyvox: 0.4, chord: 1,
+      width: 1, rear: 1, orbitRate: 0.08, orbitDepth: 1, path: 1, diffuse: 0.6, ensemble: 0.4, center: 0.5, lfe: 0.2,
+    },
+  },
+  {
+    name: "Fly-Over",
+    category: "Immersive",
+    params: {
+      mix: 0.8, shift: 1, unison: 4, detune: 20, sub: 0.3, polyvox: 0.5, chord: 2,
+      width: 1, rear: 1, orbitRate: 0.15, orbitDepth: 1, path: 2, diffuse: 0.4, center: 0.3, lfe: 0.4,
+    },
+  },
+  {
+    name: "Vortex",
+    category: "Immersive",
+    params: {
+      mix: 0.9, shift: 1, unison: 6, detune: 35, drift: 20, vocoder: 0.4, chord: 3, character: 0.4,
+      width: 1, rear: 1, orbitRate: 1.2, orbitDepth: 1, path: 1, envWidth: 0.4, diffuse: 0.3, ensemble: 0.5,
+    },
+  },
+  {
+    name: "Crossfire",
+    category: "Immersive",
+    params: {
+      mix: 0.8, shift: 1, unison: 6, detune: 18, polyvox: 0.6, chord: 5,
+      width: 1, rear: 0.9, orbitRate: 0.35, orbitDepth: 0.8, path: 3, diffuse: 0.3, center: 0.4,
+    },
+  },
+  {
+    name: "Hive",
+    category: "Immersive",
+    params: {
+      mix: 0.9, shift: 1, unison: 8, detune: 45, drift: 30, compuvox: 0.3, character: 0.3,
+      width: 1, rear: 1, orbitRate: 0.6, orbitDepth: 1, path: 4, diffuse: 0.5, ensemble: 0.6,
     },
   },
 ];

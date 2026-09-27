@@ -21,6 +21,8 @@ import { surroundChannels, type SurroundLayout } from "../fx/voice-synth";
 
 const SYNTH_WORKLET_URL = `${import.meta.env.BASE_URL}voice-synth-processor.js`;
 const PLACER_WORKLET_URL = `${import.meta.env.BASE_URL}placer-processor.js`;
+const MORPH_WORKLET_URL = `${import.meta.env.BASE_URL}morph-processor.js`;
+const BINAURAL_WORKLET_URL = `${import.meta.env.BASE_URL}binaural-processor.js`;
 const RECORDER_WORKLET_URL = `${import.meta.env.BASE_URL}recorder-processor.js`;
 
 export class AudioEngine implements AudioBackend {
@@ -30,6 +32,8 @@ export class AudioEngine implements AudioBackend {
    *  layout changes; `master.input` is what channels and the reverb feed. */
   private master: MasterBus;
   private surround: SurroundLayout = "stereo";
+  /** Render a wider-than-device bus binaurally (see master.ts). */
+  private headphones3d = true;
   private masterGainValue = 0.9;
   private convolver: ConvolverNode;
   private reverbReturn: GainNode;
@@ -104,13 +108,21 @@ export class AudioEngine implements AudioBackend {
     }
   }
 
-  /** Register the FX worklets (synth + placer) on a context. */
+  /** Register the FX worklets (synth + morph + placer, and the binaural
+   *  monitor on the live context) on a context. */
   private async loadFxWorklets(ctx: BaseAudioContext): Promise<boolean> {
     const ok =
-      (await this.loadWorklet(ctx, SYNTH_WORKLET_URL)) && (await this.loadWorklet(ctx, PLACER_WORKLET_URL));
-    if (ctx === this.ctx && ok) this.synthAvailable = true;
+      (await this.loadWorklet(ctx, SYNTH_WORKLET_URL)) &&
+      (await this.loadWorklet(ctx, MORPH_WORKLET_URL)) &&
+      (await this.loadWorklet(ctx, PLACER_WORKLET_URL));
+    if (ctx === this.ctx) {
+      if (ok) this.synthAvailable = true;
+      this.binauralAvailable = await this.loadWorklet(ctx, BINAURAL_WORKLET_URL);
+    }
     return ok;
   }
+
+  private binauralAvailable = false;
 
   /** Resume the context and make sure the synth worklet had a chance to load. */
   async ensureRunning(): Promise<void> {
@@ -140,19 +152,33 @@ export class AudioEngine implements AudioBackend {
     return this.ctx.destination.maxChannelCount || 2;
   }
 
+  get binauralMonitor(): boolean {
+    return this.master.binaural;
+  }
+
+  setHeadphones3d(on: boolean): boolean {
+    this.headphones3d = on;
+    return this.setSurround(this.surround);
+  }
+
   /** Switch the output layout. Rebuilds the master bus and every track
-   *  channel when the live channel count changes, so the worklets get the
-   *  new output width. The store reschedules playback afterwards. */
+   *  channel when the live channel count (or the binaural monitor) changes,
+   *  so the worklets get the new output width. The store reschedules
+   *  playback afterwards. */
   setSurround(layout: SurroundLayout): boolean {
     this.surround = layout;
     const wanted = surroundChannels(layout);
-    const live = deviceChannelsFor(wanted, this.deviceMaxChannels);
-    if (live === this.master.channels) return false;
+    const device = deviceChannelsFor(wanted, this.deviceMaxChannels);
+    // Device narrower than the layout: with the 3D monitor, keep the bus at
+    // full width and render it for headphones rather than folding it down.
+    const binaural = this.headphones3d && this.binauralAvailable && device < wanted;
+    const live = binaural ? wanted : device;
+    if (live === this.master.channels && binaural === this.master.binaural) return false;
 
     const dest = this.ctx.destination;
     try {
-      if (live > 2) {
-        dest.channelCount = live;
+      if (device > 2) {
+        dest.channelCount = device;
         dest.channelCountMode = "explicit";
         dest.channelInterpretation = "discrete";
       } else {
@@ -168,7 +194,7 @@ export class AudioEngine implements AudioBackend {
     this.stopSources();
     this.reverbReturn.disconnect();
     this.master.dispose();
-    this.master = buildMasterBus(this.ctx, live, this.masterGainValue);
+    this.master = buildMasterBus(this.ctx, live, this.masterGainValue, binaural);
     this.meterBuf = new Uint8Array(new ArrayBuffer(this.master.post.fftSize));
     this.preTimeBuf = new Float32Array(new ArrayBuffer(4 * this.master.preTap.fftSize));
     this.preFreqBuf = new Uint8Array(new ArrayBuffer(this.master.preTap.frequencyBinCount));
@@ -228,7 +254,7 @@ export class AudioEngine implements AudioBackend {
     // Self-heal: if the worklets finished loading after this channel was
     // built and the track now needs them, rebuild it with the worklet nodes.
     const needsWorklets =
-      track.synth.mix > 0 || track.pan !== 0 || track.width !== 1 || track.reverbPan !== 0 || track.reverbWidth !== 1;
+      track.synth.mix > 0 || track.morph.mix > 0 || track.pan !== 0 || track.width !== 1 || track.reverbPan !== 0 || track.reverbWidth !== 1;
     if (needsWorklets && !ch.hasSynth && this.synthAvailable) {
       ch.dispose();
       this.channels.delete(track.id);

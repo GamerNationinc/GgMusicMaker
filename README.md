@@ -46,6 +46,13 @@ send on every layer and a master limiter for the final level.
   - **LAYER pan / width** on the whole layer (dry + FX); the Voice Synth has its
     own PAN too. Stereo: mid/side width + constant-power balance. On a 5.1/7.1
     bus, pan turns the field around the listener.
+- 🧪 **MORPH** — eight completely different engines in one slot, each with its own
+  knobs: FM VOX, GRAIN CLOUD, STRINGS, VOWEL, FOLD, CHAOS (Lorenz), SPECTRAL
+  (phase vocoder), HARMONIC (just-intonation resonators, A432 / 528 / Schumann
+  roots, binaural beat, ear-soft). Every engine is spread round the listener with
+  SPREAD / PATH / MOTION / DIFFUSE.
+- 🎧 **3D headphone monitor** — hear 5.1/7.1 binaurally on a stereo device.
+- 🎨 **Colour themes** (`T`): Matrix, Red, Red/Black, Cyberpunk, Amber, btop.
 - 🔊 **Stereo / 5.1 / 7.1 output** (Voice Synth → SPACE → OUTPUT). The synth's
   field is VBAP-panned onto a real speaker ring; the exported WAV is a proper
   multichannel `WAVE_FORMAT_EXTENSIBLE` file with a speaker mask. A stereo

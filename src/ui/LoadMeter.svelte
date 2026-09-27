@@ -63,12 +63,12 @@
   }
   .lamp {
     padding: 0 4px;
-    border: 1px solid var(--bevel-dark);
+    border: 1px solid var(--box);
     color: var(--ink-dim);
     font-weight: bold;
   }
   .lamp.lit {
-    color: #000;
+    color: var(--on-accent);
     background: var(--danger);
     border-color: var(--danger);
     text-shadow: none;
@@ -81,12 +81,12 @@
     padding: 1px 6px;
     color: var(--ink-dim);
     background: transparent;
-    border: 1px solid var(--bevel-dark);
+    border: 1px solid var(--box);
     cursor: pointer;
     min-height: 0;
   }
   .eco.on {
-    color: #000;
+    color: var(--on-accent);
     background: var(--green);
     border-color: var(--green);
   }

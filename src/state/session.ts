@@ -23,6 +23,7 @@ import type { ReverbSpace } from "../audio/reverb";
 import { encodeWav, decodeWav, type PcmSource, type DecodedPcm } from "../audio/wav";
 import { normalizeSynth, SURROUND_ORDER, type SurroundLayout } from "../fx/voice-synth";
 import { normalizeFx } from "../fx/chain";
+import { normalizeMorph } from "../fx/morph";
 
 export const SESSION_EXTENSION = "ggmm";
 // v1: tracks had `voice: { preset, mix }`; v2: `synth` (Voice Synth) + project.surround;
@@ -170,6 +171,8 @@ export function migrateProject(project: Project): Project {
       reverbPan: num(t.reverbPan, -1, 1, 0),
       reverbWidth: num(t.reverbWidth, 0, 2, 1),
       synth: normalizeSynth(t.synth, voice),
+      // v4 → v5: the MORPH module (off for old sessions).
+      morph: normalizeMorph(t.morph),
       // v3 → v4: power switches, all on.
       fx: normalizeFx(t.fx),
     } as Track;

@@ -12,6 +12,9 @@
   import { masterMeter, masterSpectrum } from "../state/store";
   import { toDb, ballistics } from "../audio/spectrum";
   import { HEAD_WIDTH } from "./constants";
+  import { get } from "svelte/store";
+  import { theme } from "./themeStore";
+  import type { Theme } from "./themes";
 
   const W = HEAD_WIDTH - 6; // sits flush under the LAYERS column
   const H = 118;
@@ -31,13 +34,21 @@
   const HOLD_MS = 1500;
   const LAMP_MS = 800;
 
-  const GREEN = "#37e07a";
-  const GREEN_DIM = "#1c7a44";
-  const GREEN_HI = "#b8ffd0";
-  const RED = "#ff4a4a";
-  const AMBER = "#ffb020";
-  const MAGENTA = "#ff3ca0";
-  const SHADOW = "#04160b";
+  // Colours follow the theme (see themes.ts): phosphor, dim box line,
+  // bright ink for the needle, and the btop meter gradient for the zones.
+  let GREEN = "", GREEN_DIM = "", GREEN_HI = "", RED = "", AMBER = "", MAGENTA = "", SHADOW = "", FACE = "";
+  function useTheme(t: Theme) {
+    const k = t.tokens;
+    GREEN = k["meter-lo"];
+    GREEN_DIM = k.box;
+    GREEN_HI = k.ink;
+    RED = k["meter-hi"];
+    AMBER = k["meter-mid"];
+    MAGENTA = k.magenta;
+    SHADOW = k.bg;
+    FACE = k["panel-lo"];
+  }
+  useTheme(get(theme));
   const FONT = "bold 8px 'Courier New', 'DejaVu Sans Mono', monospace";
 
   let canvas: HTMLCanvasElement;
@@ -185,7 +196,7 @@
     for (let c = 0; c < COLS; c++) put(c, FACE_ROWS, "─", GREEN_DIM);
 
     // ---- paint ------------------------------------------------------------
-    ctx.fillStyle = "#020a05";
+    ctx.fillStyle = FACE;
     ctx.fillRect(0, 0, W, H);
     // faint CRT scanlines
     ctx.fillStyle = "rgba(0,0,0,0.25)";
@@ -208,6 +219,7 @@
   }
 
   $effect(() => {
+    useTheme($theme); // also repaints on a theme switch while the meter idles
     draw($masterMeter.peak, $masterMeter.reduction, $masterSpectrum);
   });
 </script>
@@ -224,8 +236,6 @@
 <style>
   .meter {
     flex: 0 0 auto;
-    border: 2px solid var(--bevel-dark);
-    background: #020a05;
-    box-shadow: 0 0 12px rgba(55, 224, 122, 0.15) inset;
+    background: var(--panel-lo);
   }
 </style>

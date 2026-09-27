@@ -3,7 +3,7 @@
 The single place that says **what this repo is, what is proven to work, where
 everything lives, and where it is going.** Keep it current when features land.
 
-_Last updated: 2026-09-15 (branch `main`)._
+_Last updated: 2026-09-26 (branch `morph-surround-themes`)._
 
 ---
 
@@ -84,6 +84,15 @@ launched on this Steam Deck under KDE/Wayland.
 
 | **Native playback measured and fixed** — first time the app was played on the Deck itself (session opened through the Tauri dialog, 3 layers, Choir + Chipmunk on two of them). It was "super laggy": `perf` on the WebKitWebProcess main thread showed 98 % in one pixel loop inside libwebkit2gtk (Skia software raster). Cause: `lib.rs` had forced `WEBKIT_DISABLE_DMABUF_RENDERER=1` since v1 as a precaution; on WebKitGTK 2.50 that path re-rasterises and copies the whole window every animation frame. Removed. Also: a layer with nothing engaged now bypasses its three worklet nodes entirely (`TrackChannel.route`), and an explicit stereo stage keeps mono layers L = R on the bus without the worklets. | Native, rebuilt AppImage, `top -H` on the WebKit process while playing: main thread **98 % → 12–15 %** (app's own CPU readout 14 %), audio thread 30 % with the FX session, 20 % dry (was 25–29 %); window renders with the GPU renderer. The synth DSP itself was cleared first: `jsc` from the same WebKitGTK 2.50.4 runs it as fast as V8 (Chipmunk 3 %, Choir 5 % per layer). Browser suite 49/49 ×2 |
 
+### Added 2026-09-26
+
+| Feature | Verified how |
+|---|---|
+| **MORPH** — a new FX slot between EQ and the Voice Synth (`LAYER ▸ EQ ▸ MORPH ▸ VOICE SYNTH ▸ REVERB`), one worklet (`public/morph-processor.js`) hosting eight unrelated engines, each with its own four macro knobs: FM VOX (voice-as-modulator phase modulation), GRAIN CLOUD (2 s granular, grains sprayed round the ring), STRINGS (Karplus-Strong chord), VOWEL (3-formant A-E-I-O-U tract), FOLD (sine wavefolder + Chebyshev T_n), CHAOS (Lorenz attractor → SVF + flight path), SPECTRAL (phase-vocoder STFT: freeze / smear / bin-shift / robot / whisper, 4 bands placed apart), HARMONIC (resonators on the harmonic series of A440 / A432 / 528 / Schumann×16 / φ partials, binaural beat, ear-soft 2–5 kHz dip). 19 presets. Every engine's voices are VBAP-placed with SPREAD, PATH (static, circle, pendulum, fly-over, figure-8, swarm, Lorenz), MOTION and DIFFUSE. Picking an engine loads its first preset. Sessions: v4 files open with MORPH off. | 32 unit tests run the worklet in Node (`src/fx/morph.test.ts`): every preset finite, ≤ 0 dBFS, within −10..+6 dB of the input; all 8 engines differ pairwise; 7.1 reaches Ls/Rs/Lb/Rb and never LFE; deterministic. Browser: Grain Halo alone in a 7.1 export puts −25..−29 dB on every back/side channel, LFE silent |
+| **Voice Synth surround** — ORBIT PATH (pendulum = old behaviour, circle, fly-over, figure-8, swarm), DIFFUSE (per-speaker all-pass decorrelation, LFE excluded), five **Immersive** presets (Halo 360, Fly-Over, Vortex, Crossfire, Hive). The synth now analyses and passes through surround channels arriving from MORPH. | Unit: each path renders differently; diffuse drops L/R correlation from > 0.99 to < 0.7 at similar level; upstream channel 5 passes at (1 − mix) |
+| **3D headphone monitor** — on a device with fewer channels than the layout (the Deck), the live bus stays 6/8 channels and ends in `public/binaural-processor.js` (Woodworth ITD, head-shadow ILD, rear pinna darkening, LFE to both ears) instead of the flat fold-down. On by default, `🎧 3D` toggle in Voice Synth → SPACE → OUTPUT, remembered in `localStorage` (`ggmm.headphones3d`). Export is unaffected. | Unit (`src/audio/binaural.test.ts`): side speakers land in their ear, centre stays centred, rear is darker than front. **Not yet heard on the Deck.** |
+| **Colour themes + btop HUD** — MATRIX, RED, RED/BLACK, CYBERPUNK (neon haze overlay), AMBER, BTOP; header `◐` button or `T` cycles, remembered (`ggmm.theme`). Themes remap the existing CSS variables, so every component follows; canvases (rain, lanes, VU, LED meter) read the tokens; track colours map through a per-theme lane palette. Panels are btop-style boxes with the title in the border. | `src/ui/themes.test.ts` (34 tests): every theme ink ≥ 7:1 and dim ink ≥ 4.5:1 on every panel shade, accents ≥ 4.5:1, clip colours ≥ 3:1. Browser: theme cycles + persists. Screenshots of all six reviewed |
+
 ### Native Steam Deck build
 
 | Step | Verified how |
@@ -155,6 +164,7 @@ GgMusicMaker/
 │   │   ├── types.ts               Project / Track / Clip / TransportState model, id + colour helpers
 │   │   └── wav.ts (+test)         WAV encoder (plain / extensible multichannel) + 16-bit PCM decoder
 │   ├── fx/
+│   │   ├── morph.ts (+test)       MORPH model: 8 engines + knob labels, tunings, paths, presets. The test runs the worklet in Node
 │   │   ├── voice-synth.ts (+test) Voice Synth model: params + UI specs, presets, surround layouts,
 │   │   │                          v1 voice → synth migration. The test also runs the worklet DSP in Node
 │   │   ├── placer.test.ts         Runs public/placer-processor.js in Node (pan/width stage)
@@ -181,10 +191,13 @@ GgMusicMaker/
 │       ├── MatrixRain.svelte      Falling-glyph backdrop behind the lanes (20 fps; off in ECO / when hidden)
 │       ├── ExportDialog.svelte    Retro export progress popup
 │       ├── constants.ts           LANE_HEIGHT, HEAD_WIDTH, RULER_HEIGHT (keep heads and lanes aligned)
+│       ├── themes.ts (+test)      Colour themes: token maps, lane palettes, contrast maths; themeStore.ts = persisted store
 │       └── theme.css              Retro pixel / DOOM-status-bar theme, touch-sized controls
 │
 ├── public/                        Served as-is; AudioWorklets must be plain files
 │   ├── voice-synth-processor.js   The Voice Synth DSP (engines, stack, modulation, surround field)
+│   ├── morph-processor.js         MORPH DSP: the eight engines, per-voice ring placement, paths, diffusion
+│   ├── binaural-processor.js      Headphone 3D monitor: 5.1/7.1 bus → 2 ears (ITD, ILD, rear cue)
 │   ├── placer-processor.js        Pan + width for a whole signal, stereo (M/S + balance) or surround (VBAP rotate)
 │   └── recorder-processor.js      Audio-thread capture for recording
 │

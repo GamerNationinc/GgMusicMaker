@@ -120,13 +120,26 @@ async function main() {
     const c = document.querySelector("canvas.meter");
     const dpr = window.devicePixelRatio || 1;
     const d = c.getContext("2d").getImageData(5 * dpr, 70 * dpr, 40 * dpr, 7 * dpr).data;
-    let best = { r: 0, g: 0, b: 0 };
-    for (let i = 0; i < d.length; i += 4) if (d[i] > best.r) best = { r: d[i], g: d[i + 1], b: d[i + 2] };
+    // Lit = the theme's warning/over colours (--meter-mid / --meter-hi);
+    // unlit = the dim box line. Themes change the hues, so read them.
+    const css = getComputedStyle(document.documentElement);
+    const hex = (v) => {
+      const h = css.getPropertyValue(v).trim().replace("#", "");
+      return [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16));
+    };
+    const lit = [hex("--meter-mid"), hex("--meter-hi")];
+    let best = { r: 0, g: 0, b: 0, dist: 1e9 };
+    for (let i = 0; i < d.length; i += 4) {
+      for (const [r, g, b] of lit) {
+        const dist = Math.abs(d[i] - r) + Math.abs(d[i + 1] - g) + Math.abs(d[i + 2] - b);
+        if (dist < best.dist) best = { r: d[i], g: d[i + 1], b: d[i + 2], dist };
+      }
+    }
     return best;
   });
   check(
     "analogue meter PEAK lamp lights on a hot signal",
-    lamp.r > 200 && lamp.b < 120,
+    lamp.dist < 40,
     `rgb(${lamp.r},${lamp.g},${lamp.b})`,
   );
   await page.click("button[aria-label='Stop']");
@@ -406,7 +419,42 @@ async function main() {
     return db;
   }
   await exportSurround("5.1", 6, 0x3f);
-  await exportSurround("7.1", 8, 0x63f);
+  const db71 = await exportSurround("7.1", 8, 0x63f);
+
+  // --- MORPH: a second, different engine rack, spread round the ring ------
+  await page.click(".slot.morph .pick");
+  await page.waitForTimeout(100);
+  check("MORPH shows all eight engines", (await page.$$(".engine")).length === 8);
+  await page.click(".engine:has-text('GRAIN CLOUD')");
+  await page.waitForTimeout(300);
+  const morphSummary = (await page.textContent(".slot.morph .summary")).trim();
+  check("picking an engine loads its first preset", morphSummary === "Grain Halo · 60%", morphSummary);
+  check("the knobs are relabelled for the engine", (await page.textContent(".morph-knobs")).includes("DENSITY"));
+  // Measure MORPH on its own: bypass the synth so only the morph field plays.
+  await page.click(".slot.synth .power");
+  await page.waitForTimeout(200);
+  const morphBytes = await exportBytes();
+  {
+    const pcm = new Int16Array(morphBytes.buffer, morphBytes.byteOffset + 68, (morphBytes.length - 68) >> 1);
+    const rms = new Array(8).fill(0);
+    for (let i = 0; i < pcm.length; i++) rms[i % 8] += pcm[i] * pcm[i];
+    const db = rms.map((s) => (s ? 20 * Math.log10(Math.sqrt(s / (pcm.length / 8)) / 32768) : -Infinity));
+    // Grain Halo sprays grains round the whole ring. With the synth bypassed
+    // nothing else could reach the back / side speakers (dry is L/R only).
+    check(
+      "MORPH grains reach the 7.1 back + side speakers on their own",
+      [4, 5, 6, 7].every((c) => db[c] > -50) && db[3] === -Infinity,
+      db.map((d) => d.toFixed(0)).join(" ") + ` (Choir-only back pair was ${db71[4].toFixed(0)} ${db71[5].toFixed(0)})`,
+    );
+  }
+  await page.waitForTimeout(300);
+  await page.click(".dialog button");
+  await page.waitForTimeout(200);
+  await page.click(".slot.morph .power");
+  await page.click(".slot.synth .power"); // synth back on
+  await page.click(".slot.synth .pick");
+  await page.waitForTimeout(100);
+  check("3D headphone toggle is offered", (await page.$("button:has-text('3D')")) !== null);
   await page.click("button.surround:has-text('Stereo')");
   await page.waitForTimeout(200);
   check("surround change is undoable", await page.isEnabled("button.undo"));
@@ -427,6 +475,14 @@ async function main() {
   await page.click("button.eco");
   await page.waitForTimeout(150);
   check("ECO off brings the rain back", (await page.$("canvas.rain")) !== null);
+
+  // --- colour themes --------------------------------------------------------
+  const theme0 = await page.evaluate(() => document.documentElement.dataset.theme);
+  await page.click("[data-role=theme]");
+  await page.waitForTimeout(150);
+  const theme1 = await page.evaluate(() => document.documentElement.dataset.theme);
+  check("THEME cycles the colour mode", theme0 === "matrix" && theme1 !== theme0, `${theme0} → ${theme1}`);
+  check("theme is remembered", (await page.evaluate(() => localStorage.getItem("ggmm.theme"))) === theme1);
 
   await browser.close();
   server.close();

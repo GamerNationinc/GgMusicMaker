@@ -53,7 +53,7 @@
   }
 </script>
 
-<div class="toolbar panel">
+<div class="toolbar box" data-title="tools">
   <input
     bind:this={fileInput}
     type="file"
@@ -115,7 +115,8 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    padding: 8px 10px;
+    padding: 8px 8px 6px;
+    margin: 8px 6px 0;
     flex: 0 0 auto;
     flex-wrap: wrap;
   }
@@ -125,9 +126,9 @@
     padding: 0 10px;
   }
   .divider {
-    width: 2px;
+    width: 1px;
     align-self: stretch;
-    background: var(--bevel-dark);
+    background: var(--box);
     margin: 0 4px;
   }
   .spacer {

@@ -36,6 +36,14 @@ import {
 import type { ReverbSpace } from "../audio/reverb";
 import { FX_ALL_ON, type FxSlot } from "../fx/chain";
 import {
+  DEFAULT_MORPH,
+  MORPH_ALGOS,
+  MORPH_PRESETS,
+  clampMorphValue,
+  morphPresetParams,
+  type MorphKey,
+} from "../fx/morph";
+import {
   packSession,
   unpackSession,
   sessionDisplayName,
@@ -110,6 +118,19 @@ export function toggleLowPower(): void {
     return next;
   });
 }
+const HEADPHONES_KEY = "ggmm.headphones3d";
+function readHeadphones(): boolean {
+  try {
+    return localStorage.getItem(HEADPHONES_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+/** Headphone 3D monitor wanted (applies when the device has fewer channels than the layout). */
+export const headphones3d = writable<boolean>(readHeadphones());
+/** True while the live bus is actually being rendered binaurally. */
+export const binauralLive = writable<boolean>(false);
+engine.setHeadphones3d(get(headphones3d));
 /** Where the session was last saved/opened (null = never saved). */
 export const sessionPath = writable<string | null>(null);
 /** True when the project has changed since it was last saved or opened. */
@@ -164,6 +185,7 @@ function restoreProject(target: Project): void {
   project.set(target);
   engine.setSurround(target.surround);
   liveChannels.set(engine.liveChannels);
+  binauralLive.set(engine.binauralMonitor);
   engine.syncAll(target);
   // Clip edits must be audible immediately, like a synth change is.
   if (get(transport).isPlaying) engine.play(target, get(transport).playhead);
@@ -212,6 +234,7 @@ function makeTrack(name: string): Track {
     reverbWidth: 1,
     eq: { low: 0, mid: 0, high: 0 },
     synth: { ...DEFAULT_SYNTH },
+    morph: { ...DEFAULT_MORPH },
     fx: { ...FX_ALL_ON },
     color,
     clips: [],
@@ -305,6 +328,61 @@ export async function applySynthPreset(trackId: string, name: string): Promise<v
   status.set(`Voice Synth: ${preset.name} on the selected layer.`);
 }
 
+/** Turn one MORPH knob. Drags coalesce into a single undo step. */
+export function setMorphParam(trackId: string, key: MorphKey, value: number): void {
+  const v = clampMorphValue(key, value);
+  updateTrack(trackId, (t) => (t.morph[key] === v ? t : { ...t, morph: { ...t.morph, [key]: v } }), {
+    history: `morph:${key}:${trackId}`,
+  });
+}
+
+/** Switch MORPH to another engine. Loads that engine's first preset, since
+ *  the four macro knobs mean something different on every engine — but
+ *  keeps the layer's space settings and wet level if it was already on. */
+export async function selectMorphAlgo(trackId: string, algo: number): Promise<void> {
+  const preset = MORPH_PRESETS.find((p) => p.params.algo === algo && (p.params.mix ?? 0) > 0);
+  await engine.ensureRunning();
+  updateTrack(trackId, (t) => {
+    const base = preset ? morphPresetParams(preset) : { ...DEFAULT_MORPH, algo, mix: 0.7 };
+    return { ...t, morph: { ...base, mix: t.morph.mix > 0 ? t.morph.mix : base.mix } };
+  });
+  status.set(`MORPH: ${MORPH_ALGOS[algo]?.name ?? "?"} — ${MORPH_ALGOS[algo]?.blurb ?? ""}.`);
+}
+
+export async function applyMorphPreset(trackId: string, name: string): Promise<void> {
+  const preset = MORPH_PRESETS.find((p) => p.name === name);
+  if (!preset) return;
+  await engine.ensureRunning();
+  updateTrack(trackId, (t) => ({ ...t, morph: morphPresetParams(preset) }));
+  status.set(`MORPH: ${preset.name} on the selected layer.`);
+}
+
+/** Turn the headphone 3D monitor on/off (remembered across runs). */
+export async function toggleHeadphones3d(): Promise<void> {
+  const next = !get(headphones3d);
+  headphones3d.set(next);
+  try {
+    localStorage.setItem(HEADPHONES_KEY, next ? "1" : "0");
+  } catch {
+    /* still applies for this run */
+  }
+  await engine.ensureRunning();
+  const rebuilt = engine.setHeadphones3d(next);
+  liveChannels.set(engine.liveChannels);
+  binauralLive.set(engine.binauralMonitor);
+  if (rebuilt) {
+    engine.syncAll(get(project));
+    if (get(transport).isPlaying) engine.play(get(project), get(transport).playhead);
+  }
+  status.set(
+    next
+      ? engine.binauralMonitor
+        ? "3D headphones on: the surround field is rendered binaurally (front/back/sides) for headphones."
+        : "3D headphones on — takes effect when the output is 5.1/7.1 on a stereo device."
+      : "3D headphones off: plain stereo fold-down.",
+  );
+}
+
 /** Change the project's output layout (stereo / 5.1 / 7.1). Rebuilds the
  *  live graph when the device can follow; export always renders the layout. */
 export async function setSurround(layout: SurroundLayout): Promise<void> {
@@ -312,10 +390,12 @@ export async function setSurround(layout: SurroundLayout): Promise<void> {
   const rebuilt = engine.setSurround(layout);
   updateProject((p) => (p.surround === layout ? p : { ...p, surround: layout }), { history: "surround" });
   liveChannels.set(engine.liveChannels);
+  binauralLive.set(engine.binauralMonitor);
   if (rebuilt && get(transport).isPlaying) engine.play(get(project), get(transport).playhead);
   const want = surroundChannels(layout);
-  const note =
-    engine.liveChannels >= want
+  const note = engine.binauralMonitor
+    ? ` — rendered in 3D for headphones on this ${Math.min(engine.deviceMaxChannels, 2)}-channel device; the WAV export gets all ${want} channels.`
+    : engine.liveChannels >= want
       ? ""
       : ` — this device outputs ${engine.liveChannels} channels, so you hear a fold-down; the WAV export gets all ${want}.`;
   status.set(`Output: ${SURROUND[layout].label}${note}`);
@@ -705,6 +785,7 @@ function resetWorkspace(next: Project): void {
   project.set(next);
   engine.setSurround(next.surround);
   liveChannels.set(engine.liveChannels);
+  binauralLive.set(engine.binauralMonitor);
   engine.syncAll(next);
   setHistory(history.createHistory<Project>());
   selectedClipId.set(null);

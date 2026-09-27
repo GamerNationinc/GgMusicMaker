@@ -244,6 +244,18 @@ class VocoderEngine {
 }
 
 /** Modulated delay for the ensemble stage, one per output channel. */
+/** Schroeder all-pass (for per-speaker decorrelation). */
+class AllPass {
+  constructor(len, g) { this.buf = new Float32Array(len); this.i = 0; this.g = g; }
+  process(x) {
+    const d = this.buf[this.i];
+    const y = -this.g * x + d;
+    this.buf[this.i] = x + this.g * y;
+    this.i = (this.i + 1) % this.buf.length;
+    return y;
+  }
+}
+
 class Chorus {
   constructor(phase, rate) {
     this.size = Math.ceil(sampleRate * 0.045);
@@ -283,7 +295,7 @@ const PARAMS = [
       // space
       kParam("width", 0.6, 0, 1), kParam("orbitRate", 0.2, 0, 4), kParam("orbitDepth", 0, 0, 1), kParam("ensemble", 0, 0, 1),
       kParam("rear", 0.3, 0, 1), kParam("lfe", 0, 0, 1), kParam("center", 0, 0, 1), kParam("ring", 0, 0, 400),
-      kParam("pan", 0, -1, 1),
+      kParam("pan", 0, -1, 1), kParam("path", 0, 0, 4), kParam("diffuse", 0, 0, 1),
 ];
 const PARAM_NAMES = PARAMS.map((d) => d.name);
 
@@ -351,6 +363,11 @@ class VoiceSynthProcessor extends AudioWorkletProcessor {
     this.chorus = [];
     for (let c = 0; c < MAX_CH; c++) this.chorus.push(new Chorus(c / MAX_CH, 0.45 + 0.11 * c));
     this.lfeLp = new Lowpass(80);
+    // Diffusion: two Schroeder all-passes per speaker, all different lengths,
+    // so each speaker's feed is decorrelated and the field wraps round you
+    // instead of sitting on phantom points between speakers.
+    const lens = [[149, 383], [167, 431], [193, 461], [211, 503], [229, 563], [251, 599], [281, 641], [311, 709]];
+    this.diff = lens.map(([a, b]) => [new AllPass(a, 0.6), new AllPass(b, 0.55)]);
   }
 
   /** Spectral-envelope level at a fractional band index (linear interp). */
@@ -417,10 +434,27 @@ class VoiceSynthProcessor extends AudioWorkletProcessor {
 
     // --- space ---
     this.orbitPhase += p.orbitRate * t; if (this.orbitPhase >= 1) this.orbitPhase -= 1;
-    // Static rotation (`pan`, ±1 = ±180°) plus the orbit LFO on top.
-    const orbit = p.pan * 180 + p.orbitDepth * 180 * Math.sin(2 * Math.PI * this.orbitPhase);
+    // Static rotation (`pan`, ±1 = ±180°) plus the orbit on top, shaped by
+    // `path`: 0 pendulum (swing ±180°·depth), 1 circle (keeps turning),
+    // 2 fly-over (each side swings from the front round to the back),
+    // 3 figure-8 (left and right layers swing in opposite directions),
+    // 4 swarm (every layer wanders on its own random walk).
+    const depth = p.orbitDepth;
+    const oph = 2 * Math.PI * this.orbitPhase;
+    const path = Math.round(p.path);
+    const rot = p.pan * 180;
     const reach = (60 + 120 * p.rear) * clamp01(p.width + p.envWidth * d);
-    const place = (layer, frac) => this.setPan(layer, frac * reach + orbit, nCh);
+    const place = (layer, frac) => {
+      let o = 0;
+      switch (path) {
+        case 1: o = depth * 360 * this.orbitPhase; break;
+        case 2: o = (frac < 0 ? -1 : 1) * depth * 180 * (0.5 - 0.5 * Math.cos(oph)); break;
+        case 3: o = (frac < 0 ? -1 : 1) * depth * 150 * Math.sin(oph); break;
+        case 4: o = depth * 170 * this.drifts[layer].value; break;
+        default: o = depth * 180 * Math.sin(oph);
+      }
+      this.setPan(layer, frac * reach + rot + o, nCh);
+    };
 
     // --- layers ---
     const lvl = this.layerLvl, ratio = this.layerRatio, active = this.active;
@@ -494,6 +528,7 @@ class VoiceSynthProcessor extends AudioWorkletProcessor {
   reset() {
     for (const sh of this.shifters) { sh.buf.fill(0); }
     for (const c of this.chorus) c.buf.fill(0);
+    for (const d of this.diff) for (const ap of d) ap.buf.fill(0);
     for (const b of this.ana) { b.z1 = 0; b.z2 = 0; }
     for (const k in this.engines) {
       const e = this.engines[k];
@@ -541,9 +576,13 @@ class VoiceSynthProcessor extends AudioWorkletProcessor {
     if (mix <= 0) {
       // Bit-exact bypass: L/R pass straight through; on a surround bus the
       // other channels stay silent (a dry voice has nothing for C/LFE/rear).
+      // Extra input channels (a surround field from MORPH upstream) pass too.
       output[0].set(inL);
       if (nCh > 1) output[1].set(inR);
-      for (let ch = 2; ch < nCh; ch++) output[ch].fill(0);
+      for (let ch = 2; ch < nCh; ch++) {
+        if (hasInput && ch < input.length) output[ch].set(input[ch]);
+        else output[ch].fill(0);
+      }
       return true;
     }
 
@@ -563,9 +602,17 @@ class VoiceSynthProcessor extends AudioWorkletProcessor {
     const ringHz = this.ringHz, ensemble = this.ensemble;
     const centerSend = this.centerSend, lfeSend = this.lfeSend;
     const ringInc = ringHz / sampleRate;
+    const diffuse = p.diffuse;
+    const dA = Math.cos((diffuse * Math.PI) / 2), dB = Math.sin((diffuse * Math.PI) / 2);
+    const diff = this.diff;
+    const nInCh = hasInput ? input.length : 0;
 
     for (let n = 0; n < frames; n++) {
-      const mono = nIn === 2 ? 0.5 * (inL[n] + inR[n]) : inL[n];
+      // Everything that arrives is analysed — including surround channels
+      // from MORPH upstream (not LFE) — so a stacked synth re-voices those
+      // too. For plain stereo this is exactly 0.5·(L + R).
+      let mono = nIn === 2 ? 0.5 * (inL[n] + inR[n]) : inL[n];
+      if (nInCh > 2) for (let c = 2; c < nInCh; c++) if (c !== 3 || nInCh < 6) mono += 0.5 * input[c][n];
 
       // Dynamics follower (drives the env → modulation routes next block).
       const am = Math.abs(mono);
@@ -654,10 +701,19 @@ class VoiceSynthProcessor extends AudioWorkletProcessor {
         if (lfeSend > 0) field[3] += low * lfeSend;
       }
 
-      // Dry stays in its own channels (L/R); everything else is field only.
+      if (diffuse > 0) {
+        for (let c = 0; c < nCh; c++) {
+          if (c === 3 && nCh >= 6) continue; // LFE stays tight
+          const ap = diff[c];
+          field[c] = dA * field[c] + dB * ap[1].process(ap[0].process(field[c]));
+        }
+      }
+
+      // Dry stays in its own channels (L/R, plus any surround channels that
+      // arrived from upstream); everything else is field only.
       const dryMix = 1 - mix;
       for (let c = 0; c < nCh; c++) {
-        const dry = c === 0 ? inL[n] : c === 1 ? inR[n] : 0;
+        const dry = c === 0 ? inL[n] : c === 1 ? inR[n] : c < nInCh ? input[c][n] : 0;
         output[c][n] = softClip(dry * dryMix + field[c] * mix);
       }
     }

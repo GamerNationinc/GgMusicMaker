@@ -15,6 +15,8 @@
   import type { Clip } from "../audio/types";
   import { LANE_HEIGHT, HEAD_WIDTH, RULER_HEIGHT } from "./constants";
   import TrackHead from "./TrackHead.svelte";
+  import { theme } from "./themeStore";
+  import { laneColor } from "./themes";
 
   let laneCanvas: HTMLCanvasElement;
   let rulerCanvas: HTMLCanvasElement;
@@ -41,14 +43,15 @@
     const ctx = laneCanvas.getContext("2d")!;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
+    const k = $theme.tokens;
 
     $project.tracks.forEach((track, ti) => {
       const y = ti * LANE_HEIGHT;
       // Lane background stripes.
-      ctx.fillStyle = ti % 2 ? "#06140b" : "#051009";
+      ctx.fillStyle = ti % 2 ? k["lane-b"] : k["lane-a"];
       ctx.fillRect(0, y, w, LANE_HEIGHT);
       // Bar gridlines every second.
-      ctx.strokeStyle = "rgba(55,224,122,0.07)";
+      ctx.strokeStyle = k.grid;
       ctx.lineWidth = 1;
       for (let s = 0; s * pps < w; s++) {
         const x = Math.round(s * pps) + 0.5;
@@ -59,7 +62,7 @@
       }
 
       for (const clip of track.clips) {
-        drawClip(ctx, clip, track.color, y);
+        drawClip(ctx, clip, laneColor($theme, track.color), y);
       }
     });
   }
@@ -72,22 +75,31 @@
     const top = laneY + pad;
     const clipH = LANE_HEIGHT - pad * 2;
     const selected = clip.id === $selectedClipId;
+    const k = $theme.tokens;
 
-    // DOOM-style extrusion: a hard black drop behind the clip.
-    ctx.fillStyle = "#000";
-    ctx.fillRect(x + 3, top + 3, cw, clipH);
-    // Clip body.
-    ctx.fillStyle = selected ? "rgba(184,255,208,0.14)" : "rgba(2,10,5,0.85)";
+    // Subtle drop behind the clip (themes without extrusion skip it).
+    if (k.extrude !== "none") {
+      ctx.fillStyle = "#000";
+      ctx.fillRect(x + 2, top + 2, cw, clipH);
+    }
+    // Clip body; a selected clip gets a tint of its own colour.
+    ctx.fillStyle = k["clip-bg"];
     ctx.fillRect(x, top, cw, clipH);
-    ctx.strokeStyle = selected ? "#ffffff" : color;
+    if (selected) {
+      ctx.fillStyle = color;
+      ctx.globalAlpha = 0.16;
+      ctx.fillRect(x, top, cw, clipH);
+      ctx.globalAlpha = 1;
+    }
+    ctx.strokeStyle = selected ? k.ink : color;
     ctx.lineWidth = selected ? 2 : 1;
     ctx.strokeRect(x + 0.5, top + 0.5, cw - 1, clipH - 1);
 
     // Header strip + name.
     ctx.fillStyle = color;
     ctx.fillRect(x, top, cw, 14);
-    ctx.fillStyle = "#10121a";
-    ctx.font = "bold 10px monospace";
+    ctx.fillStyle = k["on-accent"];
+    ctx.font = "bold 10px 'DejaVu Sans Mono', monospace";
     ctx.save();
     ctx.beginPath();
     ctx.rect(x + 3, top, cw - 6, 14);
@@ -134,11 +146,12 @@
     rulerCanvas.style.height = `${RULER_HEIGHT}px`;
     const ctx = rulerCanvas.getContext("2d")!;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.fillStyle = "#020704";
+    const k = $theme.tokens;
+    ctx.fillStyle = k["panel-lo"];
     ctx.fillRect(0, 0, w, RULER_HEIGHT);
-    ctx.fillStyle = "#3f9a62";
-    ctx.strokeStyle = "rgba(55,224,122,0.25)";
-    ctx.font = "10px monospace";
+    ctx.fillStyle = k["ink-dim"];
+    ctx.strokeStyle = k.box;
+    ctx.font = "10px 'DejaVu Sans Mono', monospace";
     // Label every second; tick every second.
     const step = pps < 40 ? 5 : 1;
     for (let s = 0; s * pps < w; s += step) {
@@ -157,6 +170,7 @@
     void $project;
     void $pixelsPerSecond;
     void $selectedClipId;
+    void $theme;
     drawLanes();
     drawRuler();
   });
@@ -300,7 +314,8 @@
     display: flex;
     align-items: center;
     padding-left: 10px;
-    border-right: 2px solid var(--bevel-dark);
+    border-right: 1px solid var(--box);
+    border-bottom: 1px solid var(--box);
   }
   .ruler-scroll {
     flex: 1 1 auto;
@@ -314,9 +329,8 @@
   }
   .heads {
     flex: 0 0 auto;
-    border-right: 2px solid var(--bevel-dark);
+    border-right: 1px solid var(--box);
     background: var(--panel);
-    box-shadow: 4px 0 0 #000; /* the LAYERS column stands proud of the void */
   }
   .empty {
     padding: 20px 12px;
@@ -340,7 +354,7 @@
     bottom: 0;
     width: 2px;
     background: var(--green);
-    box-shadow: 0 0 8px rgba(90, 240, 150, 0.8);
+    box-shadow: var(--glow);
     pointer-events: none;
   }
 </style>

@@ -4,6 +4,8 @@
   // behind the lanes; track stripes and clips are opaque, so the rain only
   // shows where there is nothing else — the space "beyond" the project.
   import { onMount } from "svelte";
+  import { get } from "svelte/store";
+  import { theme } from "./themeStore";
 
   // Pure ASCII: guaranteed to exist in every monospace font WebKitGTK can
   // find on the Deck (CJK glyphs rendered as blanks there).
@@ -22,6 +24,21 @@
     let speeds: number[] = [];
     let w = 0;
     let h = 0;
+    let colors = get(theme).tokens;
+    // "#rrggbb" → "rgba(r,g,b,a)" for the translucent trail clear.
+    const fade = (hex: string, a: number) => {
+      const n = parseInt(hex.slice(1), 16);
+      return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
+    };
+    let trail = fade(colors["rain-bg"], 0.18);
+    const unsub = theme.subscribe((t) => {
+      colors = t.tokens;
+      trail = fade(colors["rain-bg"], 0.18);
+      if (w) {
+        ctx.fillStyle = colors["rain-bg"];
+        ctx.fillRect(0, 0, w, h);
+      }
+    });
 
     function resize() {
       const parent = canvas.parentElement!;
@@ -32,23 +49,23 @@
       cols = Math.ceil(w / COL_W);
       heads = Array.from({ length: cols }, () => Math.random() * -40);
       speeds = Array.from({ length: cols }, () => 0.4 + Math.random() * 0.9);
-      ctx.fillStyle = "#030805";
+      ctx.fillStyle = colors["rain-bg"];
       ctx.fillRect(0, 0, w, h);
       ctx.font = `bold 13px "Courier New", "DejaVu Sans Mono", monospace`;
     }
 
     function tick() {
       // Trail: fade what's there instead of clearing.
-      ctx.fillStyle = "rgba(3, 8, 5, 0.18)";
+      ctx.fillStyle = trail;
       ctx.fillRect(0, 0, w, h);
       for (let c = 0; c < cols; c++) {
         const y = heads[c] * ROW_H;
         const ch = GLYPHS[(Math.random() * GLYPHS.length) | 0];
         const x = c * COL_W;
         // Bright head, dimmer body is left behind by the fade.
-        ctx.fillStyle = "#b8ffd0";
+        ctx.fillStyle = colors["rain-head"];
         ctx.fillText(ch, x, y);
-        ctx.fillStyle = "#1f9a52";
+        ctx.fillStyle = colors["rain-tail"];
         ctx.fillText(GLYPHS[(Math.random() * GLYPHS.length) | 0], x, y - ROW_H);
         heads[c] += speeds[c];
         if (y > h + ROW_H * 4 && Math.random() < 0.05) {
@@ -81,6 +98,7 @@
       for (let i = 0; i < 60; i++) tick();
     }
     return () => {
+      unsub();
       pause();
       document.removeEventListener("visibilitychange", onVisibility);
       ro.disconnect();

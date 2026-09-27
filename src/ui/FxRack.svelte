@@ -1,5 +1,5 @@
 <script lang="ts">
-  // The FX rack: a chain strip (LAYER ▸ EQ ▸ VOICE SYNTH ▸ REVERB) that
+  // The FX rack: a chain strip (LAYER ▸ EQ ▸ MORPH ▸ VOICE SYNTH ▸ REVERB) that
   // summarises every module and one full-width editor for the picked slot.
   // Each slot has a power switch (bypass) and a lamp that only lights when
   // the module is on and actually doing something.
@@ -16,12 +16,30 @@
     toggleFx,
     reverbSpace,
     liveChannels,
+    setMorphParam,
+    applyMorphPreset,
+    selectMorphAlgo,
+    headphones3d,
+    binauralLive,
+    toggleHeadphones3d,
   } from "../state/store";
+  import {
+    MORPH_ALGOS,
+    MORPH_PRESETS,
+    TUNINGS,
+    PATHS,
+    knobText,
+    matchingMorphPreset,
+    type MorphKey,
+  } from "../fx/morph";
+  import { theme } from "./themeStore";
+  import { laneColor } from "./themes";
   import {
     SYNTH_PRESETS,
     SYNTH_SECTIONS,
     PRESET_CATEGORIES,
     CHORD_NAMES,
+    ORBIT_PATHS,
     SURROUND,
     SURROUND_ORDER,
     matchingPreset,
@@ -46,6 +64,47 @@
   const active = $derived(track ? synthIsActive(track.synth) : false);
   const surroundWant = $derived(SURROUND[$project.surround].channels);
   const folded = $derived($liveChannels < surroundWant);
+  const accent = $derived(track ? laneColor($theme, track.color) : "");
+
+  // MORPH
+  let morphBrowsing = $state(false);
+  let morphTab = $state<"engine" | "space">("engine");
+  const morphPreset = $derived(track ? matchingMorphPreset(track.morph) : null);
+  const morphAlgo = $derived(track ? MORPH_ALGOS[track.morph.algo] : MORPH_ALGOS[0]);
+  const KNOBS = ["a", "b", "c", "d"] as const;
+  /** Motion speed as Hz, or as seconds per cycle when slower than 0.1 Hz. */
+  function motionText(m: number): string {
+    const hz = m * m * 2;
+    if (hz <= 0) return "still";
+    return hz >= 0.1 ? `${hz.toFixed(2)}Hz` : `${Math.round(1 / hz)}s/cyc`;
+  }
+
+  function onMorph(key: MorphKey, e: Event) {
+    if (track) setMorphParam(track.id, key, Number((e.target as HTMLInputElement).value));
+  }
+
+  function stepMorphPreset(dir: 1 | -1) {
+    if (!track) return;
+    const n = MORPH_PRESETS.length;
+    const i = MORPH_PRESETS.findIndex((p) => p.name === morphPreset);
+    const next = i < 0 ? (dir > 0 ? 0 : n - 1) : (i + dir + n) % n;
+    void applyMorphPreset(track.id, MORPH_PRESETS[next].name);
+  }
+
+  // Speaker ring for the field map (azimuth°, label), per live layout.
+  const RING: Record<string, [number, string][]> = {
+    stereo: [[-30, "L"], [30, "R"]],
+    "5.1": [[-30, "L"], [30, "R"], [0, "C"], [-110, "Ls"], [110, "Rs"]],
+    "7.1": [[-30, "L"], [30, "R"], [0, "C"], [-90, "Ls"], [90, "Rs"], [-150, "Lb"], [150, "Rb"]],
+  };
+  const pt = (az: number, r: number) => [50 + r * Math.sin((az * Math.PI) / 180), 50 - r * Math.cos((az * Math.PI) / 180)];
+  /** SVG arc path covering ±reach° round the front (a full ring at 180°). */
+  function arc(reach: number, r: number): string {
+    if (reach >= 179.5) return `M ${50 - r} 50 a ${r} ${r} 0 1 0 ${2 * r} 0 a ${r} ${r} 0 1 0 ${-2 * r} 0`;
+    const [x0, y0] = pt(-reach, r);
+    const [x1, y1] = pt(reach, r);
+    return `M ${x0} ${y0} A ${r} ${r} 0 ${reach > 90 ? 1 : 0} 1 ${x1} ${y1}`;
+  }
 
   function fmt(spec: ParamSpec, v: number): string {
     const digits = spec.step >= 1 ? 0 : spec.step >= 0.1 ? 1 : 2;
@@ -71,7 +130,10 @@
   }
 
   function onKey(e: KeyboardEvent) {
-    if (e.key === "Escape" && browsing) browsing = false;
+    if (e.key === "Escape") {
+      browsing = false;
+      morphBrowsing = false;
+    }
   }
 </script>
 
@@ -79,7 +141,7 @@
 
 {#if track}
   <div class="rack panel">
-    <div class="rack-title" style:color={track.color}>
+    <div class="rack-title" style:color={accent}>
       ▚ FX — {track.name}
       <button class="chip" onclick={() => selectedTrackId.set(null)} title="Close">✕</button>
     </div>
@@ -92,7 +154,7 @@
           class="slot {s.key}"
           class:selected={slot === s.key}
           class:off={!track.fx[s.key]}
-          style:--accent={track.color}
+          style:--accent={accent}
         >
           <button
             class="power"
@@ -169,6 +231,132 @@
           {/each}
         </div>
 
+      {:else if slot === "morph"}
+        <div class="engines" role="tablist" aria-label="MORPH engine">
+          {#each MORPH_ALGOS as algo, i (algo.name)}
+            <button
+              class="engine"
+              class:on={track.morph.algo === i}
+              role="tab"
+              aria-selected={track.morph.algo === i}
+              onclick={() => void selectMorphAlgo(track!.id, i)}
+              title={algo.blurb}
+            >{algo.name}</button>
+          {/each}
+        </div>
+
+        <div class="synth-head">
+          <div class="preset-nav">
+            <button class="btn small" onclick={() => stepMorphPreset(-1)} aria-label="Previous morph preset">◀</button>
+            <button class="preset-screen screen" onclick={() => (morphBrowsing = !morphBrowsing)} title="Browse MORPH presets">
+              <span class="preset-name">{morphPreset ?? "custom"}</span>
+              <span class="preset-cat">{morphAlgo.name}</span>
+            </button>
+            <button class="btn small" onclick={() => stepMorphPreset(1)} aria-label="Next morph preset">▶</button>
+            <button class="btn small preset-browse" class:on={morphBrowsing} onclick={() => (morphBrowsing = !morphBrowsing)}>BROWSE ▾</button>
+            {#if morphBrowsing}
+              <div class="browser panel" role="listbox" aria-label="MORPH presets">
+                {#each MORPH_ALGOS as algo, i (algo.name)}
+                  {@const list = MORPH_PRESETS.filter((p) => p.params.algo === i && (p.params.mix ?? 0) > 0)}
+                  {#if list.length}
+                    <div class="cat">
+                      <span class="label">{algo.name}</span>
+                      <div class="cat-presets">
+                        {#each list as p (p.name)}
+                          <button
+                            class="btn small"
+                            class:magenta={morphPreset === p.name}
+                            onclick={() => {
+                              void applyMorphPreset(track!.id, p.name);
+                              morphBrowsing = false;
+                            }}>{p.name}</button>
+                        {/each}
+                      </div>
+                    </div>
+                  {/if}
+                {/each}
+              </div>
+            {/if}
+          </div>
+          <span class="blurb">{morphAlgo.blurb}</span>
+          <label class="param mix">
+            <span class="tiny">MIX</span>
+            <input type="range" min="0" max="1" step="0.01" value={track.morph.mix} oninput={(e) => onMorph("mix", e)} />
+            <span class="readout">{Math.round(track.morph.mix * 100)}%</span>
+          </label>
+        </div>
+
+        <div class="tabs">
+          <button class="tab" class:on={morphTab === "engine"} onclick={() => (morphTab = "engine")}>ENGINE</button>
+          <button class="tab" class:on={morphTab === "space"} onclick={() => (morphTab = "space")}>SPACE · 7.1</button>
+        </div>
+
+        <div class="morph-body">
+          <div class="params two morph-knobs">
+            {#if morphTab === "engine"}
+            {#each KNOBS as k, i (k)}
+              <label class="param">
+                <span class="tiny">{morphAlgo.knobs[i]}</span>
+                <input type="range" min="0" max="1" step="0.01" value={track.morph[k]} oninput={(e) => onMorph(k, e)} />
+                <span class="readout">{knobText(track.morph, k)}</span>
+              </label>
+            {/each}
+            {#if morphAlgo.tuned}
+              <label class="param">
+                <span class="tiny">NOTE</span>
+                <input type="range" min="-24" max="24" step="1" value={track.morph.note} oninput={(e) => onMorph("note", e)} />
+                <span class="readout">{track.morph.note > 0 ? "+" : ""}{track.morph.note}st</span>
+              </label>
+              <div class="param row">
+                <span class="tiny">TUNING</span>
+                <div class="choices">
+                  {#each TUNINGS as t, i (t.name)}
+                    <button class="btn small" class:accent={track.morph.tuning === i} title={t.info} onclick={() => setMorphParam(track!.id, "tuning", i)}>{t.name}</button>
+                  {/each}
+                </div>
+              </div>
+            {/if}
+            {:else}
+            <label class="param">
+              <span class="tiny">SPREAD</span>
+              <input type="range" min="0" max="1" step="0.01" value={track.morph.spread} oninput={(e) => onMorph("spread", e)} />
+              <span class="readout">{Math.round(track.morph.spread * 180)}°</span>
+            </label>
+            <label class="param">
+              <span class="tiny">MOTION</span>
+              <input type="range" min="0" max="1" step="0.01" value={track.morph.motion} oninput={(e) => onMorph("motion", e)} />
+              <span class="readout">{motionText(track.morph.motion)}</span>
+            </label>
+            <label class="param">
+              <span class="tiny">DIFFUSE</span>
+              <input type="range" min="0" max="1" step="0.01" value={track.morph.diffuse} oninput={(e) => onMorph("diffuse", e)} />
+              <span class="readout">{Math.round(track.morph.diffuse * 100)}%</span>
+            </label>
+            <div class="param row">
+              <span class="tiny">PATH</span>
+              <div class="choices">
+                {#each PATHS as name, i (name)}
+                  <button class="btn small" class:accent={track.morph.path === i} onclick={() => setMorphParam(track!.id, "path", i)}>{name}</button>
+                {/each}
+              </div>
+            </div>
+            {/if}
+          </div>
+
+          <svg class="field" viewBox="0 0 100 100" role="img" aria-label="Where the MORPH voices sit around you">
+            <circle cx="50" cy="50" r="38" class="ring" />
+            <path d={arc(track.morph.spread * 180, 38)} class="spread" />
+            {#each RING[$project.surround] as [az, name] (name)}
+              {@const [x, y] = pt(az, 38)}
+              {@const [tx, ty] = pt(az, 47)}
+              <rect x={x - 4} y={y - 3} width="8" height="6" class="spk" />
+              <text x={tx} y={ty + 2} class="spk-name">{name}</text>
+            {/each}
+            <circle cx="50" cy="50" r="4" class="head" />
+            <text x="50" y="98" class="spk-name">{PATHS[track.morph.path]}</text>
+          </svg>
+        </div>
+
       {:else if slot === "synth"}
         <div class="synth-head">
           <div class="preset-nav">
@@ -237,6 +425,14 @@
 
           {#if SYNTH_SECTIONS[tab].title === "SPACE"}
             <div class="param row">
+              <span class="tiny">ORBIT PATH</span>
+              <div class="choices">
+                {#each ORBIT_PATHS as name, i (name)}
+                  <button class="btn small" class:accent={track.synth.path === i} onclick={() => setSynthParam(track!.id, "path", i)}>{name}</button>
+                {/each}
+              </div>
+            </div>
+            <div class="param row">
               <span class="tiny">OUTPUT</span>
               <div class="choices">
                 {#each SURROUND_ORDER as layout}
@@ -248,8 +444,16 @@
                   >{SURROUND[layout].label}</button>
                 {/each}
               </div>
+              <button
+                class="btn small"
+                class:accent={$headphones3d}
+                onclick={() => void toggleHeadphones3d()}
+                title="On a stereo device, render 5.1/7.1 binaurally for headphones instead of a flat fold-down"
+              >🎧 3D {$headphones3d ? "ON" : "OFF"}</button>
               <span class="readout note" title="Export always renders every channel of the layout.">
-                {#if folded}
+                {#if $binauralLive}
+                  3D headphones · {SURROUND[$project.surround].names.join(" ")}
+                {:else if folded}
                   device: {$liveChannels} ch fold-down
                 {:else}
                   {SURROUND[$project.surround].names.join(" ")}
@@ -376,7 +580,7 @@
   }
   .power.on {
     color: var(--green);
-    text-shadow: 0 0 6px rgba(90, 240, 150, 0.7);
+    text-shadow: var(--glow);
   }
   .pick {
     flex: 1 1 auto;
@@ -616,5 +820,77 @@
   .tab.on {
     background: var(--panel);
     color: var(--green);
+  }
+
+  /* MORPH */
+  .engines {
+    display: grid;
+    grid-template-columns: repeat(8, 1fr);
+    gap: 3px;
+  }
+  .engine {
+    font-family: var(--font);
+    font-size: 10px;
+    font-weight: bold;
+    letter-spacing: 1px;
+    min-height: 32px;
+    padding: 0 4px;
+    border: 1px solid var(--box, var(--bevel-dark));
+    background: var(--panel-lo);
+    color: var(--ink-dim);
+    cursor: pointer;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .engine.on {
+    background: var(--green);
+    color: var(--on-accent, #000);
+    border-color: var(--green);
+  }
+  .blurb {
+    font-size: 10px;
+    color: var(--ink-dim);
+    flex: 1 1 200px;
+    min-width: 0;
+  }
+  .morph-body {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+  }
+  .morph-knobs {
+    flex: 1 1 auto;
+  }
+  .field {
+    flex: 0 0 104px;
+    width: 104px;
+    height: 104px;
+  }
+  .field .ring {
+    fill: none;
+    stroke: var(--ink-dim);
+    stroke-width: 0.6;
+    stroke-dasharray: 2 2;
+  }
+  .field .spread {
+    fill: none;
+    stroke: var(--green);
+    stroke-width: 4;
+    opacity: 0.55;
+  }
+  .field .spk {
+    fill: var(--panel-lo);
+    stroke: var(--ink);
+    stroke-width: 0.8;
+  }
+  .field .head {
+    fill: var(--ink);
+  }
+  .field .spk-name {
+    fill: var(--ink-dim);
+    font-size: 7px;
+    text-anchor: middle;
+    font-family: var(--font);
   }
 </style>

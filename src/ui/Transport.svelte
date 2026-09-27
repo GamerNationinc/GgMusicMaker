@@ -16,10 +16,11 @@
 
   // 12-segment LED meter.
   const segments = Array.from({ length: 12 }, (_, i) => i);
+  // btop gradient: low → mid → high across the 12 cells.
   function segColor(i: number): string {
-    if (i > 9) return "var(--danger)";
-    if (i > 7) return "var(--amber)";
-    return "var(--green)";
+    if (i > 9) return "var(--meter-hi)";
+    if (i > 6) return "var(--meter-mid)";
+    return "var(--meter-lo)";
   }
 </script>
 
@@ -35,7 +36,7 @@
     {#each segments as i}
       <span
         class="seg"
-        style:background={$masterLevel * 12 > i ? segColor(i) : "var(--panel-lo)"}
+        style:background={$masterLevel * 12 > i ? segColor(i) : "var(--panel-hi)"}
       ></span>
     {/each}
   </div>
@@ -68,11 +69,12 @@
     gap: 2px;
     padding: 4px;
     background: var(--panel-lo);
-    border: 2px solid var(--bevel-dark);
+    border: 1px solid var(--box);
   }
   .seg {
     width: 6px;
     height: 22px;
+    opacity: 0.95;
   }
   .master {
     display: flex;

@@ -412,3 +412,57 @@ describe("voice-synth model", () => {
     expect(SURROUND["7.1"].names).toEqual(["L", "R", "C", "LFE", "Lb", "Rb", "Ls", "Rs"]);
   });
 });
+
+describe("voice-synth surround upgrades", () => {
+  const input = voice(1.2);
+  const settle = SR * 0.2;
+  const rmsFrom = (a: Float32Array) => {
+    let s = 0;
+    for (let i = settle; i < a.length; i++) s += a[i] * a[i];
+    return Math.sqrt(s / (a.length - settle));
+  };
+
+  it("declares path + diffuse", () => {
+    const names = Processor.parameterDescriptors.map((d) => d.name);
+    expect(names).toContain("path");
+    expect(names).toContain("diffuse");
+  });
+
+  it("every orbit path is finite and moves the field differently", () => {
+    const base = { unison: 6, width: 1, rear: 1, orbitDepth: 1, orbitRate: 1 };
+    const renders = [0, 1, 2, 3, 4].map((path) => run({ ...base, path }, input, 8));
+    for (const r of renders) expect(r.every((o) => o.every(Number.isFinite))).toBe(true);
+    for (let i = 0; i < renders.length; i++)
+      for (let j = i + 1; j < renders.length; j++) {
+        let s = 0;
+        for (let c = 0; c < 8; c++) for (let n = settle; n < input.length; n++) s += (renders[i][c][n] - renders[j][c][n]) ** 2;
+        expect(s).toBeGreaterThan(1e-3);
+      }
+  });
+
+  it("diffuse decorrelates the speakers without losing level", () => {
+    const dry = run({ unison: 1, width: 0 }, input, 2);
+    const wet = run({ unison: 1, width: 0, diffuse: 1 }, input, 2);
+    // Front-centre voice: L and R carry the same signal until diffused.
+    const corr = (a: Float32Array, b: Float32Array) => {
+      let ab = 0, aa = 0, bb = 0;
+      for (let n = settle; n < a.length; n++) { ab += a[n] * b[n]; aa += a[n] * a[n]; bb += b[n] * b[n]; }
+      return ab / Math.sqrt(aa * bb + 1e-12);
+    };
+    expect(corr(dry[0], dry[1])).toBeGreaterThan(0.99);
+    expect(corr(wet[0], wet[1])).toBeLessThan(0.7);
+    expect(rmsFrom(wet[0])).toBeGreaterThan(rmsFrom(dry[0]) * 0.6);
+  });
+
+  it("passes surround channels arriving from upstream (MORPH) through dry", () => {
+    const proc = new Processor();
+    const params: Record<string, Float32Array> = {};
+    for (const [k, v] of Object.entries({ ...DEFAULT_SYNTH, mix: 0.5 })) params[k] = new Float32Array([v as number]);
+    const block = input.subarray(SR * 0.3, SR * 0.3 + 128);
+    const ins = Array.from({ length: 8 }, (_, c) => (c === 5 ? block : new Float32Array(128)));
+    ins[0] = block;
+    const out = Array.from({ length: 8 }, () => new Float32Array(128));
+    proc.process([ins], [out], params);
+    for (let n = 0; n < 128; n += 17) expect(out[5][n]).toBeCloseTo(block[n] * 0.5, 5);
+  });
+});

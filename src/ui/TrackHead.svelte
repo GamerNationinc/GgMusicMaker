@@ -14,11 +14,13 @@
   } from "../state/store";
   import { LANE_HEIGHT } from "./constants";
   import { anyFxLit } from "../fx/chain";
+  import { theme } from "./themeStore";
+  import { laneColor } from "./themes";
 
   let { track }: { track: Track } = $props();
 </script>
 
-<div class="head" style:height="{LANE_HEIGHT}px" style:border-left="4px solid {track.color}">
+<div class="head" style:height="{LANE_HEIGHT}px" style:border-left="4px solid {laneColor($theme, track.color)}">
   <div class="row top">
     <input
       class="name"
@@ -69,11 +71,11 @@
 <style>
   .head {
     background: var(--panel);
-    border-bottom: 2px solid var(--panel-lo);
-    padding: 6px 8px;
+    border-bottom: 1px solid var(--box);
+    padding: 4px 8px;
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 4px;
     justify-content: center;
   }
   .row {
@@ -84,7 +86,7 @@
   .name {
     flex: 1 1 auto;
     background: var(--panel-lo);
-    border: 2px solid var(--bevel-dark);
+    border: 1px solid var(--box);
     color: var(--ink);
     font-family: var(--font);
     font-weight: bold;
@@ -103,12 +105,13 @@
   /* Lit = some effect is engaged on this layer; on = its rack is open. */
   .chip.fx.lit {
     color: var(--magenta);
-    box-shadow: 2px 2px 0 #000, inset 0 0 0 2px var(--magenta);
-    text-shadow: 0 0 6px rgba(255, 60, 160, 0.6);
+    border-color: var(--magenta);
+    text-shadow: var(--glow);
   }
   .chip.fx.on {
     background: var(--magenta);
-    color: #10121a;
+    border-color: var(--magenta);
+    color: var(--on-accent);
     text-shadow: none;
   }
   .knob {

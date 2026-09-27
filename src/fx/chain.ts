@@ -1,8 +1,8 @@
-// The FX chain as the rack shows it: four fixed slots in signal order, each
+// The FX chain as the rack shows it: five fixed slots in signal order, each
 // with a power switch, a lamp and a one-line summary. Pure functions over
 // the Track model so the strip's readouts are unit-tested.
 //
-//   LAYER (pan/width) ▸ EQ ▸ VOICE SYNTH ▸ REVERB (send + pan/width)
+//   LAYER (pan/width) ▸ EQ ▸ MORPH ▸ VOICE SYNTH ▸ REVERB (send + pan/width)
 //
 // The order is the audio graph's order (see audio/channel.ts) and cannot be
 // changed here; "remove" is the power switch (a bypassed module is still in
@@ -11,22 +11,25 @@
 import type { Track } from "../audio/types";
 import type { ReverbSpace } from "../audio/reverb";
 import { matchingPreset, synthIsActive } from "./voice-synth";
+import { MORPH_ALGOS, matchingMorphPreset, morphIsActive } from "./morph";
 
-export type FxSlot = "place" | "eq" | "synth" | "reverb";
+export type FxSlot = "place" | "eq" | "morph" | "synth" | "reverb";
 
 /** Per-module power switches. All on by default. */
 export interface FxEnabled {
   place: boolean;
   eq: boolean;
+  morph: boolean;
   synth: boolean;
   reverb: boolean;
 }
 
-export const FX_ALL_ON: FxEnabled = { place: true, eq: true, synth: true, reverb: true };
+export const FX_ALL_ON: FxEnabled = { place: true, eq: true, morph: true, synth: true, reverb: true };
 
 export const FX_SLOTS: { key: FxSlot; label: string }[] = [
   { key: "place", label: "LAYER" },
   { key: "eq", label: "EQ" },
+  { key: "morph", label: "MORPH" },
   { key: "synth", label: "VOICE SYNTH" },
   { key: "reverb", label: "REVERB" },
 ];
@@ -50,6 +53,8 @@ export function slotEngaged(track: Track, slot: FxSlot): boolean {
       return track.pan !== 0 || track.width !== 1;
     case "eq":
       return track.eq.low !== 0 || track.eq.mid !== 0 || track.eq.high !== 0;
+    case "morph":
+      return morphIsActive(track.morph);
     case "synth":
       return synthIsActive(track.synth);
     case "reverb":
@@ -69,6 +74,11 @@ export function slotSummary(track: Track, slot: FxSlot, space: ReverbSpace): str
       return `${panText(track.pan)} · ${widthText(track.width)}`;
     case "eq":
       return `${db(track.eq.low)} / ${db(track.eq.mid)} / ${db(track.eq.high)} dB`;
+    case "morph": {
+      if (!morphIsActive(track.morph)) return "off";
+      const name = matchingMorphPreset(track.morph) ?? MORPH_ALGOS[track.morph.algo]?.name ?? "custom";
+      return `${name} · ${Math.round(track.morph.mix * 100)}%`;
+    }
     case "synth": {
       if (!synthIsActive(track.synth)) return "off";
       const name = matchingPreset(track.synth) ?? "custom";
@@ -88,5 +98,5 @@ export function anyFxLit(track: Track): boolean {
 export function normalizeFx(fx: unknown): FxEnabled {
   const src = (fx ?? {}) as Partial<Record<FxSlot, unknown>>;
   const on = (k: FxSlot) => (typeof src[k] === "boolean" ? (src[k] as boolean) : true);
-  return { place: on("place"), eq: on("eq"), synth: on("synth"), reverb: on("reverb") };
+  return { place: on("place"), eq: on("eq"), morph: on("morph"), synth: on("synth"), reverb: on("reverb") };
 }
