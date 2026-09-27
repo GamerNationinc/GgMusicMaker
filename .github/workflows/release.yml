@@ -1,20 +1,17 @@
 name: Release
 
-# Builds the Steam Deck deliverable.
+# Builds the Steam Deck / Steam deliverables from a v* tag (or by hand):
+#   - GgMusicMaker-<v>-x86_64.AppImage   desktop install (scripts/install-steamdeck.sh)
+#   - GgMusicMaker-<v>-linux-x64.tar.gz  the Steam depot (release/linux-unpacked)
 #
-# Runs on ubuntu-22.04 deliberately: it ships glibc 2.35, which is old enough
-# for SteamOS. Building on a newer runner (24.04 = glibc 2.39) produces a binary
-# that refuses to start on the Deck with a "GLIBC_2.3x not found" error, since
-# glibc is forward- but not backward-compatible.
+# ubuntu-22.04 on purpose: glibc 2.35, old enough for SteamOS. The packaged
+# app is driven end to end (tests/electron-app.mjs) before anything is
+# published.
 
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
-    inputs:
-      tag:
-        description: "Optional tag to publish the artifacts under"
-        required: false
 
 permissions:
   contents: write
@@ -22,20 +19,15 @@ permissions:
 jobs:
   build-linux:
     runs-on: ubuntu-22.04
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Tauri system dependencies
+      - name: System packages
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libgtk-3-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            desktop-file-utils \
-            xvfb
+          sudo apt-get install -y libasound2-dev xvfb libgbm1 libnss3 libxss1 libgtk-3-0 desktop-file-utils
+          printf 'pcm.!default { type null }\nctl.!default { type hw card 0 }\n' > ~/.asoundrc
 
       - uses: actions/setup-node@v4
         with:
@@ -44,20 +36,17 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            src-tauri/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
-
       - name: Install npm dependencies
         run: npm ci
 
-      - name: Type-check and test
+      - name: Native engine
+        working-directory: native
+        run: |
+          cargo test --release --lib
+          cargo build --release
+          cp target/release/libggmm_engine.so ggmm-engine.node
+
+      - name: Type-check and unit tests
         run: |
           npm run check
           npm test
@@ -67,36 +56,21 @@ jobs:
           sed 's|APPIMAGE_PATH|/usr/bin/true|' packaging/ggmusicmaker.desktop > /tmp/check.desktop
           desktop-file-validate /tmp/check.desktop
 
-      - name: Build AppImage and .deb
-        # build:deck = tauri build + scripts/fix-appimage.sh (strips host-tied
-        # libs that otherwise blank the WebView on SteamOS).
-        run: npm run build:deck
+      - name: Package (Steam depot folder + AppImage)
+        run: npm run dist:deck
 
-      - name: Smoke-test that the binary launches
+      - name: Drive the packaged app end to end
         run: |
-          APPIMAGE=$(find src-tauri/target/release/bundle/appimage -maxdepth 1 -name 'GgMusicMaker*.AppImage' | head -1)
-          echo "Built: $APPIMAGE"
-          file "$APPIMAGE"
-          # Launch under a virtual display; the window opens and we kill it.
-          # Catches missing shared libraries and WebKit loader failures.
-          timeout 45 xvfb-run -a "$APPIMAGE" --appimage-extract-and-run &
-          PID=$!
-          sleep 25
-          if kill -0 "$PID" 2>/dev/null; then
-            echo "App is running."
-            kill "$PID" 2>/dev/null || true
-          else
-            wait "$PID"; STATUS=$?
-            echo "App exited early with status $STATUS"
-            exit 1
-          fi
+          npx playwright-core install --with-deps chromium
+          GGMM_APP=release/linux-unpacked/ggmusicmaker xvfb-run -a npm run test:app
 
       - name: Collect artifacts
         run: |
+          VERSION=$(node -p "require('./package.json').version")
           mkdir -p dist-artifacts
-          find src-tauri/target/release/bundle -type f \
-            \( -name 'GgMusicMaker*.AppImage' -o -name 'GgMusicMaker*.deb' \) -exec cp {} dist-artifacts/ \;
-          cp packaging/ggmusicmaker.desktop scripts/install-steamdeck.sh dist-artifacts/
+          cp release/GgMusicMaker-*.AppImage dist-artifacts/
+          tar -C release -czf "dist-artifacts/GgMusicMaker-${VERSION}-linux-x64.tar.gz" linux-unpacked
+          cp scripts/install-steamdeck.sh dist-artifacts/
           ls -lh dist-artifacts
 
       - uses: actions/upload-artifact@v4
@@ -110,10 +84,10 @@ jobs:
         with:
           files: dist-artifacts/*
           body: |
-            **GgMusicMaker** — Steam Deck build.
+            **GgMusicMaker** — Steam Deck / Linux build (Electron + native Rust audio engine).
 
-            1. Download `GgMusicMaker_*.AppImage` and `install-steamdeck.sh`
-            2. `chmod +x install-steamdeck.sh && ./install-steamdeck.sh <the AppImage>`
-            3. Launch **GgMusicMaker** from the application menu.
+            - Desktop: download the `.AppImage` and `install-steamdeck.sh`, then
+              `chmod +x install-steamdeck.sh && ./install-steamdeck.sh GgMusicMaker-*.AppImage`
+            - Steam depot: the `linux-x64.tar.gz` is the folder SteamPipe uploads (see `steam/README.md`).
 
             Built on Ubuntu 22.04 (glibc 2.35) for SteamOS compatibility.

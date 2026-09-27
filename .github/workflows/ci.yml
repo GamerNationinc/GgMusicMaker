@@ -1,8 +1,13 @@
 name: CI
 
-# Frontend quality gates on every push and pull request. The native Tauri
-# build is deliberately left to release.yml (it needs the WebKitGTK toolchain
-# and a glibc-pinned runner); this job only proves the app logic is sound.
+# Every push to main and every pull request: the whole app, not just the
+# frontend — type-check, the Rust engine's own tests, the unit tests
+# (including native-vs-JS DSP parity, which needs the engine built), the
+# production build, Chromium + WebKit browser checks, and the real Electron
+# app driven end to end under a virtual display (including the native engine
+# playing through ALSA's null device, since runners have no sound card).
+#
+# ubuntu-22.04 on purpose: glibc 2.35 matches the release build and SteamOS.
 
 on:
   push:
@@ -10,15 +15,36 @@ on:
   pull_request:
 
 jobs:
-  frontend:
+  test:
     runs-on: ubuntu-22.04
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+
+      - name: System packages (ALSA headers for the engine, display for Electron)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev xvfb libgbm1 libnss3 libxss1 libgtk-3-0
+          # No sound card on the runner: point ALSA's default at the null PCM
+          # so the native engine can open a device and run its clock.
+          printf 'pcm.!default { type null }\nctl.!default { type hw card 0 }\n' > ~/.asoundrc
 
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            native/target
+          key: ${{ runner.os }}-native-${{ hashFiles('native/Cargo.lock', 'native/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-native-
 
       - name: Install npm dependencies
         run: npm ci
@@ -26,14 +52,27 @@ jobs:
       - name: Type-check
         run: npm run check
 
-      - name: Unit tests
+      - name: Native engine — Rust tests + release build
+        working-directory: native
+        run: |
+          cargo test --release --lib
+          cargo build --release
+          cp target/release/libggmm_engine.so ggmm-engine.node
+
+      - name: Unit tests (incl. native/JS DSP parity)
         run: npm test
 
       - name: Production build
         run: npm run build
 
-      - name: Install Chromium for browser tests
-        run: npx playwright-core install --with-deps chromium
+      - name: Install Chromium + WebKit for browser tests
+        run: npx playwright-core install --with-deps chromium webkit
 
-      - name: Browser integration tests
+      - name: Browser integration tests (Chromium)
         run: npm run test:browser
+
+      - name: Timeline checks in WebKit
+        run: node tests/webkit-lanes.mjs
+
+      - name: Desktop app end to end (Electron + native engine)
+        run: xvfb-run -a npm run test:app
