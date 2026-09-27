@@ -225,6 +225,9 @@ async function main() {
 
   await page.click(".chip.fx");
   await page.waitForTimeout(200);
+  check("FX panel opens on RACKS & STACK", (await page.$(".racks .rack-grid")) !== null);
+  await page.click("button.tab:has-text('FX CHAIN')"); // remembered from here on
+  await page.waitForTimeout(100);
   check("rack opens on the Voice Synth slot", (await page.$(".slot.synth.selected")) !== null);
   await page.click("button.preset-browse");
   await page.waitForTimeout(100);
@@ -590,6 +593,58 @@ async function main() {
   check("PUNCH changes the exported render", pd > 10000, `${pd} bytes differ`);
   await page.waitForTimeout(300);
   await page.click(".dialog button");
+
+  // --- layer stacks + instrument racks ---------------------------------------
+  await page.keyboard.press("Control+n");
+  await page.waitForTimeout(400);
+  await page.setInputFiles("input[type=file][accept='audio/*']", [tone]);
+  await page.waitForTimeout(600);
+  const single = await exportBytes();
+  await page.waitForTimeout(300);
+  await page.click(".dialog button");
+  await page.click(".chip.fx");
+  await page.click("button.tab:has-text('RACKS')");
+  await page.click(".cats button:has-text('VOCALS')");
+  await page.click(".recipe:has-text('Wall of Vox')");
+  await page.waitForTimeout(500);
+  check("Wall of Vox builds a 5-layer stack", (await page.$$(".head")).length === 5 && (await page.$$(".member")).length === 5);
+  check("stack layers are named for their racks", (await page.$$eval(".head .name", (els) => els.map((e) => e.value))).join("|") === "tone|Double L ◂ tone|Double R ◂ tone|Octave Down ◂ tone|Whisper Air ◂ tone");
+  check("the start layer carries the first rack", (await page.textContent(".rack-item.on .rack-name"))?.trim() === "Lead Clean");
+  const stacked = await exportBytes();
+  await page.waitForTimeout(300);
+  await page.click(".dialog button");
+  let sd = 0;
+  for (let i = 44; i < Math.min(single.length, stacked.length); i++) if (single[i] !== stacked[i]) sd++;
+  check("the stack renders differently from the single layer", sd > 10000, `${sd} bytes differ`);
+  // Delete the clip on layer 3: every linked layer loses it.
+  const laneInk = () =>
+    page.evaluate(() => {
+      const c = document.querySelector(".lanes canvas");
+      const ctx = c.getContext("2d");
+      const dpr = devicePixelRatio;
+      return [0, 1, 2, 3, 4].map((lane) => {
+        const top = parseFloat(c.style.top) || 0;
+        const d = ctx.getImageData(Math.round(20 * dpr), Math.round((lane * 96 + 48 - top) * dpr), Math.round(60 * dpr), 1).data;
+        const bg = ctx.getImageData(Math.round(2 * dpr), Math.round((lane * 96 + 1 - top) * dpr), 1, 1).data;
+        let n = 0;
+        for (let i = 0; i < d.length; i += 4) if (Math.abs(d[i] - bg[0]) + Math.abs(d[i + 1] - bg[1]) + Math.abs(d[i + 2] - bg[2]) > 40) n++;
+        return n;
+      });
+    });
+  await page.click("[aria-label='Close FX']").catch(() => page.click(".rack-title .chip"));
+  await page.waitForTimeout(200);
+  const before = await laneInk();
+  const box = await page.$eval(".lanes", (el) => { const r = el.getBoundingClientRect(); return { x: r.left, y: r.top }; });
+  await page.mouse.click(box.x + 40, box.y + 2 * 96 + 50);
+  await page.keyboard.press("Delete");
+  await page.waitForTimeout(300);
+  const after = await laneInk();
+  const delStatus = (await page.textContent(".statusbar")).trim();
+  check("every linked layer has audio before the delete", before.every((n) => n > 10), before.join(","));
+  check("deleting the clip on one stack layer removes it from all five", after.every((n) => n === 0), `${after.join(",")} · ${delStatus} · focus ${await page.evaluate(() => document.activeElement?.tagName + "." + document.activeElement?.className)}`);
+  await page.keyboard.press("Control+z");
+  await page.waitForTimeout(300);
+  check("undo brings it back on every layer", (await laneInk()).every((n) => n > 10));
 
   await browser.close();
   server.close();

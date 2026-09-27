@@ -44,6 +44,8 @@ export class TrackChannel {
   readonly output: GainNode;
   readonly send: GainNode;
 
+  private cutLow: BiquadFilterNode;
+  private cutHigh: BiquadFilterNode;
   private eqLow: BiquadFilterNode;
   private eqMid: BiquadFilterNode;
   private eqHigh: BiquadFilterNode;
@@ -70,6 +72,14 @@ export class TrackChannel {
     this.send = ctx.createGain();
     this.send.gain.value = 0;
 
+    this.cutLow = ctx.createBiquadFilter();
+    this.cutLow.type = "highpass";
+    this.cutLow.frequency.value = 10;
+    this.cutLow.Q.value = Math.SQRT1_2;
+    this.cutHigh = ctx.createBiquadFilter();
+    this.cutHigh.type = "lowpass";
+    this.cutHigh.frequency.value = ctx.sampleRate / 2;
+    this.cutHigh.Q.value = Math.SQRT1_2;
     this.eqLow = ctx.createBiquadFilter();
     this.eqLow.type = "lowshelf";
     this.eqLow.frequency.value = EQ_LOW_HZ;
@@ -108,7 +118,9 @@ export class TrackChannel {
 
     // Wire the chain. The worklet stages start routed around (see `route`):
     // a layer with nothing engaged costs no worklet calls at all.
-    this.input.connect(this.eqLow);
+    this.input.connect(this.cutLow);
+    this.cutLow.connect(this.cutHigh);
+    this.cutHigh.connect(this.eqLow);
     this.eqLow.connect(this.eqMid);
     this.eqMid.connect(this.eqHigh);
     this.eqHigh.connect(this.stereo);
@@ -190,6 +202,11 @@ export class TrackChannel {
     ramp(this.input.gain, audible ? track.gain : 0);
     ramp(this.send.gain, audible && fx.reverb ? track.reverbSend : 0);
 
+    // Cuts at their "off" settings sit outside the audio band (10 Hz / Nyquist).
+    const lowCut = fx.eq && track.eq.lowCut > 20 ? track.eq.lowCut : 10;
+    const highCut = fx.eq && track.eq.highCut < 20000 ? track.eq.highCut : this.ctx.sampleRate / 2;
+    ramp(this.cutLow.frequency, lowCut);
+    ramp(this.cutHigh.frequency, Math.min(highCut, this.ctx.sampleRate / 2));
     ramp(this.eqLow.gain, fx.eq ? track.eq.low : 0);
     ramp(this.eqMid.gain, fx.eq ? track.eq.mid : 0);
     ramp(this.eqHigh.gain, fx.eq ? track.eq.high : 0);
@@ -251,6 +268,8 @@ export class TrackChannel {
       this.input,
       this.output,
       this.send,
+      this.cutLow,
+      this.cutHigh,
       this.eqLow,
       this.eqMid,
       this.eqHigh,

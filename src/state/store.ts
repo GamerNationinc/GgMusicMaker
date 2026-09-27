@@ -7,7 +7,9 @@
 
 import { writable, get } from "svelte/store";
 import type { Project, Track, Clip, TransportState } from "../audio/types";
-import { nextId, reserveIds, TRACK_COLORS } from "../audio/types";
+import { nextId, reserveIds, TRACK_COLORS, EQ_CUT_OFF } from "../audio/types";
+import { syncStacks, makeStackLayer, mirrorClips, ensureLinkIds, stackMembers } from "../audio/stacks";
+import { STACK_RECIPES, findRack, rackTrack } from "../fx/racks";
 import {
   splitClip,
   trimClip,
@@ -161,8 +163,10 @@ interface EditOptions {
 /** Apply an edit to the project, record it for undo, and sync the engine. */
 function updateProject(fn: (p: Project) => Project, opts: EditOptions = {}): void {
   project.update((p) => {
-    const next = fn(p);
+    let next = fn(p);
     if (next === p) return p;
+    // Linked stack layers follow every clip edit made on any one of them.
+    next = syncStacks(p, next);
     if (opts.history !== false) {
       setHistory(history.push(hist, p, opts.history ?? null, performance.now()));
       dirty.set(true);
@@ -239,11 +243,14 @@ function makeTrack(name: string): Track {
     width: 1,
     reverbPan: 0,
     reverbWidth: 1,
-    eq: { low: 0, mid: 0, high: 0 },
+    eq: { low: 0, mid: 0, high: 0, ...EQ_CUT_OFF },
     synth: { ...DEFAULT_SYNTH },
     morph: { ...DEFAULT_MORPH },
     punch: { ...DEFAULT_PUNCH },
     fx: { ...FX_ALL_ON },
+    stackId: null,
+    linked: false,
+    role: "",
     color,
     clips: [],
   };
@@ -288,6 +295,95 @@ export function duplicateSelectedTrack(): void {
   duplicateTrack(id);
 }
 
+// ---- stacks + instrument racks --------------------------------------------
+
+/** Apply an instrument rack to one layer (resets its modules, then dials in). */
+export async function applyRack(trackId: string, rackName: string): Promise<void> {
+  const rack = findRack(rackName);
+  if (!rack) return;
+  await engine.ensureRunning();
+  updateTrack(trackId, (t) => rackTrack(t, rack));
+  status.set(`Rack: ${rack.name} — ${rack.blurb}.`);
+}
+
+/** Stack layers are named "<rack> ◂ <source>" so the rack reads first on
+ *  the narrow head; this recovers the source name. */
+function baseName(name: string): string {
+  const parts = name.split(" ◂ ");
+  return parts[parts.length - 1];
+}
+
+/** Add a linked layer of `trackId`'s audio to its stack (starting a stack if
+ *  it has none), optionally with a rack; lands under the stack's last layer. */
+function stackLayerEdit(p: Project, trackId: string, rackName?: string): { next: Project; id: string } | null {
+  const src = p.tracks.find((t) => t.id === trackId);
+  if (!src) return null;
+  const stackId = src.stackId ?? nextId("stack");
+  const rack = rackName ? findRack(rackName) : undefined;
+  const members = stackMembers(p, src.stackId);
+  const n = members.length || 1;
+  let layer = makeStackLayer(src, stackId, makeTrack(""), `${rack?.name ?? `Layer ${n + 1}`} ◂ ${baseName(src.name)}`);
+  if (rack) layer = rackTrack(layer, rack);
+  const tracks = p.tracks.map((t) =>
+    t.id === src.id && !t.stackId ? { ...t, stackId, linked: true, clips: ensureLinkIds(t.clips) } : t,
+  );
+  const lastId = members.length ? members[members.length - 1].id : src.id;
+  return { next: { ...p, tracks: insertTrackAfter(tracks, lastId, layer) }, id: layer.id };
+}
+
+export async function addStackLayer(trackId: string, rackName?: string): Promise<string | null> {
+  await engine.ensureRunning();
+  let id: string | null = null;
+  updateProject((p) => {
+    const r = stackLayerEdit(p, trackId, rackName);
+    if (!r) return p;
+    id = r.id;
+    return r.next;
+  });
+  if (!id) return null;
+  if (get(transport).isPlaying) engine.play(get(project), get(transport).playhead);
+  status.set(`Stacked a linked layer${rackName ? ` (${rackName})` : ""} — edits to its clips follow the whole stack.`);
+  return id;
+}
+
+/** Build a whole stack from a recipe in one undo step: the first rack goes on
+ *  this layer, each other rack on a new linked layer. */
+export async function buildStack(trackId: string, recipeName: string): Promise<void> {
+  const recipe = STACK_RECIPES.find((r) => r.name === recipeName);
+  if (!recipe) return;
+  await engine.ensureRunning();
+  updateProject((p) => {
+    const first = findRack(recipe.layers[0])!;
+    let next: Project = { ...p, tracks: p.tracks.map((t) => (t.id === trackId ? rackTrack(t, first) : t)) };
+    for (const name of recipe.layers.slice(1)) {
+      const r = stackLayerEdit(next, trackId, name);
+      if (r) next = r.next;
+    }
+    return next;
+  });
+  if (get(transport).isPlaying) engine.play(get(project), get(transport).playhead);
+  status.set(`Stack: ${recipe.name} — ${recipe.layers.length} layers (${recipe.blurb}).`);
+}
+
+/** Link / unlink a stack layer's clips from the rest of the stack. Relinking
+ *  snaps its clips back to the stack's. */
+export function toggleLinked(trackId: string): void {
+  updateProject((p) => {
+    const t = p.tracks.find((x) => x.id === trackId);
+    if (!t?.stackId) return p;
+    if (t.linked) return { ...p, tracks: p.tracks.map((x) => (x.id === trackId ? { ...x, linked: false } : x)) };
+    const ref = p.tracks.find((x) => x.stackId === t.stackId && x.linked && x.id !== t.id);
+    return {
+      ...p,
+      tracks: p.tracks.map((x) =>
+        x.id === trackId ? { ...x, linked: true, clips: ref ? mirrorClips(ensureLinkIds(ref.clips), ensureLinkIds(x.clips)) : x.clips } : x,
+      ),
+    };
+  });
+  const t = get(project).tracks.find((x) => x.id === trackId);
+  status.set(t?.linked ? `${t.name} relinked to its stack.` : `${t?.name} unlinked — its clips now edit on their own.`);
+}
+
 export function setTrackGain(trackId: string, gain: number): void {
   updateTrack(trackId, (t) => ({ ...t, gain }), { history: `gain:${trackId}` });
 }
@@ -312,7 +408,7 @@ export function setPlacement(trackId: string, key: PlaceKey, value: number): voi
   updateTrack(trackId, (t) => (t[key] === v ? t : { ...t, [key]: v }), { history: `place:${key}:${trackId}` });
 }
 
-export function setEq(trackId: string, band: "low" | "mid" | "high", db: number): void {
+export function setEq(trackId: string, band: "low" | "mid" | "high" | "lowCut" | "highCut", db: number): void {
   updateTrack(trackId, (t) => ({ ...t, eq: { ...t.eq, [band]: db } }), {
     history: `eq:${band}:${trackId}`,
   });

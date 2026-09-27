@@ -22,14 +22,22 @@ export interface Clip {
   /** Length of the clip, in seconds. */
   duration: number;
   name: string;
+  /** Matches this clip to its twins on the other linked layers of a stack. */
+  linkId?: string;
 }
 
-/** 3-band EQ, gains in dB (-18..+18). */
+/** 3-band EQ, gains in dB (-18..+18), plus low/high cut filters. */
 export interface EqParams {
   low: number;
   mid: number;
   high: number;
+  /** High-pass corner, Hz. 20 = off. Stacked layers use it to split bands. */
+  lowCut: number;
+  /** Low-pass corner, Hz. 20000 = off. */
+  highCut: number;
 }
+
+export const EQ_CUT_OFF = { lowCut: 20, highCut: 20000 } as const;
 
 /** One layer/track: a stack of clips plus mix + FX params. */
 export interface Track {
@@ -61,6 +69,12 @@ export interface Track {
   morph: MorphParams;
   /** Power switch per FX module (bypass keeps the settings). */
   fx: FxEnabled;
+  /** Stack this layer belongs to (null = standalone). */
+  stackId: string | null;
+  /** Linked stack members share clip edits (see audio/stacks.ts). */
+  linked: boolean;
+  /** Instrument rack last applied (shown on the head), or "". */
+  role: string;
   /** UI accent colour for the track's clips. */
   color: string;
   clips: Clip[];

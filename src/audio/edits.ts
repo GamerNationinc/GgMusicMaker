@@ -131,6 +131,9 @@ export function cloneTrack(track: Track, name: string): Track {
     id: nextId("track"),
     name,
     armed: false,
+    // A duplicate is a standalone copy; stack layers are made with STACK.
+    stackId: null,
+    linked: false,
     eq: { ...track.eq },
     synth: { ...track.synth },
     morph: { ...track.morph },

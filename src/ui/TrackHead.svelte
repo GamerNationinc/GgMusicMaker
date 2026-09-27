@@ -11,6 +11,8 @@
     duplicateTrack,
     toggleFxRack,
     selectedTrackId,
+    addStackLayer,
+    toggleLinked,
   } from "../state/store";
   import { LANE_HEIGHT } from "./constants";
   import { anyFxLit } from "../fx/chain";
@@ -20,11 +22,17 @@
   let { track }: { track: Track } = $props();
 </script>
 
-<div class="head" style:height="{LANE_HEIGHT}px" style:border-left="4px solid {laneColor($theme, track.color)}">
+<div
+  class="head"
+  class:stacked={!!track.stackId}
+  style:height="{LANE_HEIGHT}px"
+  style:border-left="{track.stackId ? 10 : 4}px {track.stackId && !track.linked ? 'dashed' : 'solid'} {laneColor($theme, track.color)}"
+>
   <div class="row top">
     <input
       class="name"
       value={track.name}
+      title={track.name}
       oninput={(e) => renameTrack(track.id, (e.target as HTMLInputElement).value)}
     />
     <button
@@ -34,7 +42,12 @@
       onclick={() => toggleFxRack(track.id)}
       title={anyFxLit(track) ? "FX rack (effects active)" : "Open FX rack"}
     >FX</button>
-    <button class="chip dup" onclick={() => duplicateTrack(track.id)} title="Duplicate layer (Ctrl+D)">⧉</button>
+    <button class="chip stack" onclick={() => void addStackLayer(track.id)} title="Stack: add a linked layer of this audio (own FX, shared edits)">⊞</button>
+    {#if track.stackId}
+      <button class="chip link" class:on={track.linked} onclick={() => toggleLinked(track.id)} title={track.linked ? "Linked to its stack — click to unlink" : "Unlinked — click to relink"}>{track.linked ? "🔗" : "⛓‍💥"}</button>
+    {:else}
+      <button class="chip dup" onclick={() => duplicateTrack(track.id)} title="Duplicate as an independent layer (Ctrl+D)">⧉</button>
+    {/if}
     <button class="chip" onclick={() => removeTrack(track.id)} title="Remove layer">✕</button>
   </div>
 
@@ -96,6 +109,16 @@
   }
   .chips {
     gap: 4px;
+  }
+  .top {
+    gap: 3px;
+  }
+  .top .chip {
+    min-width: 28px;
+    padding: 0;
+  }
+  .chip.stack {
+    color: var(--green);
   }
   .chip {
     min-width: 30px;

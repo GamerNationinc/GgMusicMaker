@@ -174,6 +174,17 @@ export function migrateProject(project: Project): Project {
       synth: normalizeSynth(t.synth, voice),
       // v4 → v5: the MORPH module (off for old sessions).
       morph: normalizeMorph(t.morph),
+      // v6 → v7: EQ cut filters (off) and layer stacks (standalone).
+      eq: {
+        low: num(t.eq?.low, -18, 18, 0),
+        mid: num(t.eq?.mid, -18, 18, 0),
+        high: num(t.eq?.high, -18, 18, 0),
+        lowCut: num(t.eq?.lowCut, 20, 2000, 20),
+        highCut: num(t.eq?.highCut, 500, 20000, 20000),
+      },
+      stackId: typeof t.stackId === "string" ? t.stackId : null,
+      linked: typeof t.stackId === "string" && t.linked !== false,
+      role: typeof t.role === "string" ? t.role : "",
       // v5 → v6: PUNCH (off for old sessions).
       punch: normalizePunch(t.punch),
       // v3 → v4: power switches, all on.

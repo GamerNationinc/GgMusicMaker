@@ -106,6 +106,14 @@ launched on this Steam Deck under KDE/Wayland.
 |---|---|
 | Layers below the first screenful stayed blank **in WebKit only** (the Deck's engine): `.lanes-scroll` is a flex item *and* a scroll container with `overflow-y: hidden`; WebKit stretched it to the body's visible height, clipping every lane below. Chromium sizes it to the content, so the Chromium suite never saw it. Fix: `align-self: flex-start`. | New `npm run test:webkit` (`tests/webkit-lanes.mjs` in Playwright WebKit inside the Ubuntu build image): 14 × 200 s songs, layers 11/13/14 draw after scrolling and at the song's end. Fails 4/6 ("clipped by the lanes box") with the fix removed, passes 6/6 with it |
 
+### Added 2026-09-26 — layer stacks + instrument racks
+
+| Feature | Verified how |
+|---|---|
+| **Layer stacks** (`audio/stacks.ts`): ⊞ on a head (or ＋ STACK LAYER) adds a *linked* layer of the same audio under it. Linked members share clip edits — split / move / trim / delete on any layer mirrors to all (clips matched by `linkId`, run in `updateProject` via `syncStacks`), while each keeps its own FX chain. 🔗 unlinks / relinks. ⧉ still makes an independent copy. | Unit (`stacks.test.ts`, 7): move/split/delete mirror, ids kept, unlinked members untouched, delete that rebuilds every list still wins. Browser: deleting the clip on layer 3 of a 5-layer stack removes it on all five; undo restores all |
+| **Instrument racks** (`fx/racks.ts`): 41 racks in VOCALS / DRUMS / PERCUSSION / BASS / SYNTH / KEYS & GUITAR / AMBIENT, each a whole-layer setting (EQ incl. new LOW/HIGH CUT, PUNCH, MORPH, VOICE SYNTH, send, pan, width, level). 14 **stack recipes** build a full stack in one undo step (Wall of Vox, Big Room Kit, Stack Bass, Huge Lead…). FX panel opens on RACKS & STACK; ⛓ FX CHAIN is the per-module editor (view remembered). | Unit (`racks.test.ts`, 6): every category covered, every preset reference resolves, racks reset then dial in, values in range. Browser: Wall of Vox → 5 named layers, render differs from the single layer |
+| **EQ low/high cut** (12 dB/oct HP/LP before the shelves) — the tool for splitting bands across stacked layers (Sub Boom = LP 150, Crack = HP 1.5k). Sessions v7: cuts off, layers standalone. | Session migration test |
+
 ### Native Steam Deck build
 
 | Step | Verified how |

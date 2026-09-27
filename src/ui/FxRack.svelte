@@ -1,3 +1,9 @@
+<script lang="ts" module>
+  import { writable } from "svelte/store";
+  /** RACKS & STACK vs FX CHAIN — remembered while the app runs. */
+  export const rackView = writable<"racks" | "chain">("racks");
+</script>
+
 <script lang="ts">
   // The FX rack: a chain strip (LAYER ▸ EQ ▸ MORPH ▸ VOICE SYNTH ▸ REVERB) that
   // summarises every module and one full-width editor for the picked slot.
@@ -24,7 +30,14 @@
     toggleHeadphones3d,
     setPunchParam,
     applyPunchPreset,
+    applyRack,
+    addStackLayer,
+    buildStack,
+    toggleLinked,
   } from "../state/store";
+  import { CATEGORIES, RACKS, STACK_RECIPES, findRack, type Category } from "../fx/racks";
+  import { stackMembers } from "../audio/stacks";
+  import { hz } from "../fx/chain";
   import { PUNCH_SPECS, PUNCH_PRESETS, matchingPunchPreset, punchText, type PunchKey } from "../fx/punch";
   import { punchPreviewFor, previewTick } from "./punchPreviewStore";
   import {
@@ -58,6 +71,14 @@
   const spaces: ReverbSpace[] = ["room", "hall", "plate"];
 
   let slot = $state<FxSlot>("synth");
+  // RACKS & STACK view vs the per-module chain editor.
+  let category = $state<Category>("VOCALS");
+  const members = $derived(track ? stackMembers($project, track.stackId) : []);
+  // Follow the layer's rack category when switching layers.
+  $effect(() => {
+    const c = track?.role ? findRack(track.role)?.category : undefined;
+    if (c) category = c;
+  });
   // One section of the synth visible at a time keeps the rack short enough
   // for the Deck's 800 px screen; the preset screen + MIX are always shown.
   let tab = $state(0);
@@ -179,6 +200,62 @@
       <button class="chip" onclick={() => selectedTrackId.set(null)} title="Close">✕</button>
     </div>
 
+    <!-- View switch + the layer's stack -->
+    <div class="topbar">
+      <div class="views" role="tablist">
+        <button class="tab" class:on={$rackView === "racks"} role="tab" aria-selected={$rackView === "racks"} onclick={() => rackView.set("racks")}>▦ RACKS & STACK</button>
+        <button class="tab" class:on={$rackView === "chain"} role="tab" aria-selected={$rackView === "chain"} onclick={() => rackView.set("chain")}>⛓ FX CHAIN</button>
+      </div>
+      <div class="stack-strip" aria-label="Layers in this stack">
+        {#if members.length > 1}
+          <span class="tiny">STACK</span>
+          {#each members as m (m.id)}
+            <button class="member" class:on={m.id === track.id} onclick={() => selectedTrackId.set(m.id)} title={m.name}>
+              {m.linked ? "🔗" : "⛓‍💥"} {m.role || m.name.split(" ◂ ")[0]}
+            </button>
+          {/each}
+          <button class="btn small" onclick={() => toggleLinked(track!.id)} title="Link/unlink this layer's clips from the stack">{track.linked ? "UNLINK" : "RELINK"}</button>
+        {:else}
+          <span class="tiny">stand-alone layer — stack copies of it below, each with its own FX</span>
+        {/if}
+        <button class="btn small accent" onclick={() => void addStackLayer(track!.id)} title="Add a linked copy of this audio to the stack">＋ STACK LAYER</button>
+      </div>
+    </div>
+
+    {#if $rackView === "racks"}
+      <div class="racks">
+        <div class="cats" role="tablist" aria-label="Instrument category">
+          {#each CATEGORIES as c (c)}
+            <button class="engine" class:on={category === c} role="tab" aria-selected={category === c} onclick={() => (category = c)}>{c}</button>
+          {/each}
+        </div>
+        <div class="rack-cols">
+          <div class="rack-list">
+            <span class="tiny">RACKS — tap to put on this layer · ＋ to stack it as a new layer</span>
+            <div class="rack-grid">
+              {#each RACKS.filter((r) => r.category === category) as r (r.name)}
+                <div class="rack-item" class:on={track.role === r.name}>
+                  <button class="rack-apply" onclick={() => void applyRack(track!.id, r.name)} title={r.blurb}>
+                    <span class="rack-name">{r.name}</span>
+                    <span class="rack-blurb">{r.blurb}</span>
+                  </button>
+                  <button class="rack-add" onclick={() => void addStackLayer(track!.id, r.name)} aria-label="Stack {r.name} as a new layer" title="Stack as a new linked layer">＋</button>
+                </div>
+              {/each}
+            </div>
+          </div>
+          <div class="recipe-list">
+            <span class="tiny">STACK RECIPES — builds every layer at once</span>
+            {#each STACK_RECIPES.filter((s) => s.category === category) as s (s.name)}
+              <button class="recipe" onclick={() => void buildStack(track!.id, s.name)} title={s.layers.join(" + ")}>
+                <span class="rack-name">▸ {s.name}</span>
+                <span class="rack-blurb">{s.layers.length} layers · {s.blurb}</span>
+              </button>
+            {/each}
+          </div>
+        </div>
+      </div>
+    {:else}
     <!-- Chain strip -->
     <div class="chain">
       {#each FX_SLOTS as s, i (s.key)}
@@ -246,6 +323,20 @@
 
       {:else if slot === "eq"}
         <div class="eq-bands">
+          <div class="band">
+            <span class="readout">{track.eq.lowCut > 20 ? `${hz(track.eq.lowCut)}Hz` : "off"}</span>
+            <input
+              class="vert"
+              type="range"
+              min="20"
+              max="2000"
+              step="1"
+              value={track.eq.lowCut}
+              aria-label="Low cut"
+              oninput={(e) => setEq(track!.id, "lowCut", Number((e.target as HTMLInputElement).value))}
+            />
+            <span class="tiny">LOW CUT</span>
+          </div>
           {#each [["low", "LOW 220"], ["mid", "MID 1.2k"], ["high", "HIGH 4.5k"]] as [band, name]}
             <div class="band">
               <span class="readout">{track.eq[band as "low" | "mid" | "high"] > 0 ? "+" : ""}{track.eq[band as "low" | "mid" | "high"]} dB</span>
@@ -262,6 +353,20 @@
               <span class="tiny">{name}</span>
             </div>
           {/each}
+          <div class="band">
+            <span class="readout">{track.eq.highCut < 20000 ? `${hz(track.eq.highCut)}Hz` : "off"}</span>
+            <input
+              class="vert"
+              type="range"
+              min="500"
+              max="20000"
+              step="10"
+              value={track.eq.highCut}
+              aria-label="High cut"
+              oninput={(e) => setEq(track!.id, "highCut", Number((e.target as HTMLInputElement).value))}
+            />
+            <span class="tiny">HIGH CUT</span>
+          </div>
         </div>
 
       {:else if slot === "punch"}
@@ -595,6 +700,7 @@
         </div>
       {/if}
     </div>
+    {/if}
   </div>
 {/if}
 
@@ -607,6 +713,136 @@
     flex-direction: column;
     gap: 8px;
   }
+  /* RACKS & STACK */
+  .topbar {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .views {
+    display: flex;
+    gap: 2px;
+  }
+  .stack-strip {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    flex: 1 1 auto;
+    flex-wrap: wrap;
+    min-width: 0;
+  }
+  .member {
+    font-family: var(--font);
+    font-size: 10px;
+    min-height: 28px;
+    padding: 0 8px;
+    border: 1px solid var(--box, var(--bevel-dark));
+    background: var(--panel-lo);
+    color: var(--ink-dim);
+    cursor: pointer;
+    max-width: 150px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .member.on {
+    color: var(--ink);
+    border-color: var(--green);
+  }
+  .stack-strip .accent {
+    margin-left: auto;
+  }
+  .racks {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    background: var(--panel-lo);
+    border: 1px solid var(--box, var(--bevel-dark));
+    padding: 8px 10px;
+  }
+  .cats {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 3px;
+  }
+  .rack-cols {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+  }
+  .rack-list {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+  }
+  .rack-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+    gap: 4px;
+  }
+  .rack-item {
+    display: flex;
+    border: 1px solid var(--box, var(--bevel-dark));
+    background: var(--panel);
+    min-width: 0;
+  }
+  .rack-item.on {
+    border-color: var(--green);
+    box-shadow: inset 0 0 0 1px var(--green);
+  }
+  .rack-apply,
+  .recipe {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1px;
+    padding: 4px 8px;
+    min-height: 40px;
+    border: none;
+    background: transparent;
+    color: var(--ink);
+    font-family: var(--font);
+    cursor: pointer;
+    text-align: left;
+    min-width: 0;
+  }
+  .rack-add {
+    flex: 0 0 40px;
+    border: none;
+    border-left: 1px solid var(--box, var(--bevel-dark));
+    background: var(--panel-lo);
+    color: var(--green);
+    font-size: 18px;
+    cursor: pointer;
+  }
+  .rack-name {
+    font-size: 11px;
+    font-weight: bold;
+    letter-spacing: 1px;
+  }
+  .rack-blurb {
+    font-size: 9px;
+    color: var(--ink-dim);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+  }
+  .recipe-list {
+    flex: 0 0 260px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .recipe {
+    border: 1px solid var(--green);
+    background: var(--panel);
+  }
+
   .rack-title {
     display: flex;
     align-items: center;

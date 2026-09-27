@@ -39,11 +39,14 @@ const project: Project = {
       width: 1.3,
       reverbPan: 0.2,
       reverbWidth: 0.7,
-      eq: { low: 2, mid: -1, high: 4 },
+      eq: { low: 2, mid: -1, high: 4, lowCut: 20, highCut: 20000 },
       synth: { ...DEFAULT_SYNTH, mix: 0.7, shift: 1, pitch: 7 },
       morph: { ...DEFAULT_MORPH },
       punch: { ...DEFAULT_PUNCH },
       fx: { place: true, eq: false, punch: true, morph: true, synth: true, reverb: true },
+      stackId: null,
+      linked: false,
+      role: "",
       color: "#ff3ca0",
       clips: [
         { id: "clip_1", bufferId: "buf_1", startTime: 0, offset: 0, duration: 2, name: "a" },
@@ -62,11 +65,14 @@ const project: Project = {
       width: 1,
       reverbPan: 0,
       reverbWidth: 1,
-      eq: { low: 0, mid: 0, high: 0 },
+      eq: { low: 0, mid: 0, high: 0, lowCut: 20, highCut: 20000 },
       synth: { ...DEFAULT_SYNTH },
       morph: { ...DEFAULT_MORPH },
       punch: { ...DEFAULT_PUNCH },
       fx: { place: true, eq: true, punch: true, morph: true, synth: true, reverb: true },
+      stackId: null,
+      linked: false,
+      role: "",
       color: "#5af096",
       clips: [{ id: "clip_3", bufferId: "buf_2", startTime: 1, offset: 0, duration: 0.5, name: "c" }],
     },
@@ -98,7 +104,7 @@ describe("session container", () => {
     expect(header.project.tracks[0].synth).toEqual({ ...DEFAULT_SYNTH, mix: 0.7, shift: 1, pitch: 7 });
     expect(header.project.tracks[0]).toMatchObject({ pan: -0.4, width: 1.3, reverbPan: 0.2, reverbWidth: 0.7 });
     expect(header.project.tracks[0].fx).toEqual({ place: true, eq: false, punch: true, morph: true, synth: true, reverb: true });
-    expect(header.project.tracks[0].eq).toEqual({ low: 2, mid: -1, high: 4 });
+    expect(header.project.tracks[0].eq).toEqual({ low: 2, mid: -1, high: 4, lowCut: 20, highCut: 20000 });
 
     const a = audio.get("buf_1")!;
     expect(a.sampleRate).toBe(48000);

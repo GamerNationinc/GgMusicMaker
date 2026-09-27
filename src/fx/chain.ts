@@ -48,6 +48,8 @@ export function widthText(v: number): string {
 }
 
 const db = (v: number) => (v > 0 ? `+${v}` : `${v}`);
+/** 90 → "90", 2500 → "2.5k". */
+export const hz = (v: number) => (v >= 1000 ? `${+(v / 1000).toFixed(1)}k` : `${Math.round(v)}`);
 
 /** True when the module would change the sound if powered on: the lamp. */
 export function slotEngaged(track: Track, slot: FxSlot): boolean {
@@ -55,7 +57,9 @@ export function slotEngaged(track: Track, slot: FxSlot): boolean {
     case "place":
       return track.pan !== 0 || track.width !== 1;
     case "eq":
-      return track.eq.low !== 0 || track.eq.mid !== 0 || track.eq.high !== 0;
+      return (
+        track.eq.low !== 0 || track.eq.mid !== 0 || track.eq.high !== 0 || track.eq.lowCut > 20 || track.eq.highCut < 20000
+      );
     case "punch":
       return punchIsActive(track.punch);
     case "morph":
@@ -78,7 +82,7 @@ export function slotSummary(track: Track, slot: FxSlot, space: ReverbSpace): str
     case "place":
       return `${panText(track.pan)} · ${widthText(track.width)}`;
     case "eq":
-      return `${db(track.eq.low)} / ${db(track.eq.mid)} / ${db(track.eq.high)} dB`;
+      return `${track.eq.lowCut > 20 ? `HP${hz(track.eq.lowCut)} · ` : ""}${db(track.eq.low)} / ${db(track.eq.mid)} / ${db(track.eq.high)} dB${track.eq.highCut < 20000 ? ` · LP${hz(track.eq.highCut)}` : ""}`;
     case "punch":
       return punchIsActive(track.punch) ? (matchingPunchPreset(track.punch) ?? "custom") : "off";
     case "morph": {

@@ -17,11 +17,14 @@ const base = (over: Partial<Track> = {}): Track => ({
   width: 1,
   reverbPan: 0,
   reverbWidth: 1,
-  eq: { low: 0, mid: 0, high: 0 },
+  eq: { low: 0, mid: 0, high: 0, lowCut: 20, highCut: 20000 },
   synth: { ...DEFAULT_SYNTH },
   morph: { ...DEFAULT_MORPH },
   punch: { ...DEFAULT_PUNCH },
   fx: { ...FX_ALL_ON },
+  stackId: null,
+  linked: false,
+  role: "",
   color: "#fff",
   clips: [],
   ...over,
@@ -46,7 +49,7 @@ describe("fx chain strip", () => {
     const t = base({
       pan: -0.4,
       width: 1.2,
-      eq: { low: 2, mid: 0, high: -3.5 },
+      eq: { low: 2, mid: 0, high: -3.5, lowCut: 20, highCut: 20000 },
       synth: presetParams(choir),
       reverbSend: 0.3,
     });
@@ -59,7 +62,7 @@ describe("fx chain strip", () => {
   });
 
   it("the lamp needs the module on *and* engaged", () => {
-    const t = base({ eq: { low: 6, mid: 0, high: 0 } });
+    const t = base({ eq: { low: 6, mid: 0, high: 0, lowCut: 20, highCut: 20000 } });
     expect(slotLit(t, "eq")).toBe(true);
     expect(slotLit({ ...t, fx: { ...t.fx, eq: false } }, "eq")).toBe(false);
     expect(slotEngaged({ ...t, fx: { ...t.fx, eq: false } }, "eq")).toBe(true); // still set, just bypassed
