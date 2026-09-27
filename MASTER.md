@@ -124,6 +124,15 @@ launched on this Steam Deck under KDE/Wayland.
 
 `src-tauri/` and the Tauri container build are now **legacy** (kept until the Electron path has had real use; CI workflows still build Tauri). Next phase: a native Rust audio engine (napi addon in the Electron main process) behind `AudioBackend`.
 
+### Added 2026-09-26 — native audio engine (Rust), beta
+
+| Feature | Verified how |
+|---|---|
+| `native/` — Rust crate (`ggmm-engine`, Node-API addon via napi-rs, cpal → ALSA → PipeWire). Mixer runs on the device's real-time callback thread: clips (linear-interp resampling), layer level/mute/solo, EQ (Web Audio-spec biquads incl. cuts), PUNCH (line-by-line port of `punch-core.js`), pan/width (placer math), master level + peak limiter + meters. Commands arrive over a lock-free channel; replaced projects/buffers/DSP state are freed off the audio thread. Built by `scripts/build-native.sh` in the Ubuntu 22.04 image (now with `libasound2-dev`) → `native/ggmm-engine.node` (asar-unpacked in the package). | `src/audio/native-engine.test.ts` (10, skipped if unbuilt): plain layer bit-accurate below the limiter; PUNCH Tight Kick / 808 Boom / Snap Drums / Lo-Fi Crush / Blown Out match the JS core to < 2e-4; mute, hard-left pan, low cut, limiter, 44.1→48 kHz resampling. Host: device opened, clock advanced 0.96 s in 1 s |
+| `electron/engine.cjs` hosts it in the main process (IPC); `src/audio/native.ts` `NativeBackend` sends the project + PCM, drives transport, reads playhead/meters (polled at 60 Hz, extrapolated per frame); decoding, recording, export and spectrum stay on the wrapped web engine, which falls back to playing if the device won't open. Header **ENGINE: WEB / NATIVE β** (restarts the window; default WEB). Header names modules the native engine skips (VOICE SYNTH, MORPH, REVERB, SURROUND). | `npm run test:app` now 14/14 on dev tree, packaged folder and installed AppImage: engine opens the device, native playhead reaches 1.5 s, native meters see signal, UI playhead follows, header names MORPH as not-native |
+
+**Not yet native** (next): VOICE SYNTH, MORPH, reverb, surround/binaural, spectrum meter, recording, export (export still renders on the web engine — and its limiter is Chromium's compressor, so a hot native mix and its export can differ slightly at the top). Default stays WEB until those land and it has been listened to on the Deck.
+
 ### Native Steam Deck build
 
 | Step | Verified how |

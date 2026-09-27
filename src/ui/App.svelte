@@ -7,6 +7,7 @@
   import ExportDialog from "./ExportDialog.svelte";
   import MatrixRain from "./MatrixRain.svelte";
   import LoadMeter from "./LoadMeter.svelte";
+  import EngineSwitch from "./EngineSwitch.svelte";
   import {
     togglePlay,
     splitAtPlayhead,
@@ -123,6 +124,7 @@
     </span>
   </div>
   <LoadMeter />
+  <EngineSwitch />
   <button class="btn theme-btn" onclick={onTheme} title="Cycle colour mode (T)" data-role="theme">
     <span class="theme-icon">◐</span> {$theme.label}
   </button>

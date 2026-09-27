@@ -14,6 +14,7 @@ const { app, BrowserWindow, dialog, ipcMain, protocol, net, session, shell } = r
 const path = require("node:path");
 const fs = require("node:fs/promises");
 const { pathToFileURL } = require("node:url");
+const nativeEngine = require("./engine.cjs");
 
 const DIST = path.join(__dirname, "..", "dist");
 const SCHEME = "app";
@@ -81,6 +82,7 @@ app.on("second-instance", () => {
 });
 
 app.whenReady().then(() => {
+  nativeEngine.register();
   // Serve dist/ on app://ggmm/, refusing anything outside it.
   protocol.handle(SCHEME, (req) => {
     const { pathname } = new URL(req.url);

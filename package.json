@@ -50,7 +50,8 @@
       "dist/**/*",
       "electron/**/*",
       "build/icon.png",
-      "package.json"
+      "package.json",
+      "native/ggmm-engine.node"
     ],
     "asar": true,
     "linux": {
@@ -72,7 +73,10 @@
     "appImage": {
       "artifactName": "GgMusicMaker-${version}-${arch}.AppImage"
     },
-    "publish": null
+    "publish": null,
+    "asarUnpack": [
+      "native/ggmm-engine.node"
+    ]
   },
   "desktopName": "ggmusicmaker.desktop"
 }

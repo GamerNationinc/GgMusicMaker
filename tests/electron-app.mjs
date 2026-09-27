@@ -123,6 +123,40 @@ const wav = out.find((f) => f.endsWith(".wav"));
 const bytes = wav ? await readFile(join(saveDir, wav)) : Buffer.alloc(0);
 check("exports a WAV to disk through the native save path", bytes.length > 1_000_000 && bytes.slice(0, 4).toString() === "RIFF", `${wav ?? "nothing"} ${(bytes.length / 1e6).toFixed(1)} MB`);
 
+// --- native (Rust) engine ----------------------------------------------------
+// Switch engines (reloads the window), import one layer, play very quietly,
+// and prove the native engine is the one moving the playhead + meters.
+await page.evaluate(() => localStorage.setItem("ggmm.engine", "native"));
+await page.reload();
+await page.waitForSelector(".title");
+check("ENGINE switch shows NATIVE", (await page.$("[data-role=engine-native].on")) !== null);
+const avail = await page.evaluate(() => window.ggmmNative.engine.available());
+check("the native engine opened the audio device", avail.ok === true, avail.ok ? `${avail.device} @ ${avail.sampleRate} Hz` : avail.error);
+await page.setInputFiles("input[type=file][accept='audio/*']", [join(ROOT, "tests", "fixtures", "tone-4s.wav")]);
+await page.waitForFunction(() => document.querySelectorAll(".head").length === 1);
+await page.$eval(".master input[type=range]", (el) => {
+  el.value = "0.03"; // ~-30 dB: audible proof isn't the point, the meters are
+  el.dispatchEvent(new Event("input", { bubbles: true }));
+});
+const before = await page.evaluate(() => window.ggmmNative.engine.status());
+await page.click("button[aria-label='Play or pause']");
+await page.waitForTimeout(1500);
+const during = await page.evaluate(() => window.ggmmNative.engine.status());
+const shown = (await page.textContent(".transport .time")) ?? "";
+await page.click("button[aria-label='Stop']");
+check("native transport plays: engine playhead advances", during.playing && during.time > 1.0, `t=${during.time.toFixed(2)} s`);
+check("native meters see the signal", during.peak > 0.001, `peak ${during.peak.toFixed(4)}`);
+check("native device clock runs", during.clock - before.clock > 1.2, `${(during.clock - before.clock).toFixed(2)} s`);
+check("UI playhead follows the native engine", /00:0[1-2]/.test(shown), shown.trim());
+// A module the native engine doesn't render yet is named in the header.
+await page.click(".chip.fx");
+await page.click("button.tab:has-text('FX CHAIN')");
+await page.click(".slot.morph .pick");
+await page.click(".engine:has-text('GRAIN CLOUD')");
+await page.waitForTimeout(300);
+check("header names modules not native yet", /MORPH/.test((await page.textContent("[data-role=engine-note]").catch(() => "")) ?? ""));
+await page.evaluate(() => localStorage.setItem("ggmm.engine", "web"));
+
 await app.close();
 console.log(`\n${passed}/${passed + failed} desktop-app checks passed`);
 process.exit(failed ? 1 : 0);

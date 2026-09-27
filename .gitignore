@@ -17,3 +17,5 @@ src-tauri/gen/
 # AppImage extraction output
 squashfs-root/
 release/
+native/target/
+native/ggmm-engine.node

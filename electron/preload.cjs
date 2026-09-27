@@ -7,6 +7,18 @@ contextBridge.exposeInMainWorld("ggmmNative", {
   openFile: (filters) => ipcRenderer.invoke("open-file", { filters }),
   confirm: (message, title) => ipcRenderer.invoke("confirm", { message, title }),
   appInfo: () => ipcRenderer.invoke("app-info"),
+  /** The native (Rust) audio engine in the main process. */
+  engine: {
+    available: () => ipcRenderer.invoke("engine-available"),
+    load: (id, sampleRate, channels) => ipcRenderer.invoke("engine-load", { id, sampleRate, channels }),
+    remove: (id) => ipcRenderer.invoke("engine-remove", { id }),
+    setProject: (json) => ipcRenderer.send("engine-project", json),
+    play: (from) => ipcRenderer.send("engine-play", from),
+    stop: () => ipcRenderer.send("engine-stop"),
+    status: () => ipcRenderer.invoke("engine-status"),
+    render: (project, ids, rates, data, sampleRate, tail) =>
+      ipcRenderer.invoke("engine-render", { project, ids, rates, data, sampleRate, tail }),
+  },
   /** `handler` resolves true to let the window close. */
   onCloseRequested: (handler) => {
     ipcRenderer.on("close-requested", async () => {

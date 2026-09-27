@@ -22,6 +22,7 @@ import {
   insertTrackAfter,
 } from "../audio/edits";
 import { AudioEngine } from "../audio/engine";
+import { NativeBackend, type NativeEngineBridge } from "../audio/native";
 import type { AudioBackend, MasterMeter } from "../audio/backend";
 import * as history from "./history";
 import { encodeWav } from "../audio/wav";
@@ -63,7 +64,50 @@ import { INITIAL_LOAD, type LoadState, frameUtilisation, ema, audioDropout } fro
 
 /** The audio runtime. Typed as the interface, not the class, so a future
  *  native backend can be swapped in without touching the store or the UI. */
-export const engine: AudioBackend = new AudioEngine();
+export const engine: AudioBackend = createBackend();
+
+/** Which audio engine this run uses (chosen at startup; switching reloads). */
+export type EngineKind = "web" | "native";
+const ENGINE_KEY = "ggmm.engine";
+function wantedEngine(): EngineKind {
+  try {
+    // (literal, not ENGINE_KEY: this runs while `engine` initialises, above it)
+    return localStorage.getItem("ggmm.engine") === "native" ? "native" : "web";
+  } catch {
+    return "web";
+  }
+}
+function createBackend(): AudioBackend {
+  const web = new AudioEngine();
+  const bridge = (globalThis as { ggmmNative?: { engine?: NativeEngineBridge } }).ggmmNative?.engine;
+  if (wantedEngine() !== "native" || !bridge) return web;
+  return new NativeBackend(web, bridge, "");
+}
+export const engineKind: EngineKind = engine instanceof NativeBackend ? "native" : "web";
+/** Whether this build can run the native engine at all (desktop app only). */
+export const nativeEngineAvailable = !!(globalThis as { ggmmNative?: { engine?: unknown } }).ggmmNative?.engine;
+/** Modules the project uses that the native engine skips (native mode only). */
+export const engineNote = writable<string>("");
+if (engine instanceof NativeBackend) {
+  engine.onUnsupported = (mods) => engineNote.set(mods.length ? `not native yet: ${mods.join(", ")}` : "");
+  engine.onFallback = (why) => {
+    engineNote.set(`native engine off (${why}) — using web`);
+    status.set(`Native engine unavailable (${why}); playing through the web engine.`);
+  };
+}
+
+/** Switch engines. It's picked at startup, so this restarts the app window. */
+export async function setEngineKind(kind: EngineKind): Promise<void> {
+  if (kind === engineKind) return;
+  if (get(dirty) && !(await confirmDialog("Switching the audio engine restarts GgMusicMaker — unsaved changes will be lost. Continue?"))) return;
+  try {
+    localStorage.setItem(ENGINE_KEY, kind);
+  } catch {
+    return;
+  }
+  dirty.set(false);
+  location.reload();
+}
 
 export const project = writable<Project>({
   tracks: [],
