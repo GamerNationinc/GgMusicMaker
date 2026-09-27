@@ -13,7 +13,7 @@
 // Nothing touches the system's default devices.
 //
 //   npm run build && npm run test:record
-import { writeFile, readFile, mkdtemp, readdir } from "node:fs/promises";
+import { rm, writeFile, readFile, mkdtemp, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -94,11 +94,15 @@ function readSession(buf) {
 
 // ---- the app ------------------------------------------------------------------
 const packaged = process.env.GGMM_APP;
-async function launch(extraEnv = {}) {
+const tempDirs = [dir];
+async function launch(extraEnv = {}, extraArgs = []) {
   const userData = await mkdtemp(join(tmpdir(), "ggmm-rec-data-"));
   const saveDir = await mkdtemp(join(tmpdir(), "ggmm-rec-out-"));
+  tempDirs.push(userData, saveDir);
   const app = await electron.launch({
-    ...(packaged ? { executablePath: resolve(packaged), args: ["--ozone-platform=x11"] } : { args: [ROOT, "--ozone-platform=x11"] }),
+    ...(packaged
+      ? { executablePath: resolve(packaged), args: ["--ozone-platform=x11", ...extraArgs] }
+      : { args: [ROOT, "--ozone-platform=x11", ...extraArgs] }),
     env: {
       ...process.env,
       GGMM_USER_DATA: userData,
@@ -199,7 +203,9 @@ async function waitStatus(page, re, ms = 20000) {
 
 // 2. An input that won't open: recording still works, through the web engine.
 {
-  const { app, page } = await launch({ GGMM_INPUT_DEVICE: "no-such-input" });
+  // The web path needs a mic Chromium can see; CI runners have none, so it
+  // gets Chromium's fake one (this check is about the fallback, not the mic).
+  const { app, page } = await launch({ GGMM_INPUT_DEVICE: "no-such-input" }, ["--use-fake-device-for-media-stream"]);
   await page.keyboard.press("r");
   const s = await waitStatus(page, /Recording onto|Mic unavailable/);
   check("falls back to web recording and says why", /native capture unavailable: no input device named no-such-input — recorded through the web engine/.test(s), s);
@@ -211,5 +217,7 @@ async function waitStatus(page, re, ms = 20000) {
 }
 
 unload();
+// /tmp is RAM on the Deck: never leave test audio behind.
+for (const d of tempDirs) await rm(d, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 console.log(`\n${passed}/${passed + failed} native recording checks passed`);
 process.exit(failed ? 1 : 0);
