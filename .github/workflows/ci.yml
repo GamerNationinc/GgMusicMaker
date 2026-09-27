@@ -94,5 +94,5 @@ jobs:
       - name: Stem separation end to end (real song → stems that add back up; cancel)
         run: xvfb-run -a npm run test:stems
 
-      - name: Big session end to end (1.2 GB: autosave, kill, recover, save, open, export)
+      - name: "Big session end to end (1.2 GB: autosave, kill, recover, save, open, export)"
         run: xvfb-run -a npm run test:big
