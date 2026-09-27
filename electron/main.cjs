@@ -17,6 +17,7 @@ const { pathToFileURL } = require("node:url");
 const nativeEngine = require("./engine.cjs");
 const crashlog = require("./crashlog.cjs");
 const autosave = require("./autosave.cjs");
+const stems = require("./stems.cjs");
 
 const DIST = path.join(__dirname, "..", "dist");
 const SCHEME = "app";
@@ -150,6 +151,7 @@ app.on("second-instance", () => {
 app.whenReady().then(() => {
   nativeEngine.register();
   autosave.register();
+  stems.register();
   // Serve dist/ on app://ggmm/, refusing anything outside it.
   protocol.handle(SCHEME, (req) => {
     const { pathname } = new URL(req.url);

@@ -20,6 +20,7 @@ interface NativeBridge {
   appInfo(): Promise<{ version: string; electron: string; chrome: string; autosaveMs?: number }>;
   onCloseRequested(handler: () => Promise<boolean>): void;
   autosave?: AutosaveBridge;
+  separation?: SeparationBridge;
   logError?(message: string, source?: string): void;
 }
 
@@ -70,6 +71,20 @@ export async function confirmDialog(message: string, title = "GgMusicMaker"): Pr
 /** Desktop app: run `shouldClose` when the window is asked to close. */
 export function onCloseRequested(shouldClose: () => Promise<boolean>): void {
   bridge()?.onCloseRequested(shouldClose);
+}
+
+/** Stem separation in the native engine (electron/engine.cjs). */
+export interface SeparationBridge {
+  available(): Promise<{ ok: boolean; error?: string }>;
+  start(left: Float32Array, right: Float32Array): Promise<number>;
+  status(id: number): Promise<{ progress: number; done: boolean; error?: string | null; stems: string[] } | null>;
+  stem(id: number, index: number): Promise<{ name: string; left: Float32Array; right: Float32Array }>;
+  free(id: number): Promise<void>;
+}
+
+/** Desktop app: stem separation (null in a browser). */
+export function separationBridge(): SeparationBridge | null {
+  return bridge()?.separation ?? null;
 }
 
 /** Desktop app: the on-disk autosave store (null in a browser). */

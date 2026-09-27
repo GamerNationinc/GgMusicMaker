@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig, configDefaults } from "vitest/config";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
 
 // Tauri expects a fixed port and no clearing of the screen so its logs show through.
@@ -19,6 +19,10 @@ export default defineConfig({
       // Tauri sources live in src-tauri; don't let Vite watch them.
       ignored: ["**/src-tauri/**"],
     },
+  },
+  // Agent worktrees (.claude/worktrees) hold whole copies of the repo.
+  test: {
+    exclude: [...configDefaults.exclude, ".claude/**"],
   },
   // Produce assets Tauri (WebKitGTK) can serve reliably.
   build: {

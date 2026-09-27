@@ -6,7 +6,7 @@
 //
 //   npm run build && npm run test:app            (dev tree)
 //   GGMM_APP=release/linux-unpacked/ggmusicmaker npm run test:app   (packaged app)
-import { writeFile, readFile, mkdtemp, readdir } from "node:fs/promises";
+import { rm, writeFile, readFile, mkdtemp, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,6 +24,7 @@ function check(name, ok, detail = "") {
 
 const dir = await mkdtemp(join(tmpdir(), "ggmm-app-"));
 const saveDir = await mkdtemp(join(tmpdir(), "ggmm-app-out-"));
+const userData = await mkdtemp(join(tmpdir(), "ggmm-app-data-"));
 const files = [];
 for (let f = 0; f < 12; f++) {
   const rate = 44100, secs = 120, n = rate * secs;
@@ -48,7 +49,7 @@ const app = await electron.launch({
   // Electron's headless ozone backend segfaults on SteamOS; a hidden X11 window works.
   env: {
     ...process.env,
-    GGMM_USER_DATA: await mkdtemp(join(tmpdir(), "ggmm-app-data-")),
+    GGMM_USER_DATA: userData,
     GGMM_TEST_SAVE_DIR: saveDir,
     GGMM_HIDDEN: "1",
     GGMM_NO_CLOSE_GUARD: "1",
@@ -218,5 +219,7 @@ check("native export is quick", natMs < 30000, `${(natMs / 1000).toFixed(1)} s`)
 await page.evaluate(() => localStorage.removeItem("ggmm.engine")); // back to the default (native)
 
 await app.close();
+// /tmp is RAM on the Deck: never leave hundreds of MB of test audio behind.
+for (const d of [dir, saveDir, userData]) await rm(d, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 console.log(`\n${passed}/${passed + failed} desktop-app checks passed`);
 process.exit(failed ? 1 : 0);

@@ -60,7 +60,8 @@ import {
   sessionDisplayName,
   SESSION_EXTENSION,
 } from "./session";
-import { saveBytes, openBytes, confirmDialog, isNative, autosaveBridge, autosaveInterval } from "./platform";
+import { saveBytes, openBytes, confirmDialog, isNative, autosaveBridge, autosaveInterval, separationBridge } from "./platform";
+import { STEM_RATE, audibleStems, rms, stemLayerName, stemSummary } from "../audio/stems";
 import { Autosaver, recoverBytes, AUTOSAVE_MS } from "./autosave";
 import { INITIAL_LOAD, type LoadState, frameUtilisation, ema, audioDropout } from "./load";
 
@@ -1146,4 +1147,142 @@ export async function openSession(): Promise<boolean> {
     status.set(`Couldn't open session: ${(err as Error).message}`);
   }
   return true;
+}
+
+// ---- stem separation (desktop app; HTDemucs in the native engine) ---------
+
+export interface StemState {
+  phase: "idle" | "preparing" | "separating" | "loading" | "done" | "error" | "cancelled";
+  fraction: number;
+  message: string;
+}
+export const stemState = writable<StemState>({ phase: "idle", fraction: 0, message: "" });
+/** Why separation is unavailable ("" = available). Checked once at startup. */
+export const stemsUnavailable = writable<string>("Stem separation needs the desktop app.");
+void separationBridge()
+  ?.available()
+  .then((a) => stemsUnavailable.set(a.ok ? "" : (a.error ?? "unavailable")))
+  .catch((e) => stemsUnavailable.set(String(e)));
+
+let stemCancel = false;
+
+/** The clip to separate: the selected clip, else the selected layer's first. */
+function stemSource(): { track: Track; clip: Clip } | null {
+  const p = get(project);
+  const clipId = get(selectedClipId);
+  for (const t of p.tracks) {
+    const c = clipId ? t.clips.find((x) => x.id === clipId) : undefined;
+    if (c) return { track: t, clip: c };
+  }
+  const t = p.tracks.find((x) => x.id === get(selectedTrackId)) ?? (p.tracks.length === 1 ? p.tracks[0] : undefined);
+  return t && t.clips[0] ? { track: t, clip: t.clips[0] } : null;
+}
+
+/** The used part of a clip as 44.1 kHz stereo (the model's format). */
+async function clipAt44k(buffer: AudioBuffer, offset: number, duration: number): Promise<[Float32Array, Float32Array]> {
+  const frames = Math.max(1, Math.round(duration * STEM_RATE));
+  const ctx = new OfflineAudioContext(2, frames, STEM_RATE);
+  const src = ctx.createBufferSource();
+  src.buffer = buffer; // mono is up-mixed to both channels
+  src.connect(ctx.destination);
+  src.start(0, offset, duration);
+  const out = await ctx.startRendering();
+  return [out.getChannelData(0), out.getChannelData(1)];
+}
+
+/** Split a clip into stems (vocals, drums, bass, guitar, piano, other), each
+ *  on a new layer under the original, which is muted. One undo step. */
+export async function separateStems(): Promise<void> {
+  const sep = separationBridge();
+  const why = get(stemsUnavailable);
+  if (!sep || why) {
+    status.set(why || "Stem separation needs the desktop app.");
+    return;
+  }
+  const phase = get(stemState).phase;
+  if (phase === "preparing" || phase === "separating" || phase === "loading") return;
+  const source = stemSource();
+  if (!source) {
+    status.set("Select a clip (or a layer) to split into stems.");
+    return;
+  }
+  const buffer = engine.getBuffer(source.clip.bufferId);
+  if (!buffer) {
+    status.set("That clip's audio is missing.");
+    return;
+  }
+  const name = source.clip.name || source.track.name;
+  stemCancel = false;
+  let id: number | null = null;
+  try {
+    stemState.set({ phase: "preparing", fraction: 0, message: `${name} — resampling to 44.1 kHz` });
+    const [left, right] = await clipAt44k(buffer, source.clip.offset, source.clip.duration);
+    const mixRms = rms([left, right]);
+    id = await sep.start(left, right);
+    const started = performance.now();
+    let st = await sep.status(id);
+    while (st && !st.done) {
+      if (stemCancel) {
+        await sep.free(id);
+        id = null;
+        stemState.set({ phase: "cancelled", fraction: 0, message: "Stem separation cancelled." });
+        status.set("Stem separation cancelled.");
+        return;
+      }
+      const secs = (performance.now() - started) / 1000;
+      const eta = st.progress > 0.05 ? Math.max(0, Math.round((secs / st.progress) * (1 - st.progress))) : null;
+      stemState.set({
+        phase: "separating",
+        fraction: st.progress,
+        message: `${name} — ${Math.round(secs)} s${eta !== null ? `, about ${eta} s to go` : ""}`,
+      });
+      await new Promise((r) => setTimeout(r, 400));
+      st = await sep.status(id);
+    }
+    if (!st) throw new Error("the separation job vanished");
+    if (st.error) throw new Error(st.error);
+
+    stemState.set({ phase: "loading", fraction: 1, message: `${name} — loading stems` });
+    // Near-silent stems never get a buffer; that's decided once every level is known.
+    const stems: { name: string; pcm: Float32Array[]; level: number }[] = [];
+    for (let i = 0; i < st.stems.length; i++) {
+      const s = await sep.stem(id, i);
+      stems.push({ name: s.name, pcm: [s.left, s.right], level: rms([s.left, s.right]) });
+    }
+    await sep.free(id);
+    id = null;
+    const { keep, dropped } = audibleStems(stems.map((s) => ({ name: s.name, rms: s.level })), mixRms);
+    const layers: Track[] = [];
+    for (const stemName of keep) {
+      const s = stems.find((x) => x.name === stemName)!;
+      const bufferId = engine.registerPcm(STEM_RATE, s.pcm);
+      const track = makeTrack(stemLayerName(name, stemName));
+      track.clips = [
+        { id: nextId("clip"), bufferId, startTime: source.clip.startTime, offset: 0, duration: s.pcm[0].length / STEM_RATE, name: track.name },
+      ];
+      layers.push(track);
+    }
+    updateProject((p) => {
+      const at = p.tracks.findIndex((t) => t.id === source.track.id);
+      const tracks = p.tracks.map((t) => (t.id === source.track.id ? { ...t, muted: true } : t));
+      tracks.splice(at + 1, 0, ...layers);
+      return { ...p, tracks };
+    });
+    const msg = stemSummary(name, keep, dropped);
+    stemState.set({ phase: "done", fraction: 1, message: msg });
+    status.set(msg);
+  } catch (err) {
+    if (id !== null) await sep.free(id).catch(() => {});
+    const msg = `Stem separation failed: ${(err as Error).message}`;
+    stemState.set({ phase: "error", fraction: 0, message: msg });
+    status.set(msg);
+  }
+}
+
+export function cancelStems(): void {
+  stemCancel = true;
+}
+
+export function dismissStems(): void {
+  stemState.set({ phase: "idle", fraction: 0, message: "" });
 }

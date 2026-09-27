@@ -19,3 +19,12 @@ squashfs-root/
 release/
 native/target/
 native/ggmm-engine.node
+
+# Stem-separation model: too big for git (114 MB). scripts/fetch-model.sh
+# downloads it (sha256-checked); scripts/export-demucs.sh rebuilds it.
+models/*.onnx
+native/stems/target/
+native/ggmm-separate
+
+# Agent worktrees
+.claude/worktrees/

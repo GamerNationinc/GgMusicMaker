@@ -7,6 +7,8 @@
     startRecording,
     stopRecording,
     exportMix,
+    separateStems,
+    stemsUnavailable,
     undo,
     redo,
     canUndo,
@@ -103,6 +105,12 @@
 
   <button class="btn" onclick={splitAtPlayhead} title="Split at playhead (S)">✂ Split</button>
   <button class="btn danger" onclick={deleteSelectedClip} title="Delete clip (Del)">🗑 Delete</button>
+  <button
+    class="btn stems"
+    onclick={() => void separateStems()}
+    disabled={!!$stemsUnavailable}
+    title={$stemsUnavailable || "Split the selected clip into stems: vocals, drums, bass, guitar, piano, other (AI, HTDemucs)"}
+  >⋔ Stems</button>
 
   <span class="divider"></span>
 
@@ -132,7 +140,7 @@
   .toolbar {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 5px;
     padding: 8px 8px 6px;
     margin: 8px 6px 0;
     flex: 0 0 auto;
@@ -141,7 +149,7 @@
   /* Slightly tighter than the global button so the whole strip fits one
      row at the Deck's 1280 px without wrapping Export onto a second line. */
   .toolbar > :global(button.btn) {
-    padding: 0 10px;
+    padding: 0 7px;
   }
   /* Zoom − FIT + as one compact group. */
   .zoom {
@@ -156,7 +164,7 @@
     width: 1px;
     align-self: stretch;
     background: var(--box);
-    margin: 0 4px;
+    margin: 0 2px;
   }
   .spacer {
     flex: 1 1 auto;

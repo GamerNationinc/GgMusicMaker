@@ -1,0 +1,5 @@
+FROM docker.io/library/ubuntu:22.04
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-pip git ffmpeg ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN pip3 install --no-cache-dir torch==2.4.1 torchaudio==2.4.1 --index-url https://download.pytorch.org/whl/cpu
+RUN pip3 install --no-cache-dir demucs==4.0.1 onnx==1.16.2 onnxruntime==1.19.2 "numpy<2" soundfile

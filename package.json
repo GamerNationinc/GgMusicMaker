@@ -17,6 +17,7 @@
     "app": "vite build && electron .",
     "test:app": "node tests/electron-app.mjs",
     "test:recovery": "node tests/electron-recovery.mjs",
+    "test:stems": "node tests/electron-stems.mjs",
     "dist:deck": "vite build && electron-builder --linux dir AppImage"
   },
   "devDependencies": {
@@ -52,7 +53,11 @@
       "electron/**/*",
       "build/icon.png",
       "package.json",
-      "native/ggmm-engine.node"
+      "native/ggmm-engine.node",
+      "native/ggmm-separate",
+      "models/htdemucs_6s.onnx",
+      "models/htdemucs_6s.json",
+      "models/LICENSE-demucs.txt"
     ],
     "asar": true,
     "linux": {
@@ -76,7 +81,9 @@
     },
     "publish": null,
     "asarUnpack": [
-      "native/ggmm-engine.node"
+      "native/ggmm-engine.node",
+      "native/ggmm-separate",
+      "models/**"
     ]
   },
   "desktopName": "ggmusicmaker.desktop"

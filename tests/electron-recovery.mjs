@@ -4,7 +4,7 @@
 //
 //   npm run build && npm run test:recovery
 //   GGMM_APP=release/linux-unpacked/ggmusicmaker npm run test:recovery   (packaged app)
-import { writeFile, readFile, mkdtemp, readdir, stat } from "node:fs/promises";
+import { rm, writeFile, readFile, mkdtemp, readdir, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -114,5 +114,7 @@ await page.evaluate(() => setTimeout(() => { throw new Error("boom from the reco
 check("uncaught page errors are logged", await waitFor(async () => (await logKinds()).includes("page-error")));
 
 await app.evaluate(({ app }) => app.exit(0));
+// /tmp is RAM on the Deck: never leave hundreds of MB of test audio behind.
+for (const d of [userData, saveDir, dirname(wavPath)]) await rm(d, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 console.log(`\n${passed}/${passed + failed} recovery checks passed`);
 process.exit(failed ? 1 : 0);

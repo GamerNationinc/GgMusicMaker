@@ -1,0 +1,18 @@
+{
+ "name": "htdemucs_6s",
+ "sources": [
+  "drums",
+  "bass",
+  "other",
+  "vocals",
+  "guitar",
+  "piano"
+ ],
+ "samplerate": 44100,
+ "channels": 2,
+ "segment_samples": 343980,
+ "nfft": 4096,
+ "hop": 1024,
+ "spec_frames": 336,
+ "spec_bins": 2048
+}

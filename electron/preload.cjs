@@ -20,6 +20,14 @@ contextBridge.exposeInMainWorld("ggmmNative", {
     render: (project, ids, rates, data, sampleRate, tail) =>
       ipcRenderer.invoke("engine-render", { project, ids, rates, data, sampleRate, tail }),
   },
+  /** Stem separation (HTDemucs in the native engine, native/src/separate.rs). */
+  separation: {
+    available: () => ipcRenderer.invoke("separation-available"),
+    start: (left, right) => ipcRenderer.invoke("separation-start", { left, right }),
+    status: (id) => ipcRenderer.invoke("separation-status", { id }),
+    stem: (id, index) => ipcRenderer.invoke("separation-stem", { id, index }),
+    free: (id) => ipcRenderer.invoke("separation-free", { id }),
+  },
   /** Unsaved work kept on disk for crash recovery (electron/autosave.cjs). */
   autosave: {
     audioKeys: () => ipcRenderer.invoke("autosave-audio-keys"),

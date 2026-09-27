@@ -5,6 +5,7 @@
   import FxRack from "./FxRack.svelte";
   import AnalogMeter from "./AnalogMeter.svelte";
   import ExportDialog from "./ExportDialog.svelte";
+  import StemsDialog from "./StemsDialog.svelte";
   import MatrixRain from "./MatrixRain.svelte";
   import LoadMeter from "./LoadMeter.svelte";
   import EngineSwitch from "./EngineSwitch.svelte";
@@ -165,6 +166,7 @@
 </footer>
 
 <ExportDialog />
+<StemsDialog />
 
 <style>
   .app-header {
