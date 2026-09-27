@@ -98,6 +98,16 @@ export interface AudioBackend {
   /** False when capture fell back to the deprecated main-thread path, which
    *  can drop samples under load — worth surfacing to the user. */
   readonly recordingUsesWorklet: boolean;
+  /** After `stopRecording`: where the take belongs on the timeline (s), when
+   *  the engine knows better than the playhead (native: from the device
+   *  clocks). null/undefined = use the playhead. */
+  readonly takeStart?: number | null;
+  /** How the last take was captured, appended to the status line. */
+  readonly takeNote?: string;
+  /** Measure the recording round-trip latency (native engine). Returns ms. */
+  calibrateLatency?(): Promise<{ ms: number; confidence: number }>;
+  /** The calibrated latency for the current devices (ms), or null. */
+  readonly recordLatency?: number | null;
 
   // Export
   /** Render the whole project offline. `onProgress` gets 0..1 as rendering

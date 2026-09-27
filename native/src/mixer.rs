@@ -274,6 +274,12 @@ impl Mixer {
         }
     }
 
+    /// How long after rendering a frame it leaves the mixer (the master
+    /// compressor's look-ahead line), in seconds.
+    pub fn output_delay(&self) -> f64 {
+        self.ahead.len() as f64 / self.sr
+    }
+
     /// Bus width for the current project and device.
     pub fn bus_channels(&self) -> usize {
         let want = self.project.surround.clamp(2, 8);

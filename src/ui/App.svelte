@@ -170,15 +170,16 @@
   .app-header {
     display: flex;
     align-items: center;
-    gap: 14px;
+    gap: 10px;
     padding: 8px 10px 6px;
     margin: 8px 6px 0;
     flex: 0 0 auto;
   }
   .theme-btn {
     font-size: 11px;
-    padding: 0 10px;
-    min-width: 128px;
+    padding: 0 8px;
+    flex: 0 0 auto;
+    white-space: nowrap;
     color: var(--box-title);
   }
   .theme-icon {
@@ -196,7 +197,7 @@
   }
   .title {
     font-weight: bold;
-    letter-spacing: 2px;
+    letter-spacing: 1px;
     font-size: 20px;
     color: var(--ink);
   }
@@ -206,7 +207,8 @@
   .session {
     font-size: 12px;
     padding: 2px 8px;
-    max-width: 220px;
+    max-width: 180px;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

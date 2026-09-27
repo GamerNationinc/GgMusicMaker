@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld("ggmmNative", {
     stop: () => ipcRenderer.send("engine-stop"),
     status: () => ipcRenderer.invoke("engine-status"),
     scope: () => ipcRenderer.invoke("engine-scope"),
+    recStart: () => ipcRenderer.invoke("engine-rec-start"),
+    recStop: () => ipcRenderer.invoke("engine-rec-stop"),
     render: (project, ids, rates, data, sampleRate, tail) =>
       ipcRenderer.invoke("engine-render", { project, ids, rates, data, sampleRate, tail }),
   },

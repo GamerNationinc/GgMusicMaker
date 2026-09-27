@@ -98,6 +98,36 @@ if (engine instanceof NativeBackend) {
   };
 }
 
+/** Calibrated recording latency (ms) for the current devices; null = not
+ *  calibrated (or the engine can't record natively). */
+export const recordLatency = writable<number | null>(null);
+/** Whether this engine can measure recording latency (native only). */
+export const canCalibrate = !!engine.calibrateLatency;
+if (canCalibrate) {
+  // The output device's name arrives with the engine's first status.
+  setTimeout(() => recordLatency.set(engine.recordLatency ?? null), 1500);
+}
+
+/** Measure the speaker → mic round trip so native takes land in time. */
+export async function calibrateRecording(): Promise<void> {
+  if (!engine.calibrateLatency) return;
+  if (get(transport).isRecording) return;
+  const ok = await confirmDialog(
+    "Calibrate recording latency?\n\nGgMusicMaker will play a few clicks through the speakers and listen with the mic for about 4 seconds. Use the setup you record with (same speakers or headphones-to-mic loop), with the volume up.",
+    "Calibrate recording",
+  );
+  if (!ok) return;
+  stop();
+  status.set("Calibrating — playing clicks and listening…");
+  try {
+    const { ms } = await engine.calibrateLatency();
+    recordLatency.set(ms);
+    status.set(`Recording latency: ${ms.toFixed(1)} ms (calibrated). New takes are shifted by this much.`);
+  } catch (err) {
+    status.set(`Calibration failed: ${(err as Error).message}`);
+  }
+}
+
 /** Switch engines. It's picked at startup, so this restarts the app window. */
 export async function setEngineKind(kind: EngineKind): Promise<void> {
   if (kind === engineKind) return;
@@ -929,7 +959,7 @@ export async function startRecording(): Promise<void> {
   try {
     await engine.startRecording();
     transport.update((s) => ({ ...s, isRecording: true }));
-    status.set(`Recording onto ${armed.name}…`);
+    status.set(`Recording onto ${armed.name}…${engine.takeNote ?? ""}`);
   } catch (err) {
     status.set(`Mic unavailable: ${(err as Error).message}`);
   }
@@ -937,9 +967,11 @@ export async function startRecording(): Promise<void> {
 
 export async function stopRecording(): Promise<void> {
   if (!engine.isRecording) return;
-  const startedAt = get(transport).playhead;
+  const playheadAtStop = get(transport).playhead;
   const usedWorklet = engine.recordingUsesWorklet;
   const buffer = await engine.stopRecording();
+  // The native engine knows where the take belongs from the device clocks.
+  const startedAt = engine.takeStart ?? playheadAtStop;
   const bufferId = engine.registerBuffer(buffer);
   const armed = get(project).tracks.find((t) => t.armed);
   transport.update((s) => ({ ...s, isRecording: false }));
@@ -955,7 +987,7 @@ export async function stopRecording(): Promise<void> {
   };
   updateTrack(armed.id, (t) => ({ ...t, clips: [...t.clips, clip] }));
   // Flag the degraded capture path so a glitchy take has a visible cause.
-  const note = usedWorklet ? "" : " (fallback capture — may drop samples)";
+  const note = (usedWorklet ? "" : " (fallback capture — may drop samples)") + (engine.takeNote ?? "");
   status.set(`Recorded ${buffer.duration.toFixed(1)}s onto ${armed.name}.${note}`);
 }
 

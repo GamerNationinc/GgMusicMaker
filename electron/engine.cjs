@@ -64,6 +64,18 @@ function register() {
   ipcMain.on("engine-stop", () => getEngine()?.stop());
   ipcMain.handle("engine-status", () => getEngine()?.status() ?? null);
   ipcMain.handle("engine-scope", () => getEngine()?.scope() ?? null);
+  // Native recording (native/src/record.rs). Errors reject the invoke, and
+  // the page falls back to recording through Chromium.
+  ipcMain.handle("engine-rec-start", () => {
+    const e = getEngine();
+    if (!e) throw new Error(loadError || "native engine unavailable");
+    return e.recStart();
+  });
+  ipcMain.handle("engine-rec-stop", () => {
+    const e = getEngine();
+    if (!e) throw new Error(loadError || "native engine unavailable");
+    return e.recStop();
+  });
   ipcMain.handle("engine-render", (_e, { project, ids, rates, data, sampleRate, tail }) =>
     getModule()?.renderOffline(project, ids, rates, data, sampleRate, tail),
   );

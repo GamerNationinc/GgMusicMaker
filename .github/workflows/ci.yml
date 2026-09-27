@@ -80,3 +80,6 @@ jobs:
 
       - name: Crash recovery end to end (autosave, crash log, hung-window close)
         run: xvfb-run -a npm run test:recovery
+
+      - name: Native recording end to end (calibration + overdub alignment, null-sink loopback)
+        run: xvfb-run -a npm run test:record

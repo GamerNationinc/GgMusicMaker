@@ -7,12 +7,16 @@
 //! replaces (old projects, buffers, layer DSP, reverbs) is sent back and freed
 //! off the audio thread. Status (playhead, meters, device clock) is published
 //! through atomics; the spectrum scope through a try-locked buffer.
+//!
+//! Recording (src/record.rs) opens a cpal input stream beside the output;
+//! both read one process clock so a take is placed where the music was.
 
 pub mod binaural;
 pub mod dsp;
 pub mod mixer;
 pub mod morph;
 pub mod placer;
+pub mod record;
 pub mod reverb;
 pub mod synth;
 pub mod util;
@@ -67,10 +71,11 @@ struct Audio {
     status: Arc<Status>,
     scope: Arc<Mutex<Vec<f32>>>,
     chans: Vec<Vec<f32>>,
+    clock: Arc<record::Clock>,
 }
 
 impl Audio {
-    fn tick(&mut self, data: &mut [f32], channels: usize) {
+    fn tick(&mut self, data: &mut [f32], channels: usize, info: &cpal::OutputCallbackInfo) {
         let m = &mut self.mixer;
         while let Ok(cmd) = self.rx.try_recv() {
             match cmd {
@@ -96,6 +101,11 @@ impl Audio {
                 Cmd::Stop => m.stop(),
             }
         }
+        // Where this buffer sits in the song and when it will be heard: what
+        // a recording uses to place its take (see record.rs).
+        let ts = info.timestamp();
+        let out_latency = ts.playback.duration_since(&ts.callback).unwrap_or_default();
+        self.clock.publish(m.playing, m.time(), out_latency, m.output_delay());
         let frames = data.len() / channels;
         for c in &mut self.chans {
             if c.len() < frames {
@@ -158,6 +168,32 @@ fn prepare(p: &ProjectSpec, known: &mut std::collections::HashSet<String>, space
     (fresh, rv)
 }
 
+/// A finished recording, as handed to JS.
+#[napi(object)]
+pub struct RecordedTake {
+    pub sample_rate: f64,
+    pub channels: Vec<Float32Array>,
+    /// Timeline position of the first sample; null when the transport was
+    /// stopped for the whole take (the caller uses the playhead).
+    pub start_time: Option<f64>,
+    pub input_latency_ms: f64,
+    pub output_latency_ms: f64,
+    pub dropped: f64,
+    pub device: String,
+}
+
+#[napi(object)]
+pub struct RecordingInfo {
+    pub sample_rate: f64,
+    pub channels: u32,
+    pub device: String,
+}
+
+/// A device name from the environment (tests, or picking a device by hand).
+fn env_device(var: &str) -> Option<String> {
+    std::env::var(var).ok().filter(|s| !s.is_empty())
+}
+
 #[napi]
 pub struct NativeEngine {
     tx: Sender<Cmd>,
@@ -168,6 +204,8 @@ pub struct NativeEngine {
     channels: u32,
     device: String,
     known: Mutex<(std::collections::HashSet<String>, Option<Space>)>,
+    clock: Arc<record::Clock>,
+    rec: Mutex<Option<record::Recording>>,
     _stream: Option<cpal::Stream>,
 }
 
@@ -177,7 +215,15 @@ impl NativeEngine {
     pub fn new() -> Result<Self> {
         use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
         let host = cpal::default_host();
-        let dev = host.default_output_device().ok_or_else(|| Error::from_reason("no audio output device"))?;
+        // GGMM_AUDIO_DEVICE: open a named output instead of the default.
+        let dev = match env_device("GGMM_AUDIO_DEVICE") {
+            Some(want) => host
+                .output_devices()
+                .map_err(|e| Error::from_reason(format!("output devices: {e}")))?
+                .find(|d| d.name().map(|n| n == want).unwrap_or(false))
+                .ok_or_else(|| Error::from_reason(format!("no output device named {want}")))?,
+            None => host.default_output_device().ok_or_else(|| Error::from_reason("no audio output device"))?,
+        };
         let name = dev.name().unwrap_or_else(|_| "default".into());
         let mut def = dev.default_output_config().map_err(|e| Error::from_reason(format!("output config: {e}")))?;
         // Prefer 48 kHz f32 (what decoded audio is at, so nothing resamples),
@@ -201,6 +247,7 @@ impl NativeEngine {
         let sr = def.sample_rate().0 as f64;
         let status = Arc::new(Status::default());
         let scope = Arc::new(Mutex::new(vec![0f32; SCOPE]));
+        let clock = Arc::new(record::Clock::default());
         let mut last_err = String::new();
         for fixed in [true, false] {
             let mut cfg: cpal::StreamConfig = def.config();
@@ -216,8 +263,9 @@ impl NativeEngine {
                 status: status.clone(),
                 scope: scope.clone(),
                 chans: vec![vec![0f32; 8192]; channels],
+                clock: clock.clone(),
             };
-            match dev.build_output_stream(&cfg, move |data: &mut [f32], _| audio.tick(data, channels), |e| eprintln!("ggmm-engine: stream error: {e}"), None) {
+            match dev.build_output_stream(&cfg, move |data: &mut [f32], info: &cpal::OutputCallbackInfo| audio.tick(data, channels, info), |e| eprintln!("ggmm-engine: stream error: {e}"), None) {
                 Ok(stream) => {
                     stream.play().map_err(|e| Error::from_reason(format!("start stream: {e}")))?;
                     return Ok(NativeEngine {
@@ -229,6 +277,8 @@ impl NativeEngine {
                         channels: channels as u32,
                         device: name,
                         known: Mutex::new((Default::default(), None)),
+                        clock,
+                        rec: Mutex::new(None),
                         _stream: Some(stream),
                     });
                 }
@@ -300,6 +350,39 @@ impl NativeEngine {
             device_channels: self.channels,
             bus_channels: ld(&s.bus) as u32,
         }
+    }
+
+    /// Start capturing from the input device (GGMM_INPUT_DEVICE, or the
+    /// default). A take already running is discarded.
+    #[napi]
+    pub fn rec_start(&self) -> Result<RecordingInfo> {
+        let mut slot = self.rec.lock().unwrap();
+        slot.take();
+        let r = record::Recording::start(env_device("GGMM_INPUT_DEVICE").as_deref(), self.sr, self.clock.clone()).map_err(Error::from_reason)?;
+        let info = RecordingInfo { sample_rate: r.rate, channels: r.channels as u32, device: r.device.clone() };
+        *slot = Some(r);
+        Ok(info)
+    }
+
+    /// Stop capturing and return the take, placed on the timeline.
+    #[napi]
+    pub fn rec_stop(&self) -> Result<RecordedTake> {
+        let r = self.rec.lock().unwrap().take().ok_or_else(|| Error::from_reason("not recording"))?;
+        let t = r.finish();
+        Ok(RecordedTake {
+            sample_rate: t.rate,
+            channels: t.channels.into_iter().map(Float32Array::new).collect(),
+            start_time: t.start,
+            input_latency_ms: t.in_latency_ms,
+            output_latency_ms: t.out_latency_ms,
+            dropped: t.dropped as f64,
+            device: t.device,
+        })
+    }
+
+    #[napi]
+    pub fn is_recording(&self) -> bool {
+        self.rec.lock().map(|r| r.is_some()).unwrap_or(false)
     }
 
     /// The last 2048 pre-limiter mono samples (for the spectrum meter).
