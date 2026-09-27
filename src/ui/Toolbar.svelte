@@ -18,8 +18,11 @@
     saveSession,
     loadSessionFile,
     confirmDiscardForOpen,
+    project,
   } from "../state/store";
   import { SESSION_EXTENSION } from "../state/session";
+  import { projectDuration } from "../audio/edits";
+  import { ZOOM_MIN, ZOOM_MAX } from "./constants";
 
   let fileInput: HTMLInputElement;
   let sessionInput: HTMLInputElement;
@@ -48,8 +51,20 @@
     else void startRecording();
   }
 
-  function zoom(delta: number) {
-    pixelsPerSecond.update((p) => Math.min(400, Math.max(20, p + delta)));
+  // Multiplicative zoom over a wide range: from a whole song on one screen
+  // down to a few samples per pixel for trimming dead space.
+  function zoom(factor: number) {
+    pixelsPerSecond.update((p) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, p * factor)));
+  }
+
+  /** Fit the whole project into the visible lanes. */
+  function zoomFit() {
+    const lanes = document.querySelector<HTMLElement>(".lanes-scroll");
+    const dur = projectDuration($project);
+    if (!lanes || dur <= 0) return;
+    // The timeline always shows 4 s past the end (min 30 s) — fit that.
+    pixelsPerSecond.set(Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, (lanes.clientWidth - 2) / Math.max(dur + 4, 30))));
+    lanes.scrollLeft = 0;
   }
 </script>
 
@@ -102,12 +117,15 @@
 
   <span class="divider"></span>
 
-  <button class="btn" onclick={() => zoom(-20)} aria-label="Zoom out">🔍−</button>
-  <button class="btn" onclick={() => zoom(20)} aria-label="Zoom in">🔍＋</button>
+  <div class="zoom">
+    <button class="btn" onclick={() => zoom(1 / 1.5)} aria-label="Zoom out" title="Zoom out">−</button>
+    <button class="btn" onclick={zoomFit} aria-label="Zoom to fit" title="Show the whole song">FIT</button>
+    <button class="btn" onclick={() => zoom(1.5)} aria-label="Zoom in" title="Zoom in (down to single samples)">＋</button>
+  </div>
 
   <span class="spacer"></span>
 
-  <button class="btn accent" onclick={() => void exportMix()}>⭳ Export WAV</button>
+  <button class="btn accent" onclick={() => void exportMix()}>⭳ Export</button>
 </div>
 
 <style>
@@ -124,6 +142,15 @@
      row at the Deck's 1280 px without wrapping Export onto a second line. */
   .toolbar > :global(button.btn) {
     padding: 0 10px;
+  }
+  /* Zoom − FIT + as one compact group. */
+  .zoom {
+    display: flex;
+    gap: 2px;
+  }
+  .zoom :global(button.btn) {
+    padding: 0 8px;
+    min-width: 40px;
   }
   .divider {
     width: 1px;

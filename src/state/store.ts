@@ -44,6 +44,13 @@ import {
   type MorphKey,
 } from "../fx/morph";
 import {
+  DEFAULT_PUNCH,
+  PUNCH_PRESETS,
+  clampPunchValue,
+  punchPresetParams,
+  type PunchKey,
+} from "../fx/punch";
+import {
   packSession,
   unpackSession,
   sessionDisplayName,
@@ -235,6 +242,7 @@ function makeTrack(name: string): Track {
     eq: { low: 0, mid: 0, high: 0 },
     synth: { ...DEFAULT_SYNTH },
     morph: { ...DEFAULT_MORPH },
+    punch: { ...DEFAULT_PUNCH },
     fx: { ...FX_ALL_ON },
     color,
     clips: [],
@@ -326,6 +334,22 @@ export async function applySynthPreset(trackId: string, name: string): Promise<v
   await engine.ensureRunning();
   updateTrack(trackId, (t) => ({ ...t, synth: presetParams(preset) }));
   status.set(`Voice Synth: ${preset.name} on the selected layer.`);
+}
+
+/** Turn one PUNCH knob. Drags coalesce into a single undo step. */
+export function setPunchParam(trackId: string, key: PunchKey, value: number): void {
+  const v = clampPunchValue(key, value);
+  updateTrack(trackId, (t) => (t.punch[key] === v ? t : { ...t, punch: { ...t.punch, [key]: v } }), {
+    history: `punch:${key}:${trackId}`,
+  });
+}
+
+export async function applyPunchPreset(trackId: string, name: string): Promise<void> {
+  const preset = PUNCH_PRESETS.find((p) => p.name === name);
+  if (!preset) return;
+  await engine.ensureRunning();
+  updateTrack(trackId, (t) => ({ ...t, punch: punchPresetParams(preset) }));
+  status.set(`PUNCH: ${preset.name} on the selected layer.`);
 }
 
 /** Turn one MORPH knob. Drags coalesce into a single undo step. */

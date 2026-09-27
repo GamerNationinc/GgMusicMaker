@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { DEFAULT_MORPH } from "../fx/morph";
+import { DEFAULT_PUNCH } from "../fx/punch";
 import { DEFAULT_SYNTH } from "../fx/voice-synth";
 import { packSession, unpackSession, referencedBufferIds, sessionDisplayName } from "./session";
 import type { Project, Track } from "../audio/types";
@@ -41,7 +42,8 @@ const project: Project = {
       eq: { low: 2, mid: -1, high: 4 },
       synth: { ...DEFAULT_SYNTH, mix: 0.7, shift: 1, pitch: 7 },
       morph: { ...DEFAULT_MORPH },
-      fx: { place: true, eq: false, morph: true, synth: true, reverb: true },
+      punch: { ...DEFAULT_PUNCH },
+      fx: { place: true, eq: false, punch: true, morph: true, synth: true, reverb: true },
       color: "#ff3ca0",
       clips: [
         { id: "clip_1", bufferId: "buf_1", startTime: 0, offset: 0, duration: 2, name: "a" },
@@ -63,7 +65,8 @@ const project: Project = {
       eq: { low: 0, mid: 0, high: 0 },
       synth: { ...DEFAULT_SYNTH },
       morph: { ...DEFAULT_MORPH },
-      fx: { place: true, eq: true, morph: true, synth: true, reverb: true },
+      punch: { ...DEFAULT_PUNCH },
+      fx: { place: true, eq: true, punch: true, morph: true, synth: true, reverb: true },
       color: "#5af096",
       clips: [{ id: "clip_3", bufferId: "buf_2", startTime: 1, offset: 0, duration: 0.5, name: "c" }],
     },
@@ -94,7 +97,7 @@ describe("session container", () => {
     expect(header.project.tracks[0].clips).toEqual(project.tracks[0].clips);
     expect(header.project.tracks[0].synth).toEqual({ ...DEFAULT_SYNTH, mix: 0.7, shift: 1, pitch: 7 });
     expect(header.project.tracks[0]).toMatchObject({ pan: -0.4, width: 1.3, reverbPan: 0.2, reverbWidth: 0.7 });
-    expect(header.project.tracks[0].fx).toEqual({ place: true, eq: false, morph: true, synth: true, reverb: true });
+    expect(header.project.tracks[0].fx).toEqual({ place: true, eq: false, punch: true, morph: true, synth: true, reverb: true });
     expect(header.project.tracks[0].eq).toEqual({ low: 2, mid: -1, high: 4 });
 
     const a = audio.get("buf_1")!;
@@ -189,8 +192,9 @@ describe("session migration", () => {
     expect(header.project.surround).toBe("stereo");
     // v1/v2 tracks have no placement: centred, natural width. v1–v3: every module on.
     expect(t).toMatchObject({ pan: 0, width: 1, reverbPan: 0, reverbWidth: 1 });
-    expect(t.fx).toEqual({ place: true, eq: true, morph: true, synth: true, reverb: true });
+    expect(t.fx).toEqual({ place: true, eq: true, punch: true, morph: true, synth: true, reverb: true });
     // v1–v4 tracks have no MORPH: it opens switched off.
     expect(t.morph).toEqual(DEFAULT_MORPH);
+    expect(t.punch).toEqual(DEFAULT_PUNCH);
   });
 });

@@ -18,9 +18,12 @@ import { blockLevels, logBands } from "./spectrum";
 import { assembleTake, type Chunk } from "./recording";
 import { buildMasterBus, deviceChannelsFor, type MasterBus } from "./master";
 import { surroundChannels, type SurroundLayout } from "../fx/voice-synth";
+import { punchIsActive } from "../fx/punch";
 
 const SYNTH_WORKLET_URL = `${import.meta.env.BASE_URL}voice-synth-processor.js`;
 const PLACER_WORKLET_URL = `${import.meta.env.BASE_URL}placer-processor.js`;
+const PUNCH_CORE_URL = `${import.meta.env.BASE_URL}punch-core.js`;
+const PUNCH_WORKLET_URL = `${import.meta.env.BASE_URL}punch-processor.js`;
 const MORPH_WORKLET_URL = `${import.meta.env.BASE_URL}morph-processor.js`;
 const BINAURAL_WORKLET_URL = `${import.meta.env.BASE_URL}binaural-processor.js`;
 const RECORDER_WORKLET_URL = `${import.meta.env.BASE_URL}recorder-processor.js`;
@@ -114,6 +117,9 @@ export class AudioEngine implements AudioBackend {
     const ok =
       (await this.loadWorklet(ctx, SYNTH_WORKLET_URL)) &&
       (await this.loadWorklet(ctx, MORPH_WORKLET_URL)) &&
+      // The core first: punch-processor finds PunchCore on the shared global.
+      (await this.loadWorklet(ctx, PUNCH_CORE_URL)) &&
+      (await this.loadWorklet(ctx, PUNCH_WORKLET_URL)) &&
       (await this.loadWorklet(ctx, PLACER_WORKLET_URL));
     if (ctx === this.ctx) {
       if (ok) this.synthAvailable = true;
@@ -254,7 +260,7 @@ export class AudioEngine implements AudioBackend {
     // Self-heal: if the worklets finished loading after this channel was
     // built and the track now needs them, rebuild it with the worklet nodes.
     const needsWorklets =
-      track.synth.mix > 0 || track.morph.mix > 0 || track.pan !== 0 || track.width !== 1 || track.reverbPan !== 0 || track.reverbWidth !== 1;
+      track.synth.mix > 0 || track.morph.mix > 0 || punchIsActive(track.punch) || track.pan !== 0 || track.width !== 1 || track.reverbPan !== 0 || track.reverbWidth !== 1;
     if (needsWorklets && !ch.hasSynth && this.synthAvailable) {
       ch.dispose();
       this.channels.delete(track.id);

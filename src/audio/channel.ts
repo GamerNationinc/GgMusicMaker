@@ -3,6 +3,7 @@
 // Signal path:
 //   input(gain: vol/mute/solo)
 //     -> EQ low-shelf -> mid peak -> high-shelf -> stereo (mono layers become L = R)
+//     -> [punch worklet]           (drums + bass enhancer; stereo)
 //     -> [morph worklet]           (one of eight sound engines; N-channel out)
 //     -> [voice synth worklet]     (stacked vocal engines; N-channel out, passes
 //                                   the morph's surround channels through dry)
@@ -27,6 +28,7 @@ import type { Track } from "./types";
 import { isTrackAudible } from "./edits";
 import { DEFAULT_SYNTH, synthIsActive, type SynthKey } from "../fx/voice-synth";
 import { DEFAULT_MORPH, MORPH_DISCRETE, morphIsActive, type MorphKey } from "../fx/morph";
+import { DEFAULT_PUNCH, punchIsActive, type PunchKey } from "../fx/punch";
 
 const EQ_LOW_HZ = 220;
 const EQ_MID_HZ = 1200;
@@ -35,6 +37,7 @@ const EQ_HIGH_HZ = 4500;
 export const SYNTH_PROCESSOR = "voice-synth-processor";
 export const PLACER_PROCESSOR = "placer-processor";
 export const MORPH_PROCESSOR = "morph-processor";
+export const PUNCH_PROCESSOR = "punch-processor";
 
 export class TrackChannel {
   readonly input: GainNode;
@@ -51,6 +54,7 @@ export class TrackChannel {
 
   private synth: AudioWorkletNode | null = null;
   private morph: AudioWorkletNode | null = null;
+  private punch: AudioWorkletNode | null = null;
   private place: AudioWorkletNode | null = null;
   private sendPlace: AudioWorkletNode | null = null;
 
@@ -86,11 +90,17 @@ export class TrackChannel {
       try {
         this.synth = new AudioWorkletNode(ctx as AudioContext, SYNTH_PROCESSOR, opts);
         this.morph = new AudioWorkletNode(ctx as AudioContext, MORPH_PROCESSOR, opts);
+        this.punch = new AudioWorkletNode(ctx as AudioContext, PUNCH_PROCESSOR, {
+          numberOfInputs: 1,
+          numberOfOutputs: 1,
+          outputChannelCount: [2],
+        });
         this.place = new AudioWorkletNode(ctx as AudioContext, PLACER_PROCESSOR, opts);
         this.sendPlace = new AudioWorkletNode(ctx as AudioContext, PLACER_PROCESSOR, opts);
       } catch {
         this.synth = null;
         this.morph = null;
+        this.punch = null;
         this.place = null;
         this.sendPlace = null;
       }
@@ -115,19 +125,20 @@ export class TrackChannel {
    *  node costs a JS call per render quantum even when it is a passthrough
    *  (~3 % of the audio thread each under WebKitGTK), so a layer with no
    *  synth and neutral placement bypasses them entirely. */
-  private route(morph: boolean, synth: boolean, place: boolean, sendFx: boolean): void {
-    if (!this.synth || !this.morph || !this.place || !this.sendPlace) return;
+  private route(punch: boolean, morph: boolean, synth: boolean, place: boolean, sendFx: boolean): void {
+    if (!this.synth || !this.morph || !this.punch || !this.place || !this.sendPlace) return;
     // Any worklet stage in the path brings the placer along: it is what
     // turns the stage's N-channel output into the layer's place in the mix.
     const stages: AudioNode[] = [];
+    if (punch) stages.push(this.punch);
     if (morph) stages.push(this.morph);
     if (synth) stages.push(this.synth);
     if (stages.length || place) stages.push(this.place);
-    const key = `${morph},${synth},${stages.length > 0}`;
+    const key = `${punch},${morph},${synth},${stages.length > 0}`;
     if (key !== this.fxRouted) {
       this.fxRouted = key;
       // Rebuild the (short) chain: stereo -> stages… -> output.
-      for (const n of [this.stereo, this.morph, this.synth, this.place]) {
+      for (const n of [this.stereo, this.punch, this.morph, this.synth, this.place]) {
         try {
           n.disconnect();
         } catch {
@@ -185,9 +196,10 @@ export class TrackChannel {
 
     const synthOn = fx.synth && synthIsActive(track.synth);
     const morphOn = fx.morph && morphIsActive(track.morph);
+    const punchOn = fx.punch && punchIsActive(track.punch);
     const placeOn = fx.place && (track.pan !== 0 || track.width !== 1);
     const sendOn = fx.reverb && (track.reverbPan !== 0 || track.reverbWidth !== 1);
-    this.route(morphOn, synthOn, placeOn, sendOn);
+    this.route(punchOn, morphOn, synthOn, placeOn, sendOn);
 
     if (this.place && this.sendPlace) {
       const set = (node: AudioWorkletNode, name: string, v: number) => {
@@ -215,6 +227,14 @@ export class TrackChannel {
       }
     }
 
+    if (this.punch) {
+      for (const key of Object.keys(DEFAULT_PUNCH) as PunchKey[]) {
+        const param = this.punch.parameters.get(key);
+        // Stepped, not ramped: the core recomputes its filters on change.
+        if (param) param.value = track.punch[key];
+      }
+    }
+
     if (this.morph) {
       for (const key of Object.keys(DEFAULT_MORPH) as MorphKey[]) {
         const param = this.morph.parameters.get(key);
@@ -237,6 +257,7 @@ export class TrackChannel {
       this.stereo,
       this.synth,
       this.morph,
+      this.punch,
       this.place,
       this.sendPlace,
     ]) {

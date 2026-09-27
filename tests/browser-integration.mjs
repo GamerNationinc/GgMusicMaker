@@ -13,7 +13,8 @@
 // Needs Chromium: `npx playwright-core install chromium`, or set CHROME_PATH.
 
 import http from "node:http";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile, mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { extname, join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
@@ -483,6 +484,112 @@ async function main() {
   const theme1 = await page.evaluate(() => document.documentElement.dataset.theme);
   check("THEME cycles the colour mode", theme0 === "matrix" && theme1 !== theme0, `${theme0} → ${theme1}`);
   check("theme is remembered", (await page.evaluate(() => localStorage.getItem("ggmm.theme"))) === theme1);
+
+  // --- many long layers: every waveform must draw, to the very end --------
+  // One canvas the size of the whole song × every layer went blank past
+  // WebKit's canvas limit (~10 layers of a few minutes). Twelve 150 s layers,
+  // each silent for its first 20 s (dead space) then a tone to the end.
+  await page.keyboard.press("Control+n");
+  await page.waitForTimeout(400);
+  const dir = await mkdtemp(join(tmpdir(), "ggmm-long-"));
+  const files = [];
+  for (let f = 0; f < 12; f++) {
+    const rate = 16000, secs = 150, n = rate * secs;
+    const wav = Buffer.alloc(44 + n * 2);
+    wav.write("RIFF", 0); wav.writeUInt32LE(36 + n * 2, 4); wav.write("WAVEfmt ", 8);
+    wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22);
+    wav.writeUInt32LE(rate, 24); wav.writeUInt32LE(rate * 2, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34);
+    wav.write("data", 36); wav.writeUInt32LE(n * 2, 40);
+    for (let i = rate * 20; i < n; i++) wav.writeInt16LE(Math.round(12000 * Math.sin((2 * Math.PI * (110 + f * 20) * i) / rate)), 44 + i * 2);
+    const path = join(dir, `long-${f + 1}.wav`);
+    await writeFile(path, wav);
+    files.push(path);
+  }
+  await page.setInputFiles("input[type=file][accept='audio/*']", files);
+  await page.waitForFunction(() => document.querySelectorAll(".head").length === 12, null, { timeout: 30000 });
+  await page.waitForTimeout(500);
+  /** Share of columns in `lane`'s waveform row that differ from the lane background. */
+  const inked = (lane, xFrac) =>
+    page.evaluate(
+      ([lane, xFrac]) => {
+        const c = document.querySelector(".lanes canvas");
+        const top = parseFloat(c.style.top) || 0;
+        const dpr = window.devicePixelRatio || 1;
+        const w = c.width;
+        const y = Math.round((lane * 96 + 60 - top) * dpr);
+        if (y < 0 || y >= c.height) return -1;
+        const x0 = Math.round(w * xFrac), x1 = Math.min(w, x0 + Math.round(200 * dpr));
+        const d = c.getContext("2d").getImageData(x0, y, x1 - x0, 1).data;
+        const bg = [d[0], d[1], d[2]];
+        const g = c.getContext("2d").getImageData(Math.round(4 * dpr), Math.round((lane * 96 + 2 - top) * dpr), 1, 1).data;
+        let hit = 0;
+        for (let i = 0; i < d.length; i += 4) if (Math.abs(d[i] - g[0]) + Math.abs(d[i + 1] - g[1]) + Math.abs(d[i + 2] - g[2]) > 40) hit++;
+        void bg;
+        return hit / (d.length / 4);
+      },
+      [lane, xFrac],
+    );
+  await page.$eval(".body", (el) => (el.scrollTop = el.scrollHeight));
+  await page.$eval(".lanes-scroll", (el) => (el.scrollLeft = el.scrollWidth * 0.5));
+  await page.waitForTimeout(300);
+  const lastMid = await inked(11, 0.3);
+  check("the 12th long layer draws its waveform (middle of the song)", lastMid > 0.5, `${(lastMid * 100).toFixed(0)}% inked`);
+  // Scroll to where the audio ends (150 s of a 154 s timeline).
+  await page.$eval(".lanes-scroll", (el) => (el.scrollLeft = el.scrollWidth - el.clientWidth));
+  await page.waitForTimeout(300);
+  const lastEnd = await page.evaluate(() => {
+    const c = document.querySelector(".lanes canvas");
+    return { w: c.width, left: parseFloat(c.style.left) };
+  });
+  check("the lanes canvas stays screen-sized however long the song", lastEnd.w <= 1280 * (await page.evaluate(() => devicePixelRatio)), `${lastEnd.w}px @ scroll ${lastEnd.left}`);
+  const endInk = await inked(11, 0.2);
+  check("the waveform reaches the end of the track", endInk > 0.5, `${(endInk * 100).toFixed(0)}% inked`);
+  await page.$eval(".lanes-scroll", (el) => (el.scrollLeft = 0));
+  await page.waitForTimeout(300);
+  const dead = await inked(11, 0.2);
+  check("dead space (the silent intro) is drawn empty", dead >= 0 && dead < 0.2, `${(dead * 100).toFixed(0)}% inked`);
+  await page.click("button[aria-label='Zoom to fit']");
+  await page.waitForTimeout(300);
+  const fit = await page.$eval(".lanes-scroll", (el) => el.scrollWidth <= el.clientWidth + 2);
+  check("FIT shows the whole song", fit);
+
+  // --- PUNCH: bass + drums, shown in the lane ------------------------------
+  await page.keyboard.press("Control+n");
+  await page.waitForTimeout(400);
+  await page.setInputFiles("input[type=file][accept='audio/*']", [tone]);
+  await page.waitForTimeout(600);
+  for (let i = 0; i < 7; i++) await page.click("button[aria-label='Zoom in']"); // undo FIT's wide view
+  await page.waitForTimeout(200);
+  const quiet = await exportBytes();
+  await page.waitForTimeout(300);
+  await page.click(".dialog button");
+  await page.click(".chip.fx");
+  await page.waitForTimeout(200);
+  await page.click(".slot.punch .pick");
+  await page.click(".punch-presets button:has-text('Blown Out')");
+  await page.waitForFunction(() => document.querySelector(".punch-meter .big"), null, { timeout: 30000 });
+  await page.waitForFunction(() => !document.querySelector(".punch-meter .tiny")?.textContent?.includes("…"), null, { timeout: 30000 });
+  const meter = (await page.textContent(".punch-meter")).replace(/\s+/g, " ").trim();
+  check("PUNCH readout shows the layer going over 0 dBFS with more bass", (await page.$(".punch-meter .big.hot")) !== null && /BASS \+\d/.test(meter), meter);
+  const red = await page.evaluate(() => {
+    const c = document.querySelector(".lanes canvas");
+    const hex = getComputedStyle(document.documentElement).getPropertyValue("--danger").trim().replace("#", "");
+    const [r, g, b] = [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16));
+    const d = c.getContext("2d").getImageData(0, 0, c.width, Math.round(96 * devicePixelRatio)).data;
+    let n = 0;
+    for (let i = 0; i < d.length; i += 4) if (Math.abs(d[i] - r) + Math.abs(d[i + 1] - g) + Math.abs(d[i + 2] - b) < 30) n++;
+    return n;
+  });
+  check("the lane marks where PUNCH clips, in red", red > 100, `${red} red px`);
+  await page.click(".punch-presets button:has-text('Off')");
+  await page.click(".punch-presets button:has-text('Club Sub')");
+  await page.waitForTimeout(300);
+  const punched = await exportBytes();
+  let pd = 0;
+  for (let i = 44; i < Math.min(quiet.length, punched.length); i++) if (quiet[i] !== punched[i]) pd++;
+  check("PUNCH changes the exported render", pd > 10000, `${pd} bytes differ`);
+  await page.waitForTimeout(300);
+  await page.click(".dialog button");
 
   await browser.close();
   server.close();

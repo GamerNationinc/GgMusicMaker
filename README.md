@@ -46,6 +46,11 @@ send on every layer and a master limiter for the final level.
   - **LAYER pan / width** on the whole layer (dry + FX); the Voice Synth has its
     own PAN too. Stereo: mid/side width + constant-power balance. On a 5.1/7.1
     bus, pan turns the field around the listener.
+- 🥁 **PUNCH** — heavier drums and bass: kick punch, boom, sub octave, drive,
+  snap and a blow-out wall, at an exact output level. The lane shows the result
+  (bass body before/after, red where it clips).
+- 🌊 Ableton-style waveforms for any number of layers and any song length, with
+  zoom from a whole song down to single samples (−, FIT, +).
 - 🧪 **MORPH** — eight completely different engines in one slot, each with its own
   knobs: FM VOX, GRAIN CLOUD, STRINGS, VOWEL, FOLD, CHAOS (Lorenz), SPECTRAL
   (phase vocoder), HARMONIC (just-intonation resonators, A432 / 528 / Schumann

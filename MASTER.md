@@ -93,6 +93,13 @@ launched on this Steam Deck under KDE/Wayland.
 | **3D headphone monitor** — on a device with fewer channels than the layout (the Deck), the live bus stays 6/8 channels and ends in `public/binaural-processor.js` (Woodworth ITD, head-shadow ILD, rear pinna darkening, LFE to both ears) instead of the flat fold-down. On by default, `🎧 3D` toggle in Voice Synth → SPACE → OUTPUT, remembered in `localStorage` (`ggmm.headphones3d`). Export is unaffected. | Unit (`src/audio/binaural.test.ts`): side speakers land in their ear, centre stays centred, rear is darker than front. **Not yet heard on the Deck.** |
 | **Colour themes + btop HUD** — MATRIX, RED, RED/BLACK, CYBERPUNK (neon haze overlay), AMBER, BTOP; header `◐` button or `T` cycles, remembered (`ggmm.theme`). Themes remap the existing CSS variables, so every component follows; canvases (rain, lanes, VU, LED meter) read the tokens; track colours map through a per-theme lane palette. Panels are btop-style boxes with the title in the border. | `src/ui/themes.test.ts` (34 tests): every theme ink ≥ 7:1 and dim ink ≥ 4.5:1 on every panel shade, accents ≥ 4.5:1, clip colours ≥ 3:1. Browser: theme cycles + persists. Screenshots of all six reviewed |
 
+### Added 2026-09-26 (second pass)
+
+| Feature | Verified how |
+|---|---|
+| **Waveforms for any number of layers / any song length** — bug: the lanes were one canvas as big as song × layers; past WebKit's canvas-size limit (~10 layers of a few minutes) it silently drew nothing. The lane and ruler canvases now cover only the visible viewport (redrawn on scroll/resize); `.lanes` keeps the full size for the scrollbars. Waveform comes from a 128-sample min/max/Σx² summary per buffer (`render/peaks.ts: summarize/columnStats`), raw samples when zoomed past a bucket per pixel. Ableton-style drawing: peak envelope at half strength, RMS body solid, display gain so the file's loudest peak fills the lane, silence as a flat line (dead space stands out). Zoom is multiplicative 2–4000 px/s (single samples) with **FIT**; ruler labels adapt (ms → m:ss). | Browser: 12 × 150 s layers — 12th lane inked 100 % mid-song and at the very end, canvas stays ≤ screen width, silent intro draws empty, FIT shows the whole song. Unit (`peaks.test.ts`): 10-minute buffer summarised end to end |
+| **PUNCH** — drums + bass enhancer (Neutron-style) slot after EQ: LR4 crossover (40–250 Hz), mono low band with KICK PUNCH (transient shaper), BOOM (+12 dB), SUB (octave-down flip-flop), DRIVE (tanh), SNAP (transients above the crossover), BLOWOUT (tanh wall), OUTPUT dB, CEILING safe / let it clip. 10 presets (Tight Kick … Speaker Killer). DSP in `public/punch-core.js`, shared by `punch-processor.js` and the **lane preview**: with PUNCH on, the clip shows the processed waveform against dashed 0 dBFS guides, bass after (solid) vs before (ticks), and red where samples go over; the editor shows peak dBFS, clipped-sample count and bass gain. Preview runs in 5 ms slices on the main thread (gain + PUNCH only; EQ is not included). | Unit (`punch.test.ts`): worklet output == preview core output; BOOM/SUB raise bass; PUNCH raises attack more than tail; SAFE never exceeds 0 dBFS, Speaker Killer unsafe does; sliced preview == one pass. Browser: Blown Out readout shows +dBFS and bass +dB, red marks drawn in the lane, export changes |
+
 ### Native Steam Deck build
 
 | Step | Verified how |
@@ -196,6 +203,8 @@ GgMusicMaker/
 │
 ├── public/                        Served as-is; AudioWorklets must be plain files
 │   ├── voice-synth-processor.js   The Voice Synth DSP (engines, stack, modulation, surround field)
+│   ├── punch-core.js              PUNCH DSP core (drums + bass), shared by the worklet and the lane preview
+│   ├── punch-processor.js         PUNCH AudioWorklet wrapper around punch-core.js
 │   ├── morph-processor.js         MORPH DSP: the eight engines, per-voice ring placement, paths, diffusion
 │   ├── binaural-processor.js      Headphone 3D monitor: 5.1/7.1 bus → 2 ears (ITD, ILD, rear cue)
 │   ├── placer-processor.js        Pan + width for a whole signal, stereo (M/S + balance) or surround (VBAP rotate)

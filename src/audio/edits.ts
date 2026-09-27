@@ -134,6 +134,7 @@ export function cloneTrack(track: Track, name: string): Track {
     eq: { ...track.eq },
     synth: { ...track.synth },
     morph: { ...track.morph },
+    punch: { ...track.punch },
     fx: { ...track.fx },
     clips: track.clips.map((c) => ({ ...c, id: nextId("clip") })),
   };

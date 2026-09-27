@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { DEFAULT_MORPH } from "../fx/morph";
+import { DEFAULT_PUNCH } from "../fx/punch";
 import { DEFAULT_SYNTH } from "../fx/voice-synth";
 import {
   splitClip,
@@ -140,7 +141,8 @@ describe("solo / mute audibility", () => {
     eq: { low: 0, mid: 0, high: 0 },
     synth: { ...DEFAULT_SYNTH },
     morph: { ...DEFAULT_MORPH },
-    fx: { place: true, eq: true, morph: true, synth: true, reverb: true },
+    punch: { ...DEFAULT_PUNCH },
+    fx: { place: true, eq: true, punch: true, morph: true, synth: true, reverb: true },
     color: "#fff",
     clips: [],
     ...over,
@@ -198,7 +200,8 @@ describe("duplicate track", () => {
     eq: { low: 2, mid: -1, high: 3 },
     synth: { ...DEFAULT_SYNTH, mix: 1, pitch: 7 },
     morph: { ...DEFAULT_MORPH },
-    fx: { place: true, eq: true, morph: true, synth: false, reverb: true },
+    punch: { ...DEFAULT_PUNCH },
+    fx: { place: true, eq: true, punch: true, morph: true, synth: false, reverb: true },
     color: "#ff3ca0",
     clips: [
       { id: "clip_a", bufferId: "buf_1", startTime: 0, offset: 0, duration: 2, name: "a" },

@@ -22,7 +22,11 @@
     headphones3d,
     binauralLive,
     toggleHeadphones3d,
+    setPunchParam,
+    applyPunchPreset,
   } from "../state/store";
+  import { PUNCH_SPECS, PUNCH_PRESETS, matchingPunchPreset, punchText, type PunchKey } from "../fx/punch";
+  import { punchPreviewFor, previewTick } from "./punchPreviewStore";
   import {
     MORPH_ALGOS,
     MORPH_PRESETS,
@@ -65,6 +69,35 @@
   const surroundWant = $derived(SURROUND[$project.surround].channels);
   const folded = $derived($liveChannels < surroundWant);
   const accent = $derived(track ? laneColor($theme, track.color) : "");
+
+  // PUNCH: what it does to this layer's audio, from the preview.
+  const punchPreset = $derived(track ? matchingPunchPreset(track.punch) : null);
+  const punchStats = $derived.by(() => {
+    void $previewTick;
+    if (!track) return null;
+    let peak = 0, over = 0, li = 0, lo = 0, fresh = true, any = false;
+    for (const id of new Set(track.clips.map((c) => c.bufferId))) {
+      const r = punchPreviewFor(track, id);
+      if (!r) { fresh = false; continue; }
+      any = true;
+      fresh &&= r.fresh;
+      peak = Math.max(peak, r.preview.peak);
+      over += r.preview.overTotal;
+      li += r.preview.lowInSq;
+      lo += r.preview.lowOutSq;
+    }
+    if (!any) return null;
+    const peakDb = 20 * Math.log10(peak + 1e-9);
+    return {
+      peakDb,
+      over,
+      lowDb: li > 0 ? 10 * Math.log10((lo + 1e-12) / li) : 0,
+      fresh,
+    };
+  });
+  function onPunch(key: PunchKey, e: Event) {
+    if (track) setPunchParam(track.id, key, Number((e.target as HTMLInputElement).value));
+  }
 
   // MORPH
   let morphBrowsing = $state(false);
@@ -229,6 +262,53 @@
               <span class="tiny">{name}</span>
             </div>
           {/each}
+        </div>
+
+      {:else if slot === "punch"}
+        <div class="choices punch-presets">
+          {#each PUNCH_PRESETS as p (p.name)}
+            <button class="btn small" class:accent={punchPreset === p.name} onclick={() => void applyPunchPreset(track!.id, p.name)}>{p.name}</button>
+          {/each}
+        </div>
+        <div class="morph-body">
+          <div class="params two morph-knobs">
+            {#each PUNCH_SPECS as spec (spec.key)}
+              <label class="param" title={spec.hint}>
+                <span class="tiny">{spec.label}</span>
+                <input
+                  type="range"
+                  min={spec.min}
+                  max={spec.max}
+                  step={spec.step}
+                  value={track.punch[spec.key]}
+                  oninput={(e) => onPunch(spec.key, e)}
+                />
+                <span class="readout">{punchText(spec.key, track.punch[spec.key])}</span>
+              </label>
+            {/each}
+            <div class="param row">
+              <span class="tiny">CEILING</span>
+              <div class="choices">
+                <button class="btn small" class:accent={track.punch.safe === 1} onclick={() => setPunchParam(track!.id, "safe", 1)}>SAFE · NEVER OVER 0 dB</button>
+                <button class="btn small" class:danger={track.punch.safe === 0} onclick={() => setPunchParam(track!.id, "safe", 0)}>LET IT CLIP</button>
+              </div>
+            </div>
+          </div>
+          <div class="punch-meter" aria-live="polite">
+            {#if punchStats}
+              <span class="tiny">PEAK{punchStats.fresh ? "" : " …"}</span>
+              <div class="gbar" style="--fill:{Math.max(0, Math.min(1, (punchStats.peakDb + 24) / 30))}"></div>
+              <span class="big" class:hot={punchStats.peakDb > 0}>{punchStats.peakDb > 0 ? "+" : ""}{punchStats.peakDb.toFixed(1)} dBFS</span>
+              <span class="tiny">{punchStats.over > 0 ? `${punchStats.over.toLocaleString()} samples CLIP` : "no clipping"}</span>
+              <span class="tiny">BASS</span>
+              <span class="big bass">{punchStats.lowDb >= 0 ? "+" : ""}{punchStats.lowDb.toFixed(1)} dB</span>
+              <span class="tiny">in the lane: solid body = bass after · ticks = bass before · red = over 0 dB</span>
+            {:else if track.clips.length === 0}
+              <span class="tiny">add audio to this layer to see the preview</span>
+            {:else}
+              <span class="tiny">turn a knob — the lane shows the result</span>
+            {/if}
+          </div>
         </div>
 
       {:else if slot === "morph"}
@@ -820,6 +900,32 @@
   .tab.on {
     background: var(--panel);
     color: var(--green);
+  }
+
+  /* PUNCH */
+  .punch-presets {
+    margin-bottom: 2px;
+  }
+  .punch-meter {
+    flex: 0 0 190px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 6px 8px;
+    border: 1px solid var(--box, var(--bevel-dark));
+    background: var(--panel);
+  }
+  .punch-meter .big {
+    font-size: 16px;
+    font-weight: bold;
+    color: var(--green);
+    font-variant-numeric: tabular-nums;
+  }
+  .punch-meter .big.hot {
+    color: var(--danger);
+  }
+  .punch-meter .big.bass {
+    color: var(--magenta);
   }
 
   /* MORPH */

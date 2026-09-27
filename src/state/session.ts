@@ -24,6 +24,7 @@ import { encodeWav, decodeWav, type PcmSource, type DecodedPcm } from "../audio/
 import { normalizeSynth, SURROUND_ORDER, type SurroundLayout } from "../fx/voice-synth";
 import { normalizeFx } from "../fx/chain";
 import { normalizeMorph } from "../fx/morph";
+import { normalizePunch } from "../fx/punch";
 
 export const SESSION_EXTENSION = "ggmm";
 // v1: tracks had `voice: { preset, mix }`; v2: `synth` (Voice Synth) + project.surround;
@@ -173,6 +174,8 @@ export function migrateProject(project: Project): Project {
       synth: normalizeSynth(t.synth, voice),
       // v4 → v5: the MORPH module (off for old sessions).
       morph: normalizeMorph(t.morph),
+      // v5 → v6: PUNCH (off for old sessions).
+      punch: normalizePunch(t.punch),
       // v3 → v4: power switches, all on.
       fx: normalizeFx(t.fx),
     } as Track;
