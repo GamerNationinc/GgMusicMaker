@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { Autosaver, recoverBytes, type AutosaveBridge, type AutosaveMeta, type LoadedAutosave } from "./autosave";
-import { unpackSession, type SessionExtras, type SessionHeaderBase } from "./session";
+import { Autosaver, recoverAutosave, type AutosaveBridge, type AutosaveMeta, type LoadedAutosave } from "./autosave";
+import { type SessionExtras, type SessionHeaderBase } from "./session";
 import type { Project, Track } from "../audio/types";
 import type { PcmSource } from "../audio/wav";
 
@@ -51,9 +51,14 @@ class FakeStore implements AutosaveBridge {
   }
   async load(): Promise<LoadedAutosave | null> {
     if (!this.saved) return null;
-    const audio: Record<string, Uint8Array> = {};
-    for (const [id, key] of Object.entries(this.saved.keys)) audio[id] = this.wavs.get(key)!;
-    return { meta: this.saved.meta, header: this.saved.header, audio };
+    return { meta: this.saved.meta, header: this.saved.header, audioKeys: this.saved.keys };
+  }
+  reads = 0;
+  async readAudio(key: string) {
+    this.reads++;
+    const b = this.wavs.get(key);
+    if (!b) throw new Error(`no ${key}`);
+    return b;
   }
   async clear() {
     this.wavs.clear();
@@ -68,7 +73,7 @@ describe("Autosaver", () => {
     expect(await a.save(project(["buf_1", "buf_2"]), extras, "/music/song.ggmm")).toBe(true);
     const loaded = (await store.load())!;
     expect(loaded.meta.path).toBe("/music/song.ggmm");
-    const { header, audio } = unpackSession(recoverBytes(loaded));
+    const { header, audio } = await recoverAutosave(loaded, store);
     expect(header.project.tracks[0].clips.map((c) => c.bufferId)).toEqual(["buf_1", "buf_2"]);
     expect([...audio.get("buf_1")!.channels[0]]).toEqual([0, 0.5, -0.5, 1]);
     expect([...audio.get("buf_2")!.channels[0]]).toEqual([0.25, -0.25]);
@@ -104,7 +109,7 @@ describe("Autosaver", () => {
     // …and re-sends it if it comes back (undo).
     await a.save(project(["buf_1", "buf_2"]), extras, null);
     expect(store.wavs.size).toBe(2);
-    expect(unpackSession(recoverBytes((await store.load())!)).audio.size).toBe(2);
+    expect((await recoverAutosave((await store.load())!, store)).audio.size).toBe(2);
   });
 
   it("a clear wins over a save that was already in flight", async () => {
@@ -127,17 +132,26 @@ describe("Autosaver", () => {
     const other = new Map([["buf_1", pcm([1, 1])]]);
     await new Autosaver(store, (id) => other.get(id)).save(project(["buf_1"]), extras, null);
     expect([...store.wavs.keys()][0]).not.toBe(first);
-    const { audio } = unpackSession(recoverBytes((await store.load())!));
+    const { audio } = await recoverAutosave((await store.load())!, store);
     expect([...audio.get("buf_1")!.channels[0]]).toEqual([1, 1]);
   });
 
-  it("a recovered autosave with missing audio fails loudly", () => {
+  it("a recovered autosave with missing audio fails loudly", async () => {
     const broken: LoadedAutosave = {
       meta: { path: null, savedAt: "" },
       header: {} as SessionHeaderBase,
-      audio: null,
+      audioKeys: {},
       error: "audio buf_1 is missing",
     };
-    expect(() => recoverBytes(broken)).toThrow(/buf_1 is missing/);
+    await expect(recoverAutosave(broken, new FakeStore())).rejects.toThrow(/buf_1 is missing/);
+  });
+
+  it("recovery reads the audio one WAV at a time and reports progress", async () => {
+    const store = new FakeStore();
+    await new Autosaver(store, (id) => buffers.get(id)).save(project(["buf_1", "buf_2"]), extras, null);
+    const seen: string[] = [];
+    await recoverAutosave((await store.load())!, store, (d, t) => seen.push(`${d}/${t}`));
+    expect(store.reads).toBe(2);
+    expect(seen).toEqual(["0/2", "1/2", "2/2"]);
   });
 });

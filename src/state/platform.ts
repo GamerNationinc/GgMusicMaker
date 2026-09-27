@@ -14,12 +14,14 @@ export interface FileFilter {
 }
 
 interface NativeBridge {
-  saveFile(bytes: Uint8Array, defaultName: string, filters: FileFilter[], path?: string | null): Promise<string | null>;
+  /** `bytes` may be parts written back to back (sent in chunks: big files). */
+  saveFile(bytes: Uint8Array | ArrayBuffer[], defaultName: string, filters: FileFilter[], path?: string | null): Promise<string | null>;
   openFile(filters: FileFilter[]): Promise<{ path: string; bytes: Uint8Array } | null>;
   confirm(message: string, title?: string): Promise<boolean>;
   appInfo(): Promise<{ version: string; electron: string; chrome: string; autosaveMs?: number }>;
   onCloseRequested(handler: () => Promise<boolean>): void;
   autosave?: AutosaveBridge;
+  files?: FileStreams;
   separation?: SeparationBridge;
   logError?(message: string, source?: string): void;
 }
@@ -35,12 +37,12 @@ export const isNative = (): boolean => bridge() !== null;
  *  `path` skips the dialog (plain "Save" over an existing file). In the
  *  browser the file is downloaded and the suggested name is returned. */
 export async function saveBytes(
-  bytes: Uint8Array,
+  bytes: Uint8Array | ArrayBuffer[],
   opts: { defaultName: string; filters: FileFilter[]; path?: string | null; mime?: string },
 ): Promise<string | null> {
   const native = bridge();
   if (native) return native.saveFile(bytes, opts.defaultName, opts.filters, opts.path ?? null);
-  const blob = new Blob([bytes as BlobPart], { type: opts.mime ?? "application/octet-stream" });
+  const blob = new Blob(Array.isArray(bytes) ? bytes : [bytes as BlobPart], { type: opts.mime ?? "application/octet-stream" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -71,6 +73,22 @@ export async function confirmDialog(message: string, title = "GgMusicMaker"): Pr
 /** Desktop app: run `shouldClose` when the window is asked to close. */
 export function onCloseRequested(shouldClose: () => Promise<boolean>): void {
   bridge()?.onCloseRequested(shouldClose);
+}
+
+/** Streaming file access (desktop app): write or read a file one piece at a
+ *  time, for sessions too big to hold in memory twice. */
+export interface FileStreams {
+  uploadBegin(): Promise<number>;
+  uploadPart(id: number, bytes: ArrayBuffer | Uint8Array): Promise<void>;
+  uploadAbort(id: number): Promise<void>;
+  saveUpload(id: number, defaultName: string, filters: FileFilter[], path?: string | null): Promise<string | null>;
+  pick(filters: FileFilter[]): Promise<{ path: string; token: number; size: number } | null>;
+  read(token: number, offset: number, length: number): Promise<ArrayBuffer>;
+  close(token: number): Promise<void>;
+}
+
+export function fileStreams(): FileStreams | null {
+  return bridge()?.files ?? null;
 }
 
 /** Stem separation in the native engine (electron/engine.cjs). */

@@ -55,14 +55,19 @@ import {
   type PunchKey,
 } from "../fx/punch";
 import {
-  packSession,
+  packSessionParts,
+  planSession,
+  readSession,
+  sessionWav,
   unpackSession,
+  type SessionHeaderBase,
   sessionDisplayName,
   SESSION_EXTENSION,
 } from "./session";
-import { saveBytes, openBytes, confirmDialog, isNative, autosaveBridge, autosaveInterval, separationBridge } from "./platform";
+import { saveBytes, confirmDialog, isNative, autosaveBridge, autosaveInterval, separationBridge, fileStreams } from "./platform";
 import { STEM_RATE, audibleStems, rms, stemLayerName, stemSummary } from "../audio/stems";
-import { Autosaver, recoverBytes, AUTOSAVE_MS } from "./autosave";
+import { Autosaver, recoverAutosave as readAutosave, AUTOSAVE_MS } from "./autosave";
+import type { DecodedPcm } from "../audio/wav";
 import { INITIAL_LOAD, type LoadState, frameUtilisation, ema, audioDropout } from "./load";
 
 /** The audio runtime. Typed as the interface, not the class, so a future
@@ -285,7 +290,10 @@ export async function recoverAutosave(): Promise<void> {
     return;
   }
   try {
-    await loadSessionBytes(recoverBytes(saved), saved.meta?.path ?? null);
+    const { header, audio } = await readAutosave(saved, autosaveStore, (done, total) =>
+      status.set(`Recovering ${name}: audio ${done} of ${total}…`),
+    );
+    await loadSession(header, audio, saved.meta?.path ?? null);
     // Recovered work is still unsaved until the user saves it. Autosave it
     // again at once (this replaces the old autosave), so a second crash
     // before the next timer tick can't lose it.
@@ -1093,18 +1101,37 @@ export async function saveSession(as = false): Promise<void> {
   try {
     status.set("Saving session…");
     const t = get(transport);
-    const file = packSession(
-      p,
-      { reverbSpace: get(reverbSpace), pixelsPerSecond: get(pixelsPerSecond), playhead: t.playhead },
-      (id) => engine.getBuffer(id),
-    );
+    const extras = { reverbSpace: get(reverbSpace), pixelsPerSecond: get(pixelsPerSecond), playhead: t.playhead };
     const current = get(sessionPath);
     // Save As starts from the current file so the dialog opens in its folder.
-    const where = await saveBytes(new Uint8Array(file), {
-      defaultName: current ?? `untitled.${SESSION_EXTENSION}`,
-      filters: SESSION_FILTERS,
-      path: as ? null : current,
-    });
+    const target = { defaultName: current ?? `untitled.${SESSION_EXTENSION}`, filters: SESSION_FILTERS, path: as ? null : current };
+    const files = fileStreams();
+    let where: string | null;
+    let size: number;
+    if (files) {
+      // Desktop: one WAV encoded and sent at a time — a big session (over
+      // a GB) must never sit in memory a second time as encoded WAVs.
+      const plan = planSession(p, extras, (id) => engine.getBuffer(id));
+      size = plan.size;
+      const up = await files.uploadBegin();
+      try {
+        await files.uploadPart(up, plan.head);
+        for (const [i, id] of plan.ids.entries()) {
+          status.set(`Saving session… (${i + 1}/${plan.ids.length})`);
+          const wav = sessionWav(engine.getBuffer(id)!);
+          if (wav.byteLength !== plan.lengths[i]) throw new Error(`audio ${id} changed while saving`);
+          await files.uploadPart(up, wav);
+        }
+      } catch (err) {
+        await files.uploadAbort(up).catch(() => {});
+        throw err;
+      }
+      where = await files.saveUpload(up, target.defaultName, target.filters, target.path);
+    } else {
+      const parts = packSessionParts(p, extras, (id) => engine.getBuffer(id));
+      size = parts.reduce((n, x) => n + x.byteLength, 0);
+      where = await saveBytes(parts, target);
+    }
     if (!where) {
       status.set("Save cancelled.");
       return;
@@ -1112,7 +1139,7 @@ export async function saveSession(as = false): Promise<void> {
     sessionPath.set(where);
     dirty.set(false);
     await clearAutosave();
-    const mb = (file.byteLength / 1048576).toFixed(1);
+    const mb = (size / 1048576).toFixed(1);
     status.set(`Saved ${sessionDisplayName(where)} (${mb} MB).`);
   } catch (err) {
     status.set(`Save failed: ${(err as Error).message}`);
@@ -1122,6 +1149,11 @@ export async function saveSession(as = false): Promise<void> {
 /** Replace the workspace with the session in `bytes`. */
 export async function loadSessionBytes(bytes: ArrayBuffer, path: string | null): Promise<void> {
   const { header, audio } = unpackSession(bytes);
+  await loadSession(header, audio, path);
+}
+
+/** Replace the workspace with a parsed session (header + decoded audio). */
+async function loadSession(header: SessionHeaderBase, audio: Map<string, DecodedPcm>, path: string | null): Promise<void> {
   // Audio goes into the engine under fresh ids; clips are pointed at those.
   const idMap = new Map<string, string>();
   for (const [id, pcm] of audio) idMap.set(id, engine.registerPcm(pcm.sampleRate, pcm.channels));
@@ -1168,12 +1200,23 @@ export async function openSession(): Promise<boolean> {
   if (!isNative()) return false;
   if (!(await confirmDiscard())) return true;
   try {
-    const picked = await openBytes(SESSION_FILTERS);
+    const files = fileStreams()!;
+    const picked = await files.pick(SESSION_FILTERS);
     if (!picked) {
       status.set("Open cancelled.");
       return true;
     }
-    await loadSessionBytes(picked.bytes, picked.path);
+    // Header, then one WAV at a time: a 1 GB+ session is never read whole.
+    const name = sessionDisplayName(picked.path);
+    let session;
+    try {
+      session = await readSession((off, len) => files.read(picked.token, off, len), picked.size, (done, total) =>
+        status.set(`Opening ${name}: audio ${done} of ${total}…`),
+      );
+    } finally {
+      await files.close(picked.token).catch(() => {});
+    }
+    await loadSession(session.header, session.audio, picked.path);
     await clearAutosave();
   } catch (err) {
     status.set(`Couldn't open session: ${(err as Error).message}`);

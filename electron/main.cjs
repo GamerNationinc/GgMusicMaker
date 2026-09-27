@@ -18,6 +18,7 @@ const nativeEngine = require("./engine.cjs");
 const crashlog = require("./crashlog.cjs");
 const autosave = require("./autosave.cjs");
 const stems = require("./stems.cjs");
+const transfer = require("./transfer.cjs");
 
 const DIST = path.join(__dirname, "..", "dist");
 const SCHEME = "app";
@@ -150,6 +151,7 @@ app.on("second-instance", () => {
 
 app.whenReady().then(() => {
   nativeEngine.register();
+  transfer.register();
   autosave.register();
   stems.register();
   // Serve dist/ on app://ggmm/, refusing anything outside it.
@@ -178,30 +180,39 @@ const toDialogFilters = (filters) => (filters ?? []).map((f) => ({ name: f.name,
 // set, saves go straight into the directory given.
 const TEST_SAVE_DIR = process.env.GGMM_TEST_SAVE_DIR || null;
 
-ipcMain.handle("save-file", async (_e, { bytes, defaultName, filters, path: known }) => {
-  let target = known ?? (TEST_SAVE_DIR ? path.join(TEST_SAVE_DIR, defaultName) : null);
-  if (!target) {
-    const r = await dialog.showSaveDialog(win, {
-      defaultPath: path.join(app.getPath("music"), defaultName),
-      filters: toDialogFilters(filters),
-    });
-    if (r.canceled || !r.filePath) return null;
-    target = r.filePath;
+// The bytes arrive as an upload (transfer.cjs: a session can be over 1 GB),
+// already on disk; saving is then a move into place.
+ipcMain.handle("save-file", async (_e, { uploadId, defaultName, filters, path: known }) => {
+  const staged = transfer.takeUpload(uploadId).file;
+  try {
+    let target = known ?? (TEST_SAVE_DIR ? path.join(TEST_SAVE_DIR, defaultName) : null);
+    if (!target) {
+      const r = await dialog.showSaveDialog(win, {
+        defaultPath: path.join(app.getPath("music"), defaultName),
+        filters: toDialogFilters(filters),
+      });
+      if (r.canceled || !r.filePath) return null;
+      target = r.filePath;
+    }
+    // Atomic: a crash mid-save must not wreck the file being saved over.
+    await autosave.moveAtomic(staged, target);
+    return target;
+  } finally {
+    await fs.rm(staged, { force: true });
   }
-  // Atomic: a crash mid-save must not wreck the file being saved over.
-  await autosave.writeAtomic(target, Buffer.from(bytes));
-  return target;
 });
 
 ipcMain.handle("open-file", async (_e, { filters }) => {
+  // GGMM_TEST_OPEN_FILE: automated tests open this file instead of asking.
+  if (process.env.GGMM_TEST_OPEN_FILE) return { path: process.env.GGMM_TEST_OPEN_FILE, ...transfer.offerFile(process.env.GGMM_TEST_OPEN_FILE) };
   const r = await dialog.showOpenDialog(win, {
     defaultPath: app.getPath("music"),
     properties: ["openFile"],
     filters: toDialogFilters(filters),
   });
   if (r.canceled || !r.filePaths[0]) return null;
-  const data = await fs.readFile(r.filePaths[0]);
-  return { path: r.filePaths[0], bytes: new Uint8Array(data.buffer, data.byteOffset, data.byteLength) };
+  // Read in chunks by the page (transfer.cjs).
+  return { path: r.filePaths[0], ...transfer.offerFile(r.filePaths[0]) };
 });
 
 ipcMain.handle("confirm", async (_e, { message, title }) => {

@@ -15,6 +15,7 @@ const fs = require("node:fs");
 const fsp = require("node:fs/promises");
 const os = require("node:os");
 const { spawn } = require("node:child_process");
+const transfer = require("./transfer.cjs");
 
 const MODEL = "htdemucs_6s";
 
@@ -36,24 +37,18 @@ let nextId = 1;
 /** id → { child, dir, progress, done, error, stems: string[] } */
 const jobs = new Map();
 
-function readPlanar(file) {
-  const buf = fs.readFileSync(file);
-  const all = new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4);
-  const n = all.length / 2;
-  // Copies: the page gets its own buffers, the file can go.
-  return { left: all.slice(0, n), right: all.slice(n) };
-}
-
-async function start(left, right) {
+/** `uploadId`: the input as planar f32 (left then right), sent in chunks. */
+async function start(uploadId) {
+  const { file } = transfer.takeUpload(uploadId);
   const bin = binary();
-  if (!bin) throw new Error("stem separator not built (scripts/build-native.sh)");
+  if (!bin) {
+    fs.rmSync(file, { force: true });
+    throw new Error("stem separator not built (scripts/build-native.sh)");
+  }
   const id = nextId++;
   const dir = path.join(workRoot(), String(id));
   await fsp.mkdir(dir, { recursive: true });
-  const input = Buffer.alloc((left.length + right.length) * 4);
-  Buffer.from(left.buffer, left.byteOffset, left.byteLength).copy(input, 0);
-  Buffer.from(right.buffer, right.byteOffset, right.byteLength).copy(input, left.byteLength);
-  await fsp.writeFile(path.join(dir, "in.f32"), input);
+  await fsp.rename(file, path.join(dir, "in.f32"));
 
   const child = spawn(bin, ["--model-dir", modelDir(), "--model", MODEL, "--in", path.join(dir, "in.f32"), "--out", path.join(dir, "out")], {
     stdio: ["pipe", "pipe", "pipe"],
@@ -116,7 +111,7 @@ function register() {
     if (!fs.existsSync(path.join(modelDir(), `${MODEL}.onnx`))) return { ok: false, error: "stem separation model missing (scripts/fetch-model.sh)" };
     return { ok: true };
   });
-  ipcMain.handle("separation-start", (_e, { left, right }) => start(left, right));
+  ipcMain.handle("separation-start", (_e, { uploadId }) => start(uploadId));
   ipcMain.handle("separation-status", (_e, { id }) => {
     const job = jobs.get(id);
     return job ? { progress: job.progress, done: job.done, error: job.error, stems: job.done && !job.error ? job.stems : [] } : null;
@@ -126,10 +121,8 @@ function register() {
     if (!job || !job.done || job.error) throw new Error("no finished separation");
     const name = job.stems[index];
     if (!name) throw new Error("no such stem");
-    const file = path.join(job.dir, "out", `${name}.f32`);
-    const { left, right } = readPlanar(file);
-    fs.rmSync(file, { force: true });
-    return { name, left, right };
+    // Planar f32, read by the page in chunks, deleted once it has it.
+    return { name, ...transfer.offerFile(path.join(job.dir, "out", `${name}.f32`), { deleteAfter: true }) };
   });
   ipcMain.handle("separation-free", (_e, { id }) => free(id));
 }

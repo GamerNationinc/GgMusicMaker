@@ -190,6 +190,18 @@ Split a finished song into **vocals, drums, bass, guitar, piano, other** with a 
 | Speed on the Deck: ~0.6× real time (20 s in 12 s; a 4-minute song ≈ 2.5 min). | same |
 | Model: not in git (114 MB > GitHub's 100 MB). `scripts/fetch-model.sh` downloads the `models-v1` release asset (sha256-checked); `scripts/export-demucs.sh` rebuilds it from Meta's weights in a PyTorch container. Packaged via asarUnpack with the binary. | fetch verified byte-identical |
 
+### 2026-09-27 — big sessions: nothing large goes over IPC in one piece
+
+Trigger: the app crashed at every startup. The user had imported a 24-stem song (27 layers, 1.1 GB of audio, unsaved); recovering its autosave sent all of it to the page in **one IPC message**, and Chromium kills the process (a CHECK → SIGTRAP, no crash-log line) when one message is past a few hundred MB. Save, open, native export, stems and long native takes had the same flaw.
+
+| Change | Verified how |
+|---|---|
+| `electron/transfer.cjs` + the preload: everything big moves in **32 MB chunks** — page→main uploads are staged on disk (so a save is a move into place, atomic), main→page downloads are read chunk by chunk. `/tmp` is avoided (RAM on the Deck). | the user's real 1.1 GB session (copy of their config): recovered 27 layers in 12 s, saved (1.1 GB) in 30 s, reopened in 13 s, native export OK — no crash |
+| Sessions are saved as parts (`packSessionParts`) — never assembled into one buffer; autosave recovery reads one WAV at a time (`recoverAutosave`) and shows progress. | unit tests (autosave reads per WAV, progress) |
+| Native export renders from the buffers the engine already holds (`NativeEngine.renderLoaded`) instead of re-sending every layer's audio. | `test:app` export parity unchanged |
+| Long native takes and stems come back in chunks; stem input goes up in chunks. | `test:record`, `test:stems` |
+| `tests/electron-big.mjs` (`npm run test:big`): 1.24 GB session (the old code survived 550 MB, died at 1.1 GB) — autosave, app SIGKILLed, relaunch recovers, save, reopen, export, app alive. In CI and release. | 6/6 on the fix |
+
 ### Native Steam Deck build
 
 | Step | Verified how |

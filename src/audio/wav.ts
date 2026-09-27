@@ -39,6 +39,12 @@ function clampSample(x: number): number {
 
 /** Encode an audio buffer to a WAV: 16-bit PCM by default, or 32-bit IEEE
  *  float (`float: true` — lossless, keeps values beyond ±1). */
+/** Exactly how many bytes `encodeWav` will produce, without encoding. */
+export function wavByteLength(buffer: Pick<PcmSource, "numberOfChannels" | "length">, opts: { float?: boolean } = {}): number {
+  const fmtSize = buffer.numberOfChannels > 2 ? 40 : 16;
+  return 12 + 8 + fmtSize + 8 + buffer.length * buffer.numberOfChannels * (opts.float ? 4 : 2);
+}
+
 export function encodeWav(buffer: PcmSource, opts: { float?: boolean } = {}): ArrayBuffer {
   const channels = buffer.numberOfChannels;
   const frames = buffer.length;

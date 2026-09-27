@@ -18,6 +18,7 @@
     "test:app": "node tests/electron-app.mjs",
     "test:recovery": "node tests/electron-recovery.mjs",
     "test:stems": "node tests/electron-stems.mjs",
+    "test:big": "node tests/electron-big.mjs",
     "test:record": "node tests/electron-record.mjs",
     "dist:deck": "vite build && electron-builder --linux dir AppImage"
   },

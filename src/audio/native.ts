@@ -49,6 +49,8 @@ export interface NativeEngineBridge {
   status(): Promise<NativeStatus | null>;
   scope(): Promise<Float32Array | null>;
   render(project: string, ids: string[], rates: number[], data: Float32Array[][], sampleRate: number, tail: number): Promise<Float32Array[]>;
+  /** Export from the buffers the engine already holds (no audio over IPC). */
+  renderLoaded?(project: string, sampleRate: number, tail: number): Promise<Float32Array[]>;
   /** Native capture (older shells don't have it: recording stays web). */
   recStart?(): Promise<{ sampleRate: number; channels: number; device: string }>;
   recStop?(): Promise<NativeTake>;
@@ -443,7 +445,11 @@ export class NativeBackend implements AudioBackend {
     const bufs = ids.map((id) => this.web.getBuffer(id)!);
     const rate = project.sampleRate || this.web.sampleRate;
     const spec = nativeProjectSpec(project, { masterGain: this.masterGain, reverb: this.reverb, binaural: false });
-    const chans = await this.native.render(JSON.stringify(spec), ids, bufs.map((b) => b.sampleRate), bufs.map(channelsOf), rate, tailSeconds);
+    // The engine already holds every buffer; re-sending a big project's
+    // audio in one IPC message would crash Chromium.
+    const chans = this.native.renderLoaded
+      ? await this.native.renderLoaded(JSON.stringify(spec), rate, tailSeconds)
+      : await this.native.render(JSON.stringify(spec), ids, bufs.map((b) => b.sampleRate), bufs.map(channelsOf), rate, tailSeconds);
     const out = new AudioBuffer({ numberOfChannels: chans.length, length: chans[0].length, sampleRate: rate });
     chans.forEach((c, i) => out.copyToChannel(c as Float32Array<ArrayBuffer>, i));
     onProgress?.(1);

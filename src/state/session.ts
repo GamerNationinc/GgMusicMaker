@@ -20,7 +20,7 @@
 
 import type { Project, Track } from "../audio/types";
 import type { ReverbSpace } from "../audio/reverb";
-import { encodeWav, decodeWav, type PcmSource, type DecodedPcm } from "../audio/wav";
+import { encodeWav, decodeWav, wavByteLength, type PcmSource, type DecodedPcm } from "../audio/wav";
 import { normalizeSynth, SURROUND_ORDER, type SurroundLayout } from "../fx/voice-synth";
 import { normalizeFx } from "../fx/chain";
 import { normalizeMorph } from "../fx/morph";
@@ -93,9 +93,10 @@ export function sessionHeader(project: Project, extras: SessionExtras, now: Date
   };
 }
 
-/** Lay a header and already-encoded WAVs (keyed by buffer id) out as a
- *  `.ggmm` file. Only buffers the project references are written. */
-export function packContainer(base: SessionHeaderBase, wavs: Map<string, ArrayBuffer>): ArrayBuffer {
+/** A `.ggmm` file as its parts, in file order: preamble + JSON header, then
+ *  each WAV. Written back to back they are the file; a big session (over
+ *  a GB) is never assembled into one buffer. Only referenced buffers go in. */
+export function packContainerParts(base: SessionHeaderBase, wavs: Map<string, ArrayBuffer>): ArrayBuffer[] {
   const audio: AudioEntry[] = [];
   const blobs: ArrayBuffer[] = [];
   let offset = 0;
@@ -108,26 +109,81 @@ export function packContainer(base: SessionHeaderBase, wavs: Map<string, ArrayBu
   }
   const header: SessionHeader = { ...base, audio };
   const headerBytes = new TextEncoder().encode(JSON.stringify(header));
-
-  const out = new ArrayBuffer(PREAMBLE + headerBytes.byteLength + offset);
-  const view = new DataView(out);
-  const bytes = new Uint8Array(out);
+  const head = new ArrayBuffer(PREAMBLE + headerBytes.byteLength);
+  const view = new DataView(head);
   for (let i = 0; i < 4; i++) view.setUint8(i, MAGIC.charCodeAt(i));
   view.setUint32(4, FORMAT_VERSION, true);
   view.setUint32(8, headerBytes.byteLength, true);
-  bytes.set(headerBytes, PREAMBLE);
-  let pos = PREAMBLE + headerBytes.byteLength;
-  for (const wav of blobs) {
-    bytes.set(new Uint8Array(wav), pos);
-    pos += wav.byteLength;
+  new Uint8Array(head).set(headerBytes, PREAMBLE);
+  return [head, ...blobs];
+}
+
+/** The parts joined into one `.ggmm` buffer (small sessions, tests). */
+export function joinParts(parts: ArrayBuffer[]): ArrayBuffer {
+  const out = new Uint8Array(parts.reduce((n, p) => n + p.byteLength, 0));
+  let pos = 0;
+  for (const p of parts) {
+    out.set(new Uint8Array(p), pos);
+    pos += p.byteLength;
   }
-  return out;
+  return out.buffer;
+}
+
+/** Lay a header and already-encoded WAVs out as one `.ggmm` buffer. */
+export function packContainer(base: SessionHeaderBase, wavs: Map<string, ArrayBuffer>): ArrayBuffer {
+  return joinParts(packContainerParts(base, wavs));
 }
 
 /** One audio buffer as it is stored in a session: 32-bit float WAV, lossless,
  *  so a reopened session is bit-identical. */
 export function sessionWav(buf: PcmSource): ArrayBuffer {
   return encodeWav(buf, { float: true });
+}
+
+/** A `.ggmm` laid out before any audio is encoded: the head (preamble +
+ *  JSON header, whose offsets come from `wavByteLength`), then the buffers
+ *  whose WAVs follow it, in file order. A writer encodes and sends one WAV
+ *  at a time, so a 1 GB+ session never sits in memory twice. */
+export interface SessionPlan {
+  head: ArrayBuffer;
+  ids: string[];
+  /** Expected length of each WAV, same order as `ids`. */
+  lengths: number[];
+  size: number;
+}
+
+export function planSession(
+  project: Project,
+  extras: SessionExtras,
+  getBuffer: (id: string) => PcmSource | undefined,
+  now: Date = new Date(),
+): SessionPlan {
+  const ids = referencedBufferIds(project);
+  const lengths = ids.map((id) => {
+    const buf = getBuffer(id);
+    if (!buf) throw new Error(`audio buffer ${id} is missing`);
+    return wavByteLength(buf, { float: true });
+  });
+  // Placeholder WAVs of the right size give the exact same header.
+  const sized = new Map(ids.map((id, i) => [id, { byteLength: lengths[i] } as ArrayBuffer]));
+  const [head] = packContainerParts(sessionHeader(project, extras, now), sized);
+  return { head, ids, lengths, size: head.byteLength + lengths.reduce((a, b) => a + b, 0) };
+}
+
+/** Serialise a project and its audio as `.ggmm` parts (see packContainerParts). */
+export function packSessionParts(
+  project: Project,
+  extras: SessionExtras,
+  getBuffer: (id: string) => PcmSource | undefined,
+  now: Date = new Date(),
+): ArrayBuffer[] {
+  const wavs = new Map<string, ArrayBuffer>();
+  for (const id of referencedBufferIds(project)) {
+    const buf = getBuffer(id);
+    if (!buf) throw new Error(`audio buffer ${id} is missing`);
+    wavs.set(id, sessionWav(buf));
+  }
+  return packContainerParts(sessionHeader(project, extras, now), wavs);
 }
 
 /** Serialise a project and its audio into a `.ggmm` file. */
@@ -137,13 +193,52 @@ export function packSession(
   getBuffer: (id: string) => PcmSource | undefined,
   now: Date = new Date(),
 ): ArrayBuffer {
-  const wavs = new Map<string, ArrayBuffer>();
-  for (const id of referencedBufferIds(project)) {
-    const buf = getBuffer(id);
-    if (!buf) throw new Error(`audio buffer ${id} is missing`);
-    wavs.set(id, sessionWav(buf));
+  return joinParts(packSessionParts(project, extras, getBuffer, now));
+}
+
+/** Parse the head of a `.ggmm` (`bytes` = its first bytes, at least 12 and
+ *  ideally the whole preamble + header). Returns what's needed to read the
+ *  WAVs one by one, or `need` = how many leading bytes the head takes. */
+export function parseSessionHead(bytes: ArrayBuffer, fileSize: number): { header: SessionHeader; blobStart: number } | { need: number } {
+  const view = new DataView(bytes);
+  let magic = "";
+  for (let i = 0; i < 4 && i < bytes.byteLength; i++) magic += String.fromCharCode(view.getUint8(i));
+  if (bytes.byteLength < PREAMBLE || magic !== MAGIC) throw new Error("not a GgMusicMaker session file");
+  const version = view.getUint32(4, true);
+  if (version > FORMAT_VERSION) throw new Error(`session was saved by a newer GgMusicMaker (format v${version})`);
+  const blobStart = PREAMBLE + view.getUint32(8, true);
+  if (blobStart > fileSize) throw new Error("session file is truncated");
+  if (bytes.byteLength < blobStart) return { need: blobStart };
+  const header = JSON.parse(new TextDecoder().decode(new Uint8Array(bytes, PREAMBLE, blobStart - PREAMBLE))) as SessionHeader;
+  if (!header.project || !Array.isArray(header.project.tracks) || !Array.isArray(header.audio)) {
+    throw new Error("session header is malformed");
   }
-  return packContainer(sessionHeader(project, extras, now), wavs);
+  header.project = migrateProject(header.project);
+  for (const e of header.audio) if (blobStart + e.offset + e.length > fileSize) throw new Error("session file is truncated");
+  return { header, blobStart };
+}
+
+/** Read a `.ggmm` through `read(offset, length)` — the head, then one WAV at
+ *  a time — so opening a 1 GB+ session never holds the whole file. */
+export async function readSession(
+  read: (offset: number, length: number) => Promise<ArrayBuffer>,
+  fileSize: number,
+  onProgress?: (done: number, total: number) => void,
+): Promise<UnpackedSession> {
+  let head = parseSessionHead(await read(0, Math.min(fileSize, 1 << 20)), fileSize);
+  if ("need" in head) head = parseSessionHead(await read(0, head.need), fileSize);
+  if ("need" in head) throw new Error("session header is malformed");
+  const { header, blobStart } = head;
+  const audio = new Map<string, DecodedPcm>();
+  for (const [n, entry] of header.audio.entries()) {
+    onProgress?.(n, header.audio.length);
+    audio.set(entry.id, decodeWav(await read(blobStart + entry.offset, entry.length)));
+  }
+  onProgress?.(header.audio.length, header.audio.length);
+  for (const id of referencedBufferIds(header.project)) {
+    if (!audio.has(id)) throw new Error(`session is missing audio for ${id}`);
+  }
+  return { header, audio };
 }
 
 /** Parse a `.ggmm` file. Throws a readable error for anything that isn't one. */

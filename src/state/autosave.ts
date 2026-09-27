@@ -11,9 +11,9 @@
 // No Svelte, no Web Audio: unit-tested with a fake bridge.
 
 import type { Project } from "../audio/types";
-import type { PcmSource } from "../audio/wav";
+import { decodeWav, type DecodedPcm, type PcmSource } from "../audio/wav";
 import {
-  packContainer,
+  migrateProject,
   referencedBufferIds,
   sessionHeader,
   sessionWav,
@@ -30,8 +30,9 @@ export interface AutosaveMeta {
 export interface LoadedAutosave {
   meta: AutosaveMeta;
   header: SessionHeaderBase;
-  /** WAV bytes keyed by the buffer ids in `header`; null if some are missing. */
-  audio: Record<string, Uint8Array> | null;
+  /** Which stored WAV (key) holds each buffer id in `header`. */
+  audioKeys: Record<string, string>;
+  /** Set when the autosave is incomplete (some WAV is missing). */
   error?: string;
 }
 
@@ -40,7 +41,10 @@ export interface AutosaveBridge {
   audioKeys(): Promise<string[]>;
   putAudio(key: string, bytes: Uint8Array): Promise<void>;
   commit(header: SessionHeaderBase, audioKeys: Record<string, string>, meta: AutosaveMeta): Promise<void>;
+  /** The project only — audio is read one WAV at a time (`readAudio`): a
+   *  big session's audio is over a GB, too much for one IPC message. */
   load(): Promise<LoadedAutosave | null>;
+  readAudio(key: string): Promise<Uint8Array>;
   clear(): Promise<void>;
 }
 
@@ -114,12 +118,25 @@ export class Autosaver {
   }
 }
 
-/** Rebuild a found autosave as `.ggmm` bytes for the normal open path. */
-export function recoverBytes(saved: LoadedAutosave): ArrayBuffer {
-  if (!saved.audio) throw new Error(saved.error ?? "autosave audio is missing");
-  const wavs = new Map<string, ArrayBuffer>();
-  for (const [id, b] of Object.entries(saved.audio)) {
-    wavs.set(id, b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer);
+/** Read a found autosave's audio back, one WAV at a time, decoded and keyed
+ *  by the buffer ids in its (migrated) project. Never builds the whole
+ *  session in one buffer: a 27-layer project is over a GB. */
+export async function recoverAutosave(
+  saved: LoadedAutosave,
+  bridge: Pick<AutosaveBridge, "readAudio">,
+  onProgress?: (done: number, total: number) => void,
+): Promise<{ header: SessionHeaderBase; audio: Map<string, DecodedPcm> }> {
+  if (saved.error) throw new Error(saved.error);
+  const header = { ...saved.header, project: migrateProject(saved.header.project) };
+  const ids = referencedBufferIds(header.project);
+  const audio = new Map<string, DecodedPcm>();
+  for (const [n, id] of ids.entries()) {
+    const key = saved.audioKeys[id];
+    if (!key) throw new Error(`autosave is missing audio for ${id}`);
+    onProgress?.(n, ids.length);
+    const b = await bridge.readAudio(key);
+    audio.set(id, decodeWav(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer));
   }
-  return packContainer(saved.header, wavs);
+  onProgress?.(ids.length, ids.length);
+  return { header, audio };
 }

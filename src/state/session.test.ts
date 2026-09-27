@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { DEFAULT_MORPH } from "../fx/morph";
 import { DEFAULT_PUNCH } from "../fx/punch";
 import { DEFAULT_SYNTH } from "../fx/voice-synth";
-import { packSession, unpackSession, referencedBufferIds, sessionDisplayName } from "./session";
+import { packSession, unpackSession, referencedBufferIds, sessionDisplayName, planSession, sessionWav, joinParts, readSession } from "./session";
 import type { Project, Track } from "../audio/types";
 import { nextId, reserveIds, __resetIds } from "../audio/types";
 import type { PcmSource } from "../audio/wav";
@@ -202,5 +202,34 @@ describe("session migration", () => {
     // v1–v4 tracks have no MORPH: it opens switched off.
     expect(t.morph).toEqual(DEFAULT_MORPH);
     expect(t.punch).toEqual(DEFAULT_PUNCH);
+  });
+});
+
+describe("streaming sessions (big files)", () => {
+  const extras = { reverbSpace: "hall" as const, pixelsPerSecond: 80, playhead: 0 };
+  it("a planned session is byte-identical to the packed one", () => {
+    const now = new Date("2026-09-27T12:00:00Z");
+    const plan = planSession(project, extras, (id) => buffers.get(id), now);
+    const wavs = plan.ids.map((id) => sessionWav(buffers.get(id)!));
+    expect(wavs.map((w) => w.byteLength)).toEqual(plan.lengths);
+    const streamed = new Uint8Array(joinParts([plan.head, ...wavs]));
+    expect(streamed.byteLength).toBe(plan.size);
+    expect(streamed).toEqual(new Uint8Array(packSession(project, extras, (id) => buffers.get(id), now)));
+  });
+
+  it("reads a session range by range, never the whole file", async () => {
+    const file = packSession(project, extras, (id) => buffers.get(id));
+    const reads: number[] = [];
+    const read = async (off: number, len: number) => {
+      reads.push(len);
+      return file.slice(off, off + len);
+    };
+    const streamed = await readSession(read, file.byteLength);
+    const whole = unpackSession(file);
+    expect(streamed.header).toEqual(whole.header);
+    expect([...streamed.audio.keys()]).toEqual([...whole.audio.keys()]);
+    for (const [id, pcm] of whole.audio) expect(streamed.audio.get(id)!.channels).toEqual(pcm.channels);
+    // The head, then one read per WAV.
+    expect(reads.length).toBe(1 + whole.header.audio.length);
   });
 });

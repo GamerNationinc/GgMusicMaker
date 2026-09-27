@@ -13,6 +13,7 @@
 const { app, ipcMain } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs/promises");
+const transfer = require("./transfer.cjs");
 
 const KEY = /^[A-Za-z0-9_.-]{1,128}$/;
 
@@ -30,6 +31,19 @@ async function writeAtomic(file, data) {
   await fs.rename(tmp, file);
 }
 
+/** Move a finished file into place atomically (copy + rename when the two
+ *  are on different filesystems). */
+async function moveAtomic(from, to) {
+  try {
+    await fs.rename(from, to);
+  } catch (e) {
+    if (e.code !== "EXDEV") throw e;
+    const tmp = `${to}.tmp-${process.pid}`;
+    await fs.copyFile(from, tmp);
+    await fs.rename(tmp, to);
+  }
+}
+
 async function audioKeys() {
   try {
     return (await fs.readdir(audioDir())).filter((f) => f.endsWith(".wav")).map((f) => f.slice(0, -4));
@@ -43,7 +57,9 @@ function checkKey(key) {
   return key;
 }
 
-/** The saved autosave, or null. Audio comes back keyed as the header names it. */
+/** The saved autosave (project + which WAV each buffer is in), or null.
+ *  The audio itself is read one WAV at a time (`autosave-read-audio`): a
+ *  big session's audio is over a GB, far past what one IPC message can carry. */
 async function load() {
   let saved;
   try {
@@ -51,16 +67,15 @@ async function load() {
   } catch {
     return null;
   }
-  const audio = {};
-  for (const [bufferId, key] of Object.entries(saved.audioKeys ?? {})) {
+  const keys = saved.audioKeys ?? {};
+  for (const [bufferId, key] of Object.entries(keys)) {
     try {
-      const data = await fs.readFile(path.join(audioDir(), `${checkKey(key)}.wav`));
-      audio[bufferId] = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+      await fs.access(path.join(audioDir(), `${checkKey(key)}.wav`));
     } catch {
-      return { meta: saved.meta, header: saved.header, audio: null, error: `audio ${bufferId} is missing` };
+      return { meta: saved.meta, header: saved.header, audioKeys: keys, error: `audio ${bufferId} is missing` };
     }
   }
-  return { meta: saved.meta, header: saved.header, audio };
+  return { meta: saved.meta, header: saved.header, audioKeys: keys };
 }
 
 async function clear() {
@@ -78,10 +93,12 @@ async function lastSavedAt() {
 
 function register() {
   ipcMain.handle("autosave-audio-keys", () => audioKeys());
-  ipcMain.handle("autosave-put-audio", async (_e, { key, bytes }) => {
+  ipcMain.handle("autosave-put-audio", async (_e, { key, uploadId }) => {
+    const { file } = transfer.takeUpload(uploadId);
     await fs.mkdir(audioDir(), { recursive: true });
-    await writeAtomic(path.join(audioDir(), `${checkKey(key)}.wav`), Buffer.from(bytes));
+    await moveAtomic(file, path.join(audioDir(), `${checkKey(key)}.wav`));
   });
+  ipcMain.handle("autosave-read-audio", (_e, { key }) => transfer.offerFile(path.join(audioDir(), `${checkKey(key)}.wav`)));
   // `audioKeys` maps each buffer id in `header` to its stored WAV; WAVs no
   // longer referenced are deleted.
   ipcMain.handle("autosave-commit", async (_e, { header, audioKeys: keys, meta }) => {
@@ -96,4 +113,4 @@ function register() {
   ipcMain.handle("autosave-clear", () => clear());
 }
 
-module.exports = { register, lastSavedAt, writeAtomic };
+module.exports = { register, lastSavedAt, writeAtomic, moveAtomic };

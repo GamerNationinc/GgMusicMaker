@@ -206,6 +206,10 @@ pub struct NativeEngine {
     known: Mutex<(std::collections::HashSet<String>, Option<Space>)>,
     clock: Arc<record::Clock>,
     rec: Mutex<Option<record::Recording>>,
+    /// Every loaded buffer (shared with the audio thread, not copied), so an
+    /// export renders from what's already here instead of shipping the whole
+    /// project's audio over IPC again — which crashes Chromium past ~256 MB.
+    library: Mutex<std::collections::HashMap<String, Arc<Buffer>>>,
     _stream: Option<cpal::Stream>,
 }
 
@@ -279,6 +283,7 @@ impl NativeEngine {
                         known: Mutex::new((Default::default(), None)),
                         clock,
                         rec: Mutex::new(None),
+                        library: Mutex::new(Default::default()),
                         _stream: Some(stream),
                     });
                 }
@@ -303,12 +308,24 @@ impl NativeEngine {
         if b.channels.is_empty() {
             return Err(Error::from_reason("buffer has no channels"));
         }
-        self.send(Cmd::AddBuffer(id, Arc::new(b)))
+        let b = Arc::new(b);
+        self.library.lock().unwrap().insert(id.clone(), b.clone());
+        self.send(Cmd::AddBuffer(id, b))
     }
 
     #[napi]
     pub fn remove_buffer(&self, id: String) -> Result<()> {
+        self.library.lock().unwrap().remove(&id);
         self.send(Cmd::RemoveBuffer(id))
+    }
+
+    /// Offline render (export) from the buffers already loaded.
+    #[napi]
+    pub fn render_loaded(&self, project_json: String, sample_rate: f64, tail_seconds: f64) -> Result<AsyncTask<RenderTask>> {
+        let mut project: ProjectSpec = serde_json::from_str(&project_json).map_err(|e| Error::from_reason(format!("project: {e}")))?;
+        project.quantize();
+        let buffers = self.library.lock().unwrap().iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        Ok(AsyncTask::new(RenderTask { project, buffers, sr: sample_rate, tail: tail_seconds }))
     }
 
     #[napi]
