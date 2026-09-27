@@ -1,0 +1,11 @@
+"AppBuild"
+{
+	"AppID" "APP_ID"
+	"Desc" "GgMusicMaker Linux build"
+	"ContentRoot" "../release/"
+	"BuildOutput" "./output/"
+	"Depots"
+	{
+		"DEPOT_ID" "depot_build_linux.vdf"
+	}
+}

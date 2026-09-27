@@ -13,12 +13,17 @@
     "tauri": "tauri",
     "build:deck": "tauri build && bash scripts/fix-appimage.sh",
     "test:browser": "node tests/browser-integration.mjs",
-    "test:webkit": "scripts/test-webkit-in-container.sh"
+    "test:webkit": "scripts/test-webkit-in-container.sh",
+    "app": "vite build && electron .",
+    "test:app": "node tests/electron-app.mjs",
+    "dist:deck": "vite build && electron-builder --linux dir AppImage"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^5.0.3",
     "@tauri-apps/cli": "^2.2.7",
     "@tsconfig/svelte": "^5.0.4",
+    "electron": "^44.4.5",
+    "electron-builder": "^26.15.3",
     "playwright-core": "1.49",
     "svelte": "^5.19.0",
     "svelte-check": "^4.1.4",
@@ -30,5 +35,44 @@
     "@tauri-apps/api": "^2.2.0",
     "@tauri-apps/plugin-dialog": "^2.2.0",
     "@tauri-apps/plugin-fs": "^2.2.0"
-  }
+  },
+  "main": "electron/main.cjs",
+  "author": "GamerNation",
+  "build": {
+    "appId": "com.gamernation.ggmusicmaker",
+    "productName": "GgMusicMaker",
+    "executableName": "ggmusicmaker",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "build/icon.png",
+      "package.json"
+    ],
+    "asar": true,
+    "linux": {
+      "category": "AudioVideo;Audio;AudioVideo",
+      "icon": "build/icon.png",
+      "target": [
+        "dir",
+        "AppImage"
+      ],
+      "desktop": {
+        "entry": {
+          "Name": "GgMusicMaker",
+          "Comment": "Playful DAW for the Steam Deck",
+          "StartupWMClass": "GgMusicMaker"
+        }
+      },
+      "syncDesktopName": true
+    },
+    "appImage": {
+      "artifactName": "GgMusicMaker-${version}-${arch}.AppImage"
+    },
+    "publish": null
+  },
+  "desktopName": "ggmusicmaker.desktop"
 }

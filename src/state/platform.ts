@@ -1,7 +1,8 @@
-// File dialogs and disk access, with a browser fallback.
+// File dialogs, disk access and the quit guard, with a browser fallback.
 //
-// Inside the Tauri shell we get real save/open dialogs and a path to write to;
-// in a plain browser (`npm run dev`, the headless tests) saving becomes a
+// Inside the desktop app (Electron, see electron/main.cjs) the preload script
+// exposes `window.ggmmNative`: real open/save dialogs and a path to write to.
+// In a plain browser (`npm run dev`, the headless tests) saving becomes a
 // download and opening goes through an <input type="file">. Everything that
 // touches the filesystem goes through here so the store stays platform-blind.
 
@@ -10,8 +11,20 @@ export interface FileFilter {
   extensions: string[];
 }
 
-export const isTauri = (): boolean =>
-  typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+interface NativeBridge {
+  saveFile(bytes: Uint8Array, defaultName: string, filters: FileFilter[], path?: string | null): Promise<string | null>;
+  openFile(filters: FileFilter[]): Promise<{ path: string; bytes: Uint8Array } | null>;
+  confirm(message: string, title?: string): Promise<boolean>;
+  appInfo(): Promise<{ version: string; electron: string; chrome: string }>;
+  onCloseRequested(handler: () => Promise<boolean>): void;
+}
+
+function bridge(): NativeBridge | null {
+  return typeof window !== "undefined" ? ((window as unknown as { ggmmNative?: NativeBridge }).ggmmNative ?? null) : null;
+}
+
+/** True inside the desktop app (native dialogs + disk). */
+export const isNative = (): boolean => bridge() !== null;
 
 /** Write `bytes` to disk. Returns the path written, or null if cancelled.
  *  `path` skips the dialog (plain "Save" over an existing file). In the
@@ -20,15 +33,8 @@ export async function saveBytes(
   bytes: Uint8Array,
   opts: { defaultName: string; filters: FileFilter[]; path?: string | null; mime?: string },
 ): Promise<string | null> {
-  if (isTauri()) {
-    const { save } = await import("@tauri-apps/plugin-dialog");
-    const { writeFile } = await import("@tauri-apps/plugin-fs");
-    const path =
-      opts.path ?? (await save({ defaultPath: opts.defaultName, filters: opts.filters }));
-    if (!path) return null;
-    await writeFile(path, bytes);
-    return path;
-  }
+  const native = bridge();
+  if (native) return native.saveFile(bytes, opts.defaultName, opts.filters, opts.path ?? null);
   const blob = new Blob([bytes as BlobPart], { type: opts.mime ?? "application/octet-stream" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -40,26 +46,24 @@ export async function saveBytes(
 }
 
 /** Pick a file with the native dialog and read it. Returns null if cancelled.
- *  Tauri only — a browser can't open a picker programmatically, so callers
- *  check `isTauri()` and use an <input type="file"> there. */
-export async function openBytes(
-  filters: FileFilter[],
-): Promise<{ path: string; bytes: ArrayBuffer } | null> {
-  if (!isTauri()) throw new Error("no native file dialog in the browser");
-  const { open } = await import("@tauri-apps/plugin-dialog");
-  const { readFile } = await import("@tauri-apps/plugin-fs");
-  const picked = await open({ multiple: false, directory: false, filters });
+ *  Desktop app only — callers check `isNative()` and use an <input type="file">
+ *  in a browser. */
+export async function openBytes(filters: FileFilter[]): Promise<{ path: string; bytes: ArrayBuffer } | null> {
+  const native = bridge();
+  if (!native) throw new Error("no native file dialog in the browser");
+  const picked = await native.openFile(filters);
   if (!picked) return null;
-  const path = typeof picked === "string" ? picked : (picked as { path: string }).path;
-  const data = await readFile(path);
-  return { path, bytes: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) };
+  const b = picked.bytes;
+  return { path: picked.path, bytes: b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer };
 }
 
-/** Yes/no question. Native dialog under Tauri, window.confirm elsewhere. */
+/** Yes/no question. Native dialog in the app, window.confirm elsewhere. */
 export async function confirmDialog(message: string, title = "GgMusicMaker"): Promise<boolean> {
-  if (isTauri()) {
-    const { ask } = await import("@tauri-apps/plugin-dialog");
-    return ask(message, { title, kind: "warning" });
-  }
-  return window.confirm(message);
+  const native = bridge();
+  return native ? native.confirm(message, title) : window.confirm(message);
+}
+
+/** Desktop app: run `shouldClose` when the window is asked to close. */
+export function onCloseRequested(shouldClose: () => Promise<boolean>): void {
+  bridge()?.onCloseRequested(shouldClose);
 }

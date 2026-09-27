@@ -1,0 +1,12 @@
+"DepotBuild"
+{
+	"DepotID" "DEPOT_ID"
+	"ContentRoot" "../release/linux-unpacked/"
+	"FileMapping"
+	{
+		"LocalPath" "*"
+		"DepotPath" "."
+		"Recursive" "1"
+	}
+	"FileExclusion" "*.pdb"
+}

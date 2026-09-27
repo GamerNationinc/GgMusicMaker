@@ -27,7 +27,7 @@
     lowPower,
   } from "../state/store";
   import { sessionDisplayName } from "../state/session";
-  import { isTauri } from "../state/platform";
+  import { isNative, onCloseRequested, confirmDialog } from "../state/platform";
   import { onMount } from "svelte";
   import { theme, cycleTheme } from "./themeStore";
 
@@ -39,39 +39,21 @@
   const sessionName = $derived(sessionDisplayName($sessionPath));
 
   // Losing an hour of takes to a stray close click is the worst thing a DAW
-  // can do. Browser: the standard beforeunload prompt. Tauri: intercept the
-  // window close, ask, and only then let it through.
+  // can do. Browser: the standard beforeunload prompt. Desktop app: the
+  // window close is intercepted, we ask, and only then let it through.
   function onBeforeUnload(e: BeforeUnloadEvent) {
-    if (!$dirty || isTauri()) return;
+    if (!$dirty || isNative()) return;
     e.preventDefault();
     e.returnValue = "";
   }
 
   onMount(() => {
-    if (!isTauri()) return;
-    let unlisten: (() => void) | undefined;
-    void (async () => {
-      try {
-        const { getCurrentWindow } = await import("@tauri-apps/api/window");
-        const { ask } = await import("@tauri-apps/plugin-dialog");
-        const win = getCurrentWindow();
-        unlisten = await win.onCloseRequested(async (event) => {
-          if (!$dirty) return;
-          event.preventDefault();
-          const quit = await ask(`${sessionName} has unsaved changes. Quit anyway?`, {
-            title: "Unsaved changes",
-            kind: "warning",
-          });
-          if (quit) {
-            dirty.set(false);
-            await win.close();
-          }
-        });
-      } catch {
-        // Older shell without window permissions: closing just closes.
-      }
-    })();
-    return () => unlisten?.();
+    onCloseRequested(async () => {
+      if (!$dirty) return true;
+      const quit = await confirmDialog(`${sessionName} has unsaved changes. Quit anyway?`, "Unsaved changes");
+      if (quit) dirty.set(false);
+      return quit;
+    });
   });
 
   function onKey(e: KeyboardEvent) {

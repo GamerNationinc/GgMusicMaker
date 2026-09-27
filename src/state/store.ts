@@ -58,7 +58,7 @@ import {
   sessionDisplayName,
   SESSION_EXTENSION,
 } from "./session";
-import { saveBytes, openBytes, confirmDialog, isTauri } from "./platform";
+import { saveBytes, openBytes, confirmDialog, isNative } from "./platform";
 import { INITIAL_LOAD, type LoadState, frameUtilisation, ema, audioDropout } from "./load";
 
 /** The audio runtime. Typed as the interface, not the class, so a future
@@ -1007,7 +1007,7 @@ export async function confirmDiscardForOpen(): Promise<boolean> {
 /** Open a session via the native dialog. Returns false when the platform has
  *  no dialog (browser), so the caller can fall back to a file input. */
 export async function openSession(): Promise<boolean> {
-  if (!isTauri()) return false;
+  if (!isNative()) return false;
   if (!(await confirmDiscard())) return true;
   try {
     const picked = await openBytes(SESSION_FILTERS);

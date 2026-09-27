@@ -6,7 +6,7 @@
 # so it works on SteamOS's immutable root without sudo and survives OS updates.
 #
 # Usage:  ./scripts/install-steamdeck.sh [path/to/GgMusicMaker.AppImage]
-# With no argument it looks for a freshly built AppImage in src-tauri/target.
+# With no argument it installs the Electron build from release/ (npm run dist:deck).
 
 set -euo pipefail
 
@@ -22,13 +22,13 @@ INSTALL_DIR="$HOME/Applications"
 if [ $# -ge 1 ]; then
   SRC_APPIMAGE="$1"
 else
-  SRC_APPIMAGE="$(find "$REPO_DIR/src-tauri/target" -name '*.AppImage' -type f 2>/dev/null | head -1 || true)"
+  SRC_APPIMAGE="$(ls -t "$REPO_DIR"/release/*.AppImage 2>/dev/null | head -1 || true)"
 fi
 
 if [ -z "${SRC_APPIMAGE:-}" ] || [ ! -f "$SRC_APPIMAGE" ]; then
   echo "error: no AppImage found." >&2
   echo "  Pass one explicitly:  $0 ~/Downloads/GgMusicMaker_0.1.0_amd64.AppImage" >&2
-  echo "  Or build one first:   npm run tauri build" >&2
+  echo "  Or build one first:   npm run dist:deck" >&2
   exit 1
 fi
 

@@ -114,6 +114,16 @@ launched on this Steam Deck under KDE/Wayland.
 | **Instrument racks** (`fx/racks.ts`): 41 racks in VOCALS / DRUMS / PERCUSSION / BASS / SYNTH / KEYS & GUITAR / AMBIENT, each a whole-layer setting (EQ incl. new LOW/HIGH CUT, PUNCH, MORPH, VOICE SYNTH, send, pan, width, level). 14 **stack recipes** build a full stack in one undo step (Wall of Vox, Big Room Kit, Stack Bass, Huge Lead…). FX panel opens on RACKS & STACK; ⛓ FX CHAIN is the per-module editor (view remembered). | Unit (`racks.test.ts`, 6): every category covered, every preset reference resolves, racks reset then dial in, values in range. Browser: Wall of Vox → 5 named layers, render differs from the single layer |
 | **EQ low/high cut** (12 dB/oct HP/LP before the shelves) — the tool for splitting bands across stacked layers (Sub Boom = LP 150, Crack = HP 1.5k). Sessions v7: cuts off, layers standalone. | Session migration test |
 
+### Changed 2026-09-26 — desktop shell is now Electron (own Chromium), not WebKitGTK
+
+| Change | Verified how |
+|---|---|
+| `electron/main.cjs` + `preload.cjs`: the app ships its own Chromium (Electron 44 / Chromium 152) instead of the system WebKitGTK the Tauri shell used (the source of the Deck-only bugs). dist/ is served from a private secure `app://ggmm` origin; the page gets native dialogs / disk / quit guard only through `window.ggmmNative` (contextIsolation, sandbox, no Node). `src/state/platform.ts` is its client. Audio goes Chromium → PulseAudio API → PipeWire. | `npm run test:app` (`tests/electron-app.mjs`) drives the real app via Playwright's Electron driver: own Chromium, app:// origin, 12 × 120 s imports with the 12th lane drawn, Wall of Vox stack, all 5 FX worklets construct, WAV export through the native save path (23.6 MB). 7/7 on the dev tree, on `release/linux-unpacked/ggmusicmaker` **and** on the installed `~/Applications/ggmusicmaker.AppImage`. Launched visibly on the Deck: window up, `application.name = "ggmusicmaker"` in PipeWire |
+| Packaging: `npm run dist:deck` (electron-builder) → `release/linux-unpacked/` (the **Steam depot** folder) + `release/GgMusicMaker-<v>-x86_64.AppImage`; `scripts/install-steamdeck.sh` now installs the latter. `steam/` holds SteamPipe `app_build.vdf` / `depot_build_linux.vdf` templates and the owner-only steps (Steam Direct, App ID, steamcmd upload). | Built on the Deck directly (no container needed) |
+| Test-only env: `GGMM_HIDDEN` (no window), `GGMM_TEST_SAVE_DIR` (saves skip the dialog), `GGMM_NO_CLOSE_GUARD`. Electron's `--ozone-platform=headless` segfaults on SteamOS, so tests use a hidden X11 window. | — |
+
+`src-tauri/` and the Tauri container build are now **legacy** (kept until the Electron path has had real use; CI workflows still build Tauri). Next phase: a native Rust audio engine (napi addon in the Electron main process) behind `AudioBackend`.
+
 ### Native Steam Deck build
 
 | Step | Verified how |

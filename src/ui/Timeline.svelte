@@ -348,14 +348,12 @@
     queueMicrotask(measure);
   });
 
-  let raf = 0;
+  // Scroll events already arrive at most once per frame; measuring straight
+  // away (no rAF) also keeps the lanes right in a window that isn't painting
+  // (hidden, or a test run), where animation frames never fire.
   function onScroll() {
     if (rulerScroll && lanesScroll) rulerScroll.scrollLeft = lanesScroll.scrollLeft;
-    if (!raf)
-      raf = requestAnimationFrame(() => {
-        raf = 0;
-        measure();
-      });
+    measure();
   }
 
   onMount(() => {
