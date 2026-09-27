@@ -10,6 +10,6 @@ URL="https://github.com/GamerNationinc/GgMusicMaker/releases/download/models-v1/
 if [ -f models/htdemucs_6s.onnx ] && sha256sum -c --status models/htdemucs_6s.onnx.sha256; then
   echo "models/htdemucs_6s.onnx already present"; exit 0
 fi
-curl -fL --retry 3 -o models/htdemucs_6s.onnx.part "$URL"
+curl -fsSL --retry 3 -o models/htdemucs_6s.onnx.part "$URL"
 mv models/htdemucs_6s.onnx.part models/htdemucs_6s.onnx
 sha256sum -c models/htdemucs_6s.onnx.sha256

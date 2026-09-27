@@ -43,8 +43,10 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
+            ~/.cache/ort.pyke.io
             native/target
-          key: ${{ runner.os }}-native-${{ hashFiles('native/Cargo.lock', 'native/Cargo.toml') }}
+            native/stems/target
+          key: ${{ runner.os }}-native-${{ hashFiles('native/Cargo.lock', 'native/Cargo.toml', 'native/stems/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-native-
 
       - name: Install npm dependencies
@@ -59,6 +61,11 @@ jobs:
           cargo test --release --lib
           cargo build --release
           cp target/release/libggmm_engine.so ggmm-engine.node
+
+      - name: Stem separator — Rust tests + release build, model download
+        run: |
+          (cd native/stems && cargo test --release && cargo build --release && cp target/release/ggmm-separate ../ggmm-separate)
+          bash scripts/fetch-model.sh
 
       - name: Unit tests (incl. native/JS DSP parity)
         run: npm test
@@ -83,3 +90,6 @@ jobs:
 
       - name: Native recording end to end (calibration + overdub alignment, null-sink loopback)
         run: xvfb-run -a npm run test:record
+
+      - name: Stem separation end to end (real song → stems that add back up; cancel)
+        run: xvfb-run -a npm run test:stems

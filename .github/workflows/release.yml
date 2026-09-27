@@ -46,6 +46,11 @@ jobs:
           cargo build --release
           cp target/release/libggmm_engine.so ggmm-engine.node
 
+      - name: Stem separator + model (packaged next to the engine)
+        run: |
+          (cd native/stems && cargo test --release && cargo build --release && cp target/release/ggmm-separate ../ggmm-separate)
+          bash scripts/fetch-model.sh
+
       - name: Type-check and unit tests
         run: |
           npm run check
@@ -65,6 +70,7 @@ jobs:
           GGMM_APP=release/linux-unpacked/ggmusicmaker xvfb-run -a npm run test:app
           GGMM_APP=release/linux-unpacked/ggmusicmaker xvfb-run -a npm run test:recovery
           GGMM_APP=release/linux-unpacked/ggmusicmaker xvfb-run -a npm run test:record
+          GGMM_APP=release/linux-unpacked/ggmusicmaker xvfb-run -a npm run test:stems
 
       - name: Collect artifacts
         run: |

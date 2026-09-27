@@ -169,6 +169,27 @@ Browser build (`npm run dev`) has no autosave — desktop app only.
 
 **Not verified:** calibration through the Deck's real speaker → internal mic (it would make noise; the code path is the same as the loopback, but acoustic confidence/threshold 0.25 is untested). Hardware converter latency and USB/Bluetooth interfaces are only covered by calibrating with that setup. Packaged AppImage not built on this branch (release.yml runs `test:record` on it).
 
+### 2026-09-27 — exclusive solo, effects you can see at a glance
+
+| Change | Verified how |
+|---|---|
+| **Solo is exclusive**: soloing a layer un-solos the others. Ctrl/Shift-click adds to the solos; a plain click on one of several makes it the only one; clicking the only solo turns solo off. (`soloTracks` in `audio/edits.ts`.) | 5 unit tests; browser test drives all four cases on real track heads |
+| **Track heads show the effects**: the FX chip carries a count ("FX 3"); a badge row PAN · EQ · PUNCH · MORPH · SYNTH · VERB shows each module **filled** when active, **struck through** when bypassed, faint when neutral; clicking a badge opens the rack on that module. The layer whose rack is open is highlighted. | browser test: count = number of lit badges, SYNTH badge lit after Chipmunk, head highlighted |
+| **FX rack**: the chain strip is pinned above both tabs (racks and chain), active modules filled with an ON tag, bypassed dashed; the title says "N of 6 active". | browser test + screenshots at 1280×800 |
+
+### 2026-09-27 — stem separation (HTDemucs, on-device)
+
+Split a finished song into **vocals, drums, bass, guitar, piano, other** with a real source-separation network — HTDemucs (Demucs v4, Meta AI, MIT) 6-stem — not EQ.
+
+| Change | Verified how |
+|---|---|
+| `native/stems` (Rust crate, binary `ggmm-separate`): the network core in **ONNX Runtime** (static, via the `ort` crate); the STFT, iSTFT and the 7.8 s segment overlap-add are done in Rust, mirroring `demucs/htdemucs.py` + `demucs/apply.py`. Residual folded into "other" so the stems sum back to the original. | `cargo test` (8): STFT vs direct DFT, reflect padding, segment weights/offsets/padding, residual folding. Opt-in parity vs PyTorch (`scripts/export-demucs.sh --reference`): STFT/iSTFT within 3e-7, **stems within ~90 dB of PyTorch Demucs** (identical) |
+| Runs as **its own process**: ONNX Runtime inside Electron crashed Electron's allocator (SIGTRAP in PartitionAlloc — plain Node was fine), and a separator crash/OOM must never take the session down. `electron/stems.cjs` spawns it at lower CPU priority, work files in `~/.config/ggmusicmaker/stems-work` (not the RAM-backed /tmp), cancel = close its stdin. | `npm run test:stems` 13/13 on the dev tree: real song → Drums + Other layers, silent stems skipped, original muted, one undo restores; **stems mix = original mix, r = 0.9995, −0.03 dB**; Cancel stops the process and deletes its files |
+| **⋔ STEMS** (toolbar): the selected clip (or the selected/only layer's first clip) is resampled to 44.1 kHz, separated, and each audible stem (> −40 dB vs the mix) lands on a new layer "Song · Vocals" etc. under the original, which is muted. Progress dialog with ETA and Cancel. Desktop app only. | screenshots; status line names found / skipped stems |
+| Quality on a real multitrack song (60 s, true stems known, `scripts/demucs/eval_*.py`), SDR: **drums 17.0, vocals 13.4, bass 10.7**, guitar 2.0, other 0.6 dB (the mix itself scores 0.1–2.8). Guitar/other are the model's known weak spots. | Rust engine on the Deck |
+| Speed on the Deck: ~0.6× real time (20 s in 12 s; a 4-minute song ≈ 2.5 min). | same |
+| Model: not in git (114 MB > GitHub's 100 MB). `scripts/fetch-model.sh` downloads the `models-v1` release asset (sha256-checked); `scripts/export-demucs.sh` rebuilds it from Meta's weights in a PyTorch container. Packaged via asarUnpack with the binary. | fetch verified byte-identical |
+
 ### Native Steam Deck build
 
 | Step | Verified how |
