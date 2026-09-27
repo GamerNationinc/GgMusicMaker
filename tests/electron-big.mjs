@@ -8,7 +8,7 @@
 //
 //   npm run build && npm run test:big
 //   GGMM_APP=release/linux-unpacked/ggmusicmaker npm run test:big   (packaged app)
-import { rm, writeFile, mkdir, stat, readdir } from "node:fs/promises";
+import { rm, writeFile, readFile, mkdir, stat, readdir } from "node:fs/promises";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
@@ -91,7 +91,9 @@ await page.waitForFunction((n) => document.querySelectorAll(".head").length === 
 const audioDir = join(userData, "autosave", "audio");
 const autosaved = await waitFor(async () => (await exists(join(userData, "autosave", "session.json"))) && (await readdir(audioDir)).filter((f) => f.endsWith(".wav")).length === LAYERS, 180000);
 const autosaveMB = autosaved ? (await Promise.all((await readdir(audioDir)).map((f) => stat(join(audioDir, f))))).reduce((n, s) => n + s.size, 0) / 1e6 : 0;
-check("autosaves a 1.2 GB session", autosaved && autosaveMB > 1200, `${autosaveMB.toFixed(0)} MB`);
+// Imports are resampled to the device rate (48 kHz on the Deck: 1244 MB;
+// 44.1 kHz on CI: 1143 MB) — either way past the 1.1 GB that crashed.
+check("autosaves a 1.1 GB+ session", autosaved && autosaveMB > 1100, `${autosaveMB.toFixed(0)} MB`);
 proc.kill("SIGKILL");
 await new Promise((r) => proc.once("exit", r));
 
@@ -107,7 +109,7 @@ await page.keyboard.press("Control+s");
 await waitFor(async () => /Saved|failed/.test(await statusText(page)), 300000);
 const saved = await statusText(page);
 const size = (await exists(sessionFile)) ? (await stat(sessionFile)).size : 0;
-check("saves the whole session", /^Saved/.test(saved) && size > 1200e6, `${saved} · ${(size / 1e6).toFixed(0)} MB on disk`);
+check("saves the whole session", /^Saved/.test(saved) && size > 1100e6, `${saved} · ${(size / 1e6).toFixed(0)} MB on disk`);
 
 // 4. Open it again.
 await page.keyboard.press("Control+n");
@@ -120,8 +122,10 @@ check("reopens it", (await layers(page)) === LAYERS && /^Opened/.test(await stat
 await page.click("button:has-text('Export')");
 await page.waitForFunction(() => /EXPORT COMPLETE|FAIL/i.test(document.querySelector(".dialog")?.textContent ?? ""), null, { timeout: 300000 });
 const mix = join(saveDir, "ggmusicmaker-mix.wav");
-const mixSize = (await exists(mix)) ? (await stat(mix)).size : 0;
-check("exports the mix", mixSize > RATE * SECS * 4 * 0.99, `${(mixSize / 1e6).toFixed(0)} MB`);
+const mixBytes = (await exists(mix)) ? await readFile(mix) : Buffer.alloc(0);
+// Whatever rate it rendered at, the mix must be the whole 6 minutes.
+const mixSecs = mixBytes.length > 44 ? (mixBytes.length - 44) / mixBytes.readUInt32LE(28) : 0;
+check("exports the whole mix", mixSecs >= SECS, `${mixSecs.toFixed(1)} s, ${(mixBytes.length / 1e6).toFixed(0)} MB`);
 check("the app is still alive", !died);
 
 await app.evaluate(({ app }) => app.exit(0)).catch(() => {});
