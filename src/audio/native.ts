@@ -7,10 +7,13 @@
 // Export runs through the same mixer, so the WAV is what you heard.
 //
 // This backend sends it the project and the decoded audio, drives its
-// transport and reads its playhead/meters/scope. Decoding (the page needs
-// AudioBuffers for waveforms) and recording stay with the web engine it
-// wraps; that engine never plays in this mode — unless the native engine
-// can't open a device, in which case everything falls back to it.
+// transport and reads its playhead/meters/scope. It also records: the take
+// is captured by the engine on the same clock as playback and placed where
+// the music was (native/src/record.rs), minus the calibrated round-trip
+// latency (record-align.ts). Decoding (the page needs AudioBuffers for
+// waveforms) stays with the web engine it wraps; that engine never plays in
+// this mode — unless the native engine can't open a device, in which case
+// everything falls back to it (recording too, if only the input fails).
 
 import type { AudioBackend, DecodedAudio, MasterMeter } from "./backend";
 import type { AudioEngine } from "./engine";
@@ -22,6 +25,19 @@ import { punchIsActive } from "../fx/punch";
 import { synthIsActive, surroundChannels } from "../fx/voice-synth";
 import { morphIsActive } from "../fx/morph";
 import { analyserBytes, logBands } from "./spectrum";
+import { applyOffset, calibrationClicks, findLag, readLatency, writeLatency } from "./record-align";
+
+/** What the engine hands back when a native recording stops. */
+export interface NativeTake {
+  sampleRate: number;
+  channels: Float32Array[];
+  /** Timeline position of the first sample; null = transport was stopped. */
+  startTime: number | null | undefined;
+  inputLatencyMs: number;
+  outputLatencyMs: number;
+  dropped: number;
+  device: string;
+}
 
 export interface NativeEngineBridge {
   available(): Promise<{ ok: boolean; error?: string; sampleRate?: number; device?: string }>;
@@ -33,6 +49,9 @@ export interface NativeEngineBridge {
   status(): Promise<NativeStatus | null>;
   scope(): Promise<Float32Array | null>;
   render(project: string, ids: string[], rates: number[], data: Float32Array[][], sampleRate: number, tail: number): Promise<Float32Array[]>;
+  /** Native capture (older shells don't have it: recording stays web). */
+  recStart?(): Promise<{ sampleRate: number; channels: number; device: string }>;
+  recStop?(): Promise<NativeTake>;
 }
 
 export interface NativeStatus {
@@ -98,6 +117,11 @@ export class NativeBackend implements AudioBackend {
   private fallback = false;
   /** Error text when the native engine failed and the web engine took over. */
   failure: string | null = null;
+  /** A native take is being captured. */
+  private nativeRec = false;
+  private inputDevice = "default";
+  takeStart: number | null = null;
+  takeNote = "";
   onFallback: (why: string) => void = () => {};
 
   constructor(
@@ -298,19 +322,118 @@ export class NativeBackend implements AudioBackend {
     return logBands(this.scopeBytes, this.status?.sampleRate ?? this.sampleRate, out);
   }
 
-  // ---- recording (web) + export (native) ------------------------------------
+  // ---- recording (native, web fallback) + export (native) --------------------
 
-  startRecording(deviceId?: string): Promise<void> {
+  /** Calibration is per output + input device pair. */
+  private deviceKey(): string {
+    return `${this.status?.device ?? "default"} → ${this.inputDevice}`;
+  }
+  get recordLatency(): number | null {
+    return readLatency(this.deviceKey());
+  }
+
+  async startRecording(deviceId?: string): Promise<void> {
+    this.takeStart = null;
+    this.takeNote = "";
+    // A specific browser device id means the web path was asked for.
+    if (!this.fallback && this.native.recStart && !deviceId) {
+      try {
+        const info = await this.native.recStart();
+        this.inputDevice = info.device;
+        this.nativeRec = true;
+        return;
+      } catch (err) {
+        // Electron wraps IPC errors: "Error invoking remote method '…': Error: why".
+        const why = (err as Error).message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, "");
+        this.takeNote = ` (native capture unavailable: ${why} — recorded through the web engine)`;
+      }
+    }
     return this.web.startRecording(deviceId);
   }
-  stopRecording(): Promise<AudioBuffer> {
-    return this.web.stopRecording();
+
+  async stopRecording(): Promise<AudioBuffer> {
+    if (!this.nativeRec) return this.web.stopRecording();
+    this.nativeRec = false;
+    const take = await this.native.recStop!();
+    let channels = take.channels.length ? take.channels : [new Float32Array(1)];
+    const notes = ["native capture"];
+    if (take.startTime == null) {
+      notes.push("transport stopped: placed at the playhead");
+    } else {
+      const ms = this.recordLatency;
+      let start = take.startTime;
+      if (ms != null) {
+        ({ channels, start } = applyOffset(channels, start, ms / 1000, take.sampleRate));
+        notes.push(`${ms.toFixed(1)} ms latency compensated`);
+      } else {
+        notes.push("latency not calibrated");
+      }
+      this.takeStart = start;
+    }
+    if (take.dropped > 0) notes.push(`${take.dropped} samples dropped`);
+    this.takeNote = ` (${notes.join(", ")})`;
+    const length = Math.max(1, channels[0].length);
+    const out = new AudioBuffer({ numberOfChannels: channels.length, length, sampleRate: take.sampleRate });
+    channels.forEach((c, i) => out.copyToChannel(c as Float32Array<ArrayBuffer>, i));
+    return out;
   }
   get isRecording(): boolean {
-    return this.web.isRecording;
+    return this.nativeRec || this.web.isRecording;
   }
   get recordingUsesWorklet(): boolean {
-    return this.web.recordingUsesWorklet;
+    return this.nativeRec || this.web.recordingUsesWorklet;
+  }
+
+  /**
+   * Measure the round trip speaker → mic (or any loopback) and remember it:
+   * play a click pattern, record it, and find how late the clicks landed
+   * against where the engine placed the take. Needs the transport stopped;
+   * the project is put back afterwards.
+   */
+  async calibrateLatency(): Promise<{ ms: number; confidence: number }> {
+    if (this.fallback || !this.native.recStart || !this.native.recStop) throw new Error("needs the native engine");
+    if (this.nativeRec || this.web.isRecording || this.wantPlaying) throw new Error("stop playback and recording first");
+    const sr = this.status?.sampleRate ?? 48000;
+    const seconds = 3;
+    const clicks = calibrationClicks(sr, seconds);
+    const id = "__calibrate";
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    await this.native.load(id, sr, [clicks, clicks]);
+    this.native.setProject(
+      JSON.stringify({
+        masterGain: 1,
+        surround: 2,
+        reverb: this.reverb,
+        binaural: false,
+        tracks: [
+          { id, gain: 1, eq: null, punch: null, morph: null, synth: null, pan: 0, width: 1, send: 0, sendPan: 0, sendWidth: 1, clips: [{ buffer: id, start: 0, offset: 0, duration: seconds }] },
+        ],
+      }),
+    );
+    let started = false;
+    try {
+      const info = await this.native.recStart();
+      started = true;
+      this.inputDevice = info.device;
+      await sleep(250);
+      this.native.play(0);
+      await sleep(seconds * 1000 + 400);
+      const take = await this.native.recStop();
+      started = false;
+      this.native.stop();
+      if (take.startTime == null) throw new Error("the engine never saw playback start");
+      if (take.sampleRate !== sr) throw new Error(`input runs at ${take.sampleRate} Hz, output at ${sr} Hz`);
+      const { lag, confidence } = findLag(take.channels[0] ?? new Float32Array(0), clicks, Math.round(take.startTime * sr), -Math.round(0.01 * sr), Math.round(0.5 * sr));
+      if (confidence < 0.25) throw new Error("couldn't hear the clicks — turn the volume up and check the mic");
+      const ms = (lag / sr) * 1000;
+      writeLatency(this.deviceKey(), ms);
+      return { ms, confidence };
+    } finally {
+      if (started) await this.native.recStop().catch(() => undefined);
+      this.native.stop();
+      await this.native.remove(id).catch(() => undefined);
+      if (this.lastProject) this.push(this.lastProject);
+    }
   }
 
   async renderMix(project: Project, tailSeconds = 3, onProgress?: (f: number) => void): Promise<AudioBuffer> {
