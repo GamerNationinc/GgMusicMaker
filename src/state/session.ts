@@ -84,7 +84,8 @@ export function packSession(
   for (const id of referencedBufferIds(project)) {
     const buf = getBuffer(id);
     if (!buf) throw new Error(`audio buffer ${id} is missing`);
-    const wav = encodeWav(buf);
+    // 32-bit float: lossless, so a reopened session is bit-identical.
+    const wav = encodeWav(buf, { float: true });
     audio.push({ id, offset, length: wav.byteLength });
     wavs.push(wav);
     offset += wav.byteLength;

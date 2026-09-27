@@ -1,4 +1,5 @@
-// Minimal 16-bit PCM WAV encoder.
+// Minimal WAV encoder/decoder: 16-bit PCM (exports) and 32-bit float
+// (session files — lossless, so a reopened session is bit-identical).
 //
 // Web Audio can decode almost anything but can't *encode*, so for export we
 // render the mix to an AudioBuffer (offline) and hand it here. Works on a plain
@@ -18,9 +19,10 @@ const SPEAKER_MASKS: Record<number, number> = {
   8: 0x63f, // FL FR FC LFE BL BR SL SR
 };
 const FORMAT_PCM = 1;
+const FORMAT_FLOAT = 3;
 const FORMAT_EXTENSIBLE = 0xfffe;
-// KSDATAFORMAT_SUBTYPE_PCM = 00000001-0000-0010-8000-00aa00389b71
-const PCM_GUID = [0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71];
+// KSDATAFORMAT_SUBTYPE_PCM / _IEEE_FLOAT = 0000000{1,3}-0000-0010-8000-00aa00389b71
+const subtypeGuid = (format: number) => [format, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71];
 
 export interface PcmSource {
   numberOfChannels: number;
@@ -35,11 +37,13 @@ function clampSample(x: number): number {
   return x;
 }
 
-/** Encode an audio buffer to a 16-bit PCM WAV as an ArrayBuffer. */
-export function encodeWav(buffer: PcmSource): ArrayBuffer {
+/** Encode an audio buffer to a WAV: 16-bit PCM by default, or 32-bit IEEE
+ *  float (`float: true` — lossless, keeps values beyond ±1). */
+export function encodeWav(buffer: PcmSource, opts: { float?: boolean } = {}): ArrayBuffer {
   const channels = buffer.numberOfChannels;
   const frames = buffer.length;
-  const bytesPerSample = 2;
+  const float = !!opts.float;
+  const bytesPerSample = float ? 4 : 2;
   const blockAlign = channels * bytesPerSample;
   const dataSize = frames * blockAlign;
   const extensible = channels > 2;
@@ -59,17 +63,19 @@ export function encodeWav(buffer: PcmSource): ArrayBuffer {
   // fmt chunk
   writeStr(12, "fmt ");
   view.setUint32(16, fmtSize, true);
-  view.setUint16(20, extensible ? FORMAT_EXTENSIBLE : FORMAT_PCM, true);
+  const format = float ? FORMAT_FLOAT : FORMAT_PCM;
+  view.setUint16(20, extensible ? FORMAT_EXTENSIBLE : format, true);
   view.setUint16(22, channels, true);
   view.setUint32(24, buffer.sampleRate, true);
   view.setUint32(28, buffer.sampleRate * blockAlign, true); // byte rate
   view.setUint16(32, blockAlign, true);
-  view.setUint16(34, 16, true); // bits per sample
+  view.setUint16(34, bytesPerSample * 8, true); // bits per sample
   if (extensible) {
     view.setUint16(36, 22, true); // cbSize
-    view.setUint16(38, 16, true); // valid bits per sample
+    view.setUint16(38, bytesPerSample * 8, true); // valid bits per sample
     view.setUint32(40, SPEAKER_MASKS[channels] ?? 0, true);
-    for (let i = 0; i < 16; i++) view.setUint8(44 + i, PCM_GUID[i]);
+    const guid = subtypeGuid(format);
+    for (let i = 0; i < 16; i++) view.setUint8(44 + i, guid[i]);
   }
   // data chunk
   const dataChunk = 12 + 8 + fmtSize;
@@ -83,9 +89,14 @@ export function encodeWav(buffer: PcmSource): ArrayBuffer {
   let pos = headerSize;
   for (let i = 0; i < frames; i++) {
     for (let c = 0; c < channels; c++) {
-      const s = clampSample(chanData[c][i]);
-      view.setInt16(pos, s < 0 ? s * 0x8000 : s * 0x7fff, true);
-      pos += 2;
+      if (float) {
+        view.setFloat32(pos, chanData[c][i], true);
+        pos += 4;
+      } else {
+        const s = clampSample(chanData[c][i]);
+        view.setInt16(pos, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+        pos += 2;
+      }
     }
   }
   return out;
@@ -103,7 +114,7 @@ export function speakerMask(channels: number): number {
 }
 
 /**
- * Decode a 16-bit PCM WAV (the only kind `encodeWav` writes, plain or
+ * Decode a 16-bit PCM or 32-bit float WAV (what `encodeWav` writes, plain or
  * extensible). Walks the RIFF chunks so a WAV with extra chunks (LIST, fact)
  * still decodes. Session files embed these, so loading must not depend on
  * the WebView's media stack.
@@ -145,17 +156,23 @@ export function decodeWav(bytes: ArrayBuffer): DecodedPcm {
     pos = body + size + (size & 1); // chunks are word-aligned
   }
   if (dataOffset < 0 || !channels || !sampleRate) throw new Error("WAV is missing fmt/data");
-  if (format !== 1 || bits !== 16) throw new Error(`unsupported WAV (format ${format}, ${bits}-bit)`);
+  const isFloat = format === FORMAT_FLOAT && bits === 32;
+  if (!isFloat && !(format === FORMAT_PCM && bits === 16)) throw new Error(`unsupported WAV (format ${format}, ${bits}-bit)`);
 
-  const frames = Math.floor(dataSize / (channels * 2));
+  const bps = isFloat ? 4 : 2;
+  const frames = Math.floor(dataSize / (channels * bps));
   const out: Float32Array[] = [];
   for (let c = 0; c < channels; c++) out.push(new Float32Array(frames));
   let p = dataOffset;
   for (let i = 0; i < frames; i++) {
     for (let c = 0; c < channels; c++) {
-      const s = view.getInt16(p, true);
-      out[c][i] = s < 0 ? s / 0x8000 : s / 0x7fff;
-      p += 2;
+      if (isFloat) {
+        out[c][i] = view.getFloat32(p, true);
+      } else {
+        const s = view.getInt16(p, true);
+        out[c][i] = s < 0 ? s / 0x8000 : s / 0x7fff;
+      }
+      p += bps;
     }
   }
   return { sampleRate, channels: out };

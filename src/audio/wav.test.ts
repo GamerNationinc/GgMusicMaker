@@ -138,3 +138,29 @@ describe("decodeWav", () => {
     expect(() => decodeWav(wav)).toThrow(/unsupported/);
   });
 });
+
+describe("32-bit float WAV (session audio)", () => {
+  it("round-trips bit-exactly, including values beyond full scale", () => {
+    const l = new Float32Array([0, 0.123456789, -1.5, 2.25, 1e-7, -0.9999]);
+    const r = new Float32Array([1, -1, 0.5, -0.25, 3.5, 0]);
+    const src = { numberOfChannels: 2, sampleRate: 44100, length: l.length, getChannelData: (c: number) => (c ? r : l) };
+    const back = decodeWav(encodeWav(src, { float: true }));
+    expect(back.sampleRate).toBe(44100);
+    expect(back.channels[0]).toEqual(l);
+    expect(back.channels[1]).toEqual(r);
+  });
+  it("writes IEEE float in the header (format 3, 32 bits)", () => {
+    const src = { numberOfChannels: 1, sampleRate: 48000, length: 2, getChannelData: () => new Float32Array(2) };
+    const v = new DataView(encodeWav(src, { float: true }));
+    expect(v.getUint16(20, true)).toBe(3);
+    expect(v.getUint16(34, true)).toBe(32);
+  });
+  it("surround float uses the extensible header with the float sub-format", () => {
+    const src = { numberOfChannels: 6, sampleRate: 48000, length: 3, getChannelData: () => new Float32Array([0.5, -2, 1]) };
+    const bytes = encodeWav(src, { float: true });
+    const v = new DataView(bytes);
+    expect(v.getUint16(20, true)).toBe(0xfffe);
+    expect(v.getUint16(44, true)).toBe(3);
+    expect(decodeWav(bytes).channels[5]).toEqual(new Float32Array([0.5, -2, 1]));
+  });
+});
