@@ -61,3 +61,57 @@ export function ballistics(shown: number, target: number, rise = 0.5, fall = 0.0
   const k = target > shown ? rise : fall;
   return shown + (target - shown) * k;
 }
+
+/**
+ * An AnalyserNode's getByteFrequencyData, for audio that isn't in a Web
+ * Audio graph (the native engine's scope): Blackman window, FFT, |X|/N,
+ * smoothing over calls, dB mapped from [minDb, maxDb] onto 0..255.
+ * `state` carries the smoothed magnitudes between calls.
+ */
+export function analyserBytes(
+  samples: Float32Array,
+  fftSize: number,
+  state: Float32Array,
+  out: Uint8Array,
+  smoothing = 0.6,
+  minDb = -100,
+  maxDb = -30,
+): Uint8Array {
+  const n = fftSize;
+  const re = new Float64Array(n), im = new Float64Array(n);
+  const off = Math.max(0, samples.length - n);
+  for (let i = 0; i < n; i++) {
+    const a = 0.16, a0 = 0.5 * (1 - a), a1 = 0.5, a2 = 0.5 * a;
+    const w = a0 - a1 * Math.cos((2 * Math.PI * i) / n) + a2 * Math.cos((4 * Math.PI * i) / n);
+    re[i] = (samples[off + i] ?? 0) * w;
+  }
+  // Iterative radix-2 FFT.
+  for (let i = 1, j = 0; i < n; i++) {
+    let bit = n >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) {
+      [re[i], re[j]] = [re[j], re[i]];
+      [im[i], im[j]] = [im[j], im[i]];
+    }
+  }
+  for (let len = 2; len <= n; len <<= 1) {
+    const ang = (-2 * Math.PI) / len;
+    for (let i = 0; i < n; i += len) {
+      for (let k = 0; k < len / 2; k++) {
+        const wr = Math.cos(ang * k), wi = Math.sin(ang * k);
+        const a = i + k, b = a + len / 2;
+        const tr = re[b] * wr - im[b] * wi, ti = re[b] * wi + im[b] * wr;
+        re[b] = re[a] - tr; im[b] = im[a] - ti;
+        re[a] += tr; im[a] += ti;
+      }
+    }
+  }
+  for (let k = 0; k < n / 2; k++) {
+    const mag = Math.hypot(re[k], im[k]) / n;
+    state[k] = smoothing * state[k] + (1 - smoothing) * mag;
+    const db = 20 * Math.log10(state[k] + 1e-12);
+    out[k] = Math.max(0, Math.min(255, Math.round((255 * (db - minDb)) / (maxDb - minDb))));
+  }
+  return out;
+}

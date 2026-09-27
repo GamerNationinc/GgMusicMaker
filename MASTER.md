@@ -133,6 +133,15 @@ launched on this Steam Deck under KDE/Wayland.
 
 **Not yet native** (next): VOICE SYNTH, MORPH, reverb, surround/binaural, spectrum meter, recording, export (export still renders on the web engine — and its limiter is Chromium's compressor, so a hot native mix and its export can differ slightly at the top). Default stays WEB until those land and it has been listened to on the Deck.
 
+### 2026-09-27 — every effect ported to Rust; NATIVE is the default engine
+
+| Change | Verified how |
+|---|---|
+| Rust ports of every worklet: `native/src/synth.rs` (VOICE SYNTH), `morph.rs` (all 8 engines incl. the phase-vocoder FFT), `placer.rs`, `binaural.rs`, `reverb.rs` (the same IRs — `reverb.ts` now seeds its noise, so every render is identical — normalised like ConvolverNode, 3-stage partitioned real-FFT convolver 128/1024/8192, silence costs nothing, 128-sample wet latency). State that JS keeps in Float32Arrays is stored as f32 in Rust, and AudioParam values are rounded to f32 (`quantize()`), so the ports track the worklets sample for sample. | `src/audio/native-parity.test.ts` (76): every VOICE SYNTH and MORPH preset in stereo and 7.1 within 0.1 % RMS of the worklet (chaotic Lorenz/FM-feedback presets: first 50 ms tight + level), placer + binaural < 1e-5, reverb impulse response = web IR × spec normalisation < 1e-5 |
+| `mixer.rs` now renders the whole graph in 128-frame quanta (clips → level → cuts → EQ → PUNCH → MORPH → SYNTH → placer; sends → reverb; 2/6/8-ch bus; binaural when wider than the device) into a DynamicsCompressor twin (−3 dB, ratio 20, 2/100 ms, **6 ms look-ahead**, spec makeup gain ≈ +1.7 dB). Device opened at 48 kHz f32 when offered. Export renders natively (async task). Spectrum meter from the engine's scope (AnalyserNode emulation). | Desktop app: the same 5-layer Wall of Vox exported natively vs on the web engine → **0.33 dB, r = 0.993**. Bench (5 layers, 10 s): plain 0.08 s, reverb 0.14 s, VOICE SYNTH 0.24 s, spectral MORPH 0.83 s |
+| NATIVE is the default in the desktop app (WEB still selectable; automatic fallback to WEB if the device won't open). | `npm run test:app` 18/18 |
+| CI (`ci.yml`) builds + tests the engine, runs parity, Chromium, WebKit and the Electron app under xvfb with ALSA's null device; `release.yml` packages with electron-builder and publishes AppImage + Steam depot tarball. | First run: all green except a session-reopen render mismatch caused by the old `Math.random` reverb IR (fixed by the seeded IR) |
+
 ### Native Steam Deck build
 
 | Step | Verified how |

@@ -5,10 +5,10 @@
 </script>
 
 {#if nativeEngineAvailable}
-  <div class="engine-switch" title="Audio engine. NATIVE runs the mixer in Rust on its own real-time thread (beta).">
+  <div class="engine-switch" title="Audio engine. NATIVE (default) runs the whole mix in Rust on its own real-time thread; WEB uses the built-in browser audio.">
     <span class="label">ENGINE</span>
     <button class="seg" class:on={engineKind === "web"} data-role="engine-web" onclick={() => void setEngineKind("web")}>WEB</button>
-    <button class="seg" class:on={engineKind === "native"} data-role="engine-native" onclick={() => void setEngineKind("native")}>NATIVE β</button>
+    <button class="seg" class:on={engineKind === "native"} data-role="engine-native" onclick={() => void setEngineKind("native")}>NATIVE</button>
     {#if $engineNote}<span class="note" data-role="engine-note">{$engineNote}</span>{/if}
   </div>
 {/if}

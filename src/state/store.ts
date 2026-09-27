@@ -72,7 +72,8 @@ const ENGINE_KEY = "ggmm.engine";
 function wantedEngine(): EngineKind {
   try {
     // (literal, not ENGINE_KEY: this runs while `engine` initialises, above it)
-    return localStorage.getItem("ggmm.engine") === "native" ? "native" : "web";
+    // Native is the default in the desktop app; "web" only if chosen.
+    return localStorage.getItem("ggmm.engine") === "web" ? "web" : "native";
   } catch {
     return "web";
   }
@@ -81,15 +82,14 @@ function createBackend(): AudioBackend {
   const web = new AudioEngine();
   const bridge = (globalThis as { ggmmNative?: { engine?: NativeEngineBridge } }).ggmmNative?.engine;
   if (wantedEngine() !== "native" || !bridge) return web;
-  return new NativeBackend(web, bridge, "");
+  return new NativeBackend(web, bridge);
 }
 export const engineKind: EngineKind = engine instanceof NativeBackend ? "native" : "web";
 /** Whether this build can run the native engine at all (desktop app only). */
 export const nativeEngineAvailable = !!(globalThis as { ggmmNative?: { engine?: unknown } }).ggmmNative?.engine;
-/** Modules the project uses that the native engine skips (native mode only). */
+/** Shown next to the ENGINE switch (e.g. when native fell back to web). */
 export const engineNote = writable<string>("");
 if (engine instanceof NativeBackend) {
-  engine.onUnsupported = (mods) => engineNote.set(mods.length ? `not native yet: ${mods.join(", ")}` : "");
   engine.onFallback = (why) => {
     engineNote.set(`native engine off (${why}) — using web`);
     status.set(`Native engine unavailable (${why}); playing through the web engine.`);

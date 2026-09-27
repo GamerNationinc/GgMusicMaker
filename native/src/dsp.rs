@@ -115,6 +115,22 @@ pub struct PunchParams {
     pub safe: f64,
 }
 
+impl PunchParams {
+    /// Round to f32 like an AudioParam, so the port sees exactly what the
+    /// worklet sees.
+    pub fn quantize(&mut self) {
+        self.boom = self.boom as f32 as f64;
+        self.sub = self.sub as f32 as f64;
+        self.punch = self.punch as f32 as f64;
+        self.snap = self.snap as f32 as f64;
+        self.drive = self.drive as f32 as f64;
+        self.blowout = self.blowout as f32 as f64;
+        self.freq = self.freq as f32 as f64;
+        self.output = self.output as f32 as f64;
+        self.safe = self.safe as f32 as f64;
+    }
+}
+
 /// The JS core's cookbook biquad (0 dB-peak RBJ LP/HP with a linear Q).
 #[derive(Clone, Copy, Default)]
 struct CoreBiquad(Biquad);
@@ -326,6 +342,52 @@ impl Punch {
             r = ceiling(r);
         }
         (l, r)
+    }
+}
+
+// ---- master compressor (Web Audio DynamicsCompressorNode) --------------------
+
+/// The web engine's master stage is a DynamicsCompressorNode (threshold
+/// −3 dB, knee 0, ratio 20, attack 2 ms, release 100 ms). The spec also
+/// applies automatic makeup gain, (1 / gain at 0 dBFS)^0.6 ≈ +1.7 dB here,
+/// which the native bus must match or it would sound quieter. Linked over
+/// the channels it's given (the web engine uses one per stereo pair / one
+/// per surround channel).
+pub struct Compressor {
+    env_db: f64,
+    att: f64,
+    rel: f64,
+    thr_db: f64,
+    ratio: f64,
+    makeup: f64,
+    pub reduction_db: f64,
+}
+
+impl Compressor {
+    pub fn new(sr: f64) -> Self {
+        let thr_db = -3.0;
+        let ratio = 20.0;
+        let full = thr_db + (0.0 - thr_db) / ratio; // output level for a 0 dBFS input
+        let makeup = (1.0 / 10f64.powf(full / 20.0)).powf(0.6);
+        Compressor {
+            env_db: 0.0,
+            att: (-1.0 / (sr * 0.002)).exp(),
+            rel: (-1.0 / (sr * 0.1)).exp(),
+            thr_db,
+            ratio,
+            makeup,
+            reduction_db: 0.0,
+        }
+    }
+    /// Gain for this sample given the peak across the linked channels.
+    #[inline]
+    pub fn gain(&mut self, peak: f64) -> f64 {
+        let in_db = 20.0 * peak.max(1e-9).log10();
+        let target = if in_db > self.thr_db { (self.thr_db + (in_db - self.thr_db) / self.ratio) - in_db } else { 0.0 };
+        let c = if target < self.env_db { self.att } else { self.rel };
+        self.env_db = target + (self.env_db - target) * c;
+        self.reduction_db = self.env_db;
+        10f64.powf(self.env_db / 20.0) * self.makeup
     }
 }
 

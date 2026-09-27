@@ -63,6 +63,7 @@ function register() {
   ipcMain.on("engine-play", (_e, from) => getEngine()?.play(from));
   ipcMain.on("engine-stop", () => getEngine()?.stop());
   ipcMain.handle("engine-status", () => getEngine()?.status() ?? null);
+  ipcMain.handle("engine-scope", () => getEngine()?.scope() ?? null);
   ipcMain.handle("engine-render", (_e, { project, ids, rates, data, sampleRate, tail }) =>
     getModule()?.renderOffline(project, ids, rates, data, sampleRate, tail),
   );

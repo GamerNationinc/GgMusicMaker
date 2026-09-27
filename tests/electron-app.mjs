@@ -124,9 +124,9 @@ const bytes = wav ? await readFile(join(saveDir, wav)) : Buffer.alloc(0);
 check("exports a WAV to disk through the native save path", bytes.length > 1_000_000 && bytes.slice(0, 4).toString() === "RIFF", `${wav ?? "nothing"} ${(bytes.length / 1e6).toFixed(1)} MB`);
 
 // --- native (Rust) engine ----------------------------------------------------
-// Switch engines (reloads the window), import one layer, play very quietly,
-// and prove the native engine is the one moving the playhead + meters.
-await page.evaluate(() => localStorage.setItem("ggmm.engine", "native"));
+// Native is the default engine: reload into it, import one layer, play very
+// quietly, and prove the native engine is the one moving the playhead + meters.
+await page.evaluate(() => localStorage.removeItem("ggmm.engine"));
 await page.reload();
 await page.waitForSelector(".title");
 check("ENGINE switch shows NATIVE", (await page.$("[data-role=engine-native].on")) !== null);
@@ -148,14 +148,68 @@ check("native transport plays: engine playhead advances", during.playing && duri
 check("native meters see the signal", during.peak > 0.001, `peak ${during.peak.toFixed(4)}`);
 check("native device clock runs", during.clock - before.clock > 1.2, `${(during.clock - before.clock).toFixed(2)} s`);
 check("UI playhead follows the native engine", /00:0[1-2]/.test(shown), shown.trim());
-// A module the native engine doesn't render yet is named in the header.
+// --- native vs web: the same project, exported by each engine ---------------
+// A Wall of Vox stack exercises EQ + cuts, VOICE SYNTH (doubles, octave),
+// MORPH (spectral whisper) and the reverb send. Export it on the native
+// engine, save the session, reopen it on the web engine, export again, and
+// compare the two WAVs.
+const setMaster = (v) =>
+  page.$eval(".master input[type=range]", (el, v) => {
+    el.value = String(v);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  }, v);
+await setMaster(0.9);
 await page.click(".chip.fx");
-await page.click("button.tab:has-text('FX CHAIN')");
-await page.click(".slot.morph .pick");
-await page.click(".engine:has-text('GRAIN CLOUD')");
-await page.waitForTimeout(300);
-check("header names modules not native yet", /MORPH/.test((await page.textContent("[data-role=engine-note]").catch(() => "")) ?? ""));
+await page.click("button.tab:has-text('RACKS')");
+await page.click(".cats button:has-text('VOCALS')");
+await page.click(".recipe:has-text('Wall of Vox')");
+await page.waitForFunction(() => document.querySelectorAll(".head").length === 5);
+const exportWav = async () => {
+  await page.click("button:has-text('Export')");
+  await page.waitForFunction(() => /EXPORT COMPLETE|SAVED|FAIL|ERROR/i.test(document.querySelector(".dialog")?.textContent ?? ""), null, { timeout: 180000 });
+  const phase = (await page.textContent(".dialog")) ?? "";
+  if (!/EXPORT COMPLETE|SAVED/i.test(phase)) throw new Error(`export failed: ${phase.replace(/\s+/g, " ")}`);
+  const bytes = await readFile(join(saveDir, "ggmusicmaker-mix.wav"));
+  await page.click(".dialog button", { timeout: 3000 }).catch(() => {}); // it may have closed itself
+  await page.waitForFunction(() => !document.querySelector(".dialog"), null, { timeout: 5000 }).catch(() => {});
+  const n = (bytes.length - 44) >> 2;
+  const l = new Float32Array(n), r = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    l[i] = bytes.readInt16LE(44 + i * 4) / 32768;
+    r[i] = bytes.readInt16LE(46 + i * 4) / 32768;
+  }
+  return [l, r];
+};
+const t0 = Date.now();
+const nat = await exportWav();
+const natMs = Date.now() - t0;
+await page.keyboard.press("Control+s");
+await page.waitForTimeout(800);
+const session = (await readdir(saveDir)).find((f) => f.endsWith(".ggmm"));
+check("session saved for the engine swap", !!session, session ?? "none");
+
 await page.evaluate(() => localStorage.setItem("ggmm.engine", "web"));
+await page.reload();
+await page.waitForSelector(".title");
+check("ENGINE switch shows WEB", (await page.$("[data-role=engine-web].on")) !== null);
+await page.setInputFiles("input[data-role=session-file]", join(saveDir, session));
+await page.waitForFunction(() => document.querySelectorAll(".head").length === 5, null, { timeout: 30000 });
+const web = await exportWav();
+
+const rmsOf = (a) => Math.sqrt(a.reduce((s, v) => s + v * v, 0) / a.length);
+const n = Math.min(nat[0].length, web[0].length);
+let dot = 0, nn = 0, ww = 0;
+for (const ch of [0, 1]) for (let i = 0; i < n; i++) {
+  dot += nat[ch][i] * web[ch][i];
+  nn += nat[ch][i] ** 2;
+  ww += web[ch][i] ** 2;
+}
+const corr = dot / Math.sqrt(nn * ww);
+const dB = 20 * Math.log10(rmsOf(nat[0]) / rmsOf(web[0]));
+check("native and web exports are the same mix: level within 1 dB", Math.abs(dB) < 1, `${dB.toFixed(2)} dB`);
+check("… and the same waveform (correlation > 0.97)", corr > 0.97, `r = ${corr.toFixed(4)}`);
+check("native export is quick", natMs < 30000, `${(natMs / 1000).toFixed(1)} s`);
+await page.evaluate(() => localStorage.removeItem("ggmm.engine")); // back to the default (native)
 
 await app.close();
 console.log(`\n${passed}/${passed + failed} desktop-app checks passed`);
