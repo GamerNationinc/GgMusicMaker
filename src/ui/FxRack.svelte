@@ -2,6 +2,8 @@
   import { writable } from "svelte/store";
   /** RACKS & STACK vs FX CHAIN — remembered while the app runs. */
   export const rackView = writable<"racks" | "chain">("racks");
+  /** Set to open the chain editor on a module (track-head badges). */
+  export const rackSlot = writable<import("../fx/chain").FxSlot | null>(null);
 </script>
 
 <script lang="ts">
@@ -64,7 +66,7 @@
     type ParamSpec,
     type SynthKey,
   } from "../fx/voice-synth";
-  import { FX_SLOTS, slotLit, slotSummary, panText, widthText, type FxSlot } from "../fx/chain";
+  import { FX_SLOTS, activeSlots, slotState, slotSummary, panText, widthText, type FxSlot } from "../fx/chain";
   import type { ReverbSpace } from "../audio/reverb";
 
   let track = $derived($project.tracks.find((t) => t.id === $selectedTrackId));
@@ -90,6 +92,7 @@
   const surroundWant = $derived(SURROUND[$project.surround].channels);
   const folded = $derived($liveChannels < surroundWant);
   const accent = $derived(track ? laneColor($theme, track.color) : "");
+  const activeCount = $derived(track ? activeSlots(track).length : 0);
 
   // PUNCH: what it does to this layer's audio, from the preview.
   const punchPreset = $derived(track ? matchingPunchPreset(track.punch) : null);
@@ -183,6 +186,15 @@
     browsing = false;
   }
 
+  // A track-head badge was clicked: jump to that module.
+  $effect(() => {
+    const s = $rackSlot;
+    if (s) {
+      slot = s;
+      rackSlot.set(null);
+    }
+  });
+
   function onKey(e: KeyboardEvent) {
     if (e.key === "Escape") {
       browsing = false;
@@ -197,6 +209,7 @@
   <div class="rack panel">
     <div class="rack-title" style:color={accent}>
       ▚ FX — {track.name}
+      <span class="active-count" class:none={activeCount === 0}>{activeCount} of {FX_SLOTS.length} active</span>
       <button class="chip" onclick={() => selectedTrackId.set(null)} title="Close">✕</button>
     </div>
 
@@ -220,6 +233,33 @@
         {/if}
         <button class="btn small accent" onclick={() => void addStackLayer(track!.id)} title="Add a linked copy of this audio to the stack">＋ STACK LAYER</button>
       </div>
+    </div>
+
+    <!-- Chain strip: always in view, whichever tab is open. -->
+    <div class="chain" aria-label="Effects chain">
+      {#each FX_SLOTS as s, i (s.key)}
+        {@const st = slotState(track, s.key)}
+        {#if i > 0}<span class="arrow">▸</span>{/if}
+        <div
+          class="slot {s.key} {st}"
+          class:selected={$rackView === "chain" && slot === s.key}
+          class:off={!track.fx[s.key]}
+          style:--accent={accent}
+        >
+          <button
+            class="power"
+            class:on={track.fx[s.key]}
+            onclick={() => toggleFx(track!.id, s.key)}
+            title={track.fx[s.key] ? "Bypass" : "Enable"}
+            aria-label="{s.label} power"
+          >⏻</button>
+          <button class="pick" onclick={() => { slot = s.key; rackView.set("chain"); }} aria-label="Edit {s.label}">
+            <span class="led" class:on={st === "active"}>●</span>
+            <span class="slot-name">{s.label}<span class="state">{st === "active" ? "ON" : st === "bypassed" ? "BYPASSED" : ""}</span></span>
+            <span class="summary">{slotSummary(track, s.key, $reverbSpace)}</span>
+          </button>
+        </div>
+      {/each}
     </div>
 
     {#if $rackView === "racks"}
@@ -256,32 +296,6 @@
         </div>
       </div>
     {:else}
-    <!-- Chain strip -->
-    <div class="chain">
-      {#each FX_SLOTS as s, i (s.key)}
-        {#if i > 0}<span class="arrow">▸</span>{/if}
-        <div
-          class="slot {s.key}"
-          class:selected={slot === s.key}
-          class:off={!track.fx[s.key]}
-          style:--accent={accent}
-        >
-          <button
-            class="power"
-            class:on={track.fx[s.key]}
-            onclick={() => toggleFx(track!.id, s.key)}
-            title={track.fx[s.key] ? "Bypass" : "Enable"}
-            aria-label="{s.label} power"
-          >⏻</button>
-          <button class="pick" onclick={() => (slot = s.key)} aria-label="Edit {s.label}">
-            <span class="led" class:on={slotLit(track, s.key)}>●</span>
-            <span class="slot-name">{s.label}</span>
-            <span class="summary">{slotSummary(track, s.key, $reverbSpace)}</span>
-          </button>
-        </div>
-      {/each}
-    </div>
-
     <!-- Editor for the picked slot -->
     <div class="editor {slot}" class:bypassed={!track.fx[slot]}>
       {#if !track.fx[slot]}
@@ -883,6 +897,54 @@
   }
   .slot.off .pick {
     opacity: 0.45;
+  }
+  /* Active modules are filled, not just lit: impossible to miss. */
+  .slot.active {
+    border-color: var(--magenta);
+    background: color-mix(in srgb, var(--magenta) 22%, var(--panel-lo));
+    box-shadow: 2px 2px 0 #000, 0 0 10px color-mix(in srgb, var(--magenta) 60%, transparent);
+  }
+  .slot.active .slot-name {
+    color: var(--magenta);
+    text-shadow: var(--glow);
+  }
+  .slot.bypassed {
+    border-style: dashed;
+    border-color: var(--magenta);
+  }
+  .slot.bypassed .slot-name {
+    text-decoration: line-through;
+  }
+  .slot.idle .pick {
+    opacity: 0.55;
+  }
+  .state {
+    margin-left: 6px;
+    padding: 0 4px;
+    font-size: 9px;
+    letter-spacing: 1px;
+  }
+  .slot.active .state {
+    background: var(--magenta);
+    color: var(--on-accent);
+    text-shadow: none;
+  }
+  .slot.bypassed .state {
+    border: 1px dashed var(--magenta);
+    color: var(--magenta);
+  }
+  .active-count {
+    margin-left: 12px;
+    padding: 1px 8px;
+    font-size: 12px;
+    background: var(--magenta);
+    color: var(--on-accent);
+    letter-spacing: 1px;
+  }
+  .active-count.none {
+    background: transparent;
+    color: var(--ink-dim);
+    border: 1px solid var(--bevel-dark);
   }
   .power {
     font-family: var(--font);

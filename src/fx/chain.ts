@@ -105,6 +105,30 @@ export function anyFxLit(track: Track): boolean {
   return FX_SLOTS.some((s) => slotLit(track, s.key));
 }
 
+/** How a module shows at a glance: `active` = on and changing the sound,
+ *  `bypassed` = set up but switched off, `idle` = neutral. */
+export type SlotState = "active" | "bypassed" | "idle";
+
+export function slotState(track: Track, slot: FxSlot): SlotState {
+  if (!slotEngaged(track, slot)) return "idle";
+  return track.fx[slot] ? "active" : "bypassed";
+}
+
+/** The modules actually changing this layer's sound, in chain order. */
+export function activeSlots(track: Track): FxSlot[] {
+  return FX_SLOTS.filter((s) => slotLit(track, s.key)).map((s) => s.key);
+}
+
+/** Short names for the track-head badges (the rack uses the full labels). */
+export const SLOT_SHORT: Record<FxSlot, string> = {
+  place: "PAN",
+  eq: "EQ",
+  punch: "PUNCH",
+  morph: "MORPH",
+  synth: "SYNTH",
+  reverb: "VERB",
+};
+
 /** Fill in / clean a power-switch block from any (old or partial) track data. */
 export function normalizeFx(fx: unknown): FxEnabled {
   const src = (fx ?? {}) as Partial<Record<FxSlot, unknown>>;

@@ -237,6 +237,11 @@ async function main() {
   const synthSummary = (await page.textContent(".slot.synth .summary")).trim();
   check("chain strip summarises the synth", synthSummary === "Chipmunk · 100%", synthSummary);
   check("FX chip on the head lights up", (await page.$(".head:nth-child(1) .chip.fx.lit")) !== null);
+  const fxCount = (await page.textContent(".head:nth-child(1) .chip.fx .count")).trim();
+  const lit = await page.$$eval(".head:nth-child(1) .badge.active", (els) => els.map((e) => e.textContent.trim()));
+  check("the head counts its active effects and badges them", fxCount === String(lit.length) && lit.includes("SYNTH"), `FX ${fxCount} · ${lit.join(" ")}`);
+  check("the open layer's head is highlighted", (await page.$(".head:nth-child(1).selected")) !== null);
+  check("the rack title says how many are active", /^\d+ of 6 active$/.test((await page.textContent(".active-count")).trim()));
   const wet = await exportBytes();
   let diff = 0;
   const n = Math.min(dry.length, wet.length);
@@ -645,6 +650,19 @@ async function main() {
   await page.keyboard.press("Control+z");
   await page.waitForTimeout(300);
   check("undo brings it back on every layer", (await laneInk()).every((n) => n > 10));
+
+  // Solo is exclusive: a new solo replaces the old one; Ctrl-click adds.
+  const soloed = () => page.$$eval(".head", (hs) => hs.map((h, i) => (h.querySelector(".chip.solo.on") ? i : -1)).filter((i) => i >= 0).join(","));
+  await page.click(".head:nth-child(1) .chip.solo");
+  await page.click(".head:nth-child(2) .chip.solo");
+  await page.click(".head:nth-child(3) .chip.solo");
+  check("soloing a layer un-solos the others", (await soloed()) === "2", await soloed());
+  await page.click(".head:nth-child(1) .chip.solo", { modifiers: ["Control"] });
+  check("Ctrl-click adds to the solos", (await soloed()) === "0,2", await soloed());
+  await page.click(".head:nth-child(3) .chip.solo");
+  check("a plain click makes that one the only solo", (await soloed()) === "2", await soloed());
+  await page.click(".head:nth-child(3) .chip.solo");
+  check("clicking the only solo turns solo off", (await soloed()) === "", await soloed());
 
   await browser.close();
   server.close();

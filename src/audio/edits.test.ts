@@ -14,6 +14,7 @@ import {
   insertTrackAfter,
   anySoloed,
   replaceClip,
+  soloTracks,
 } from "./edits";
 import { __resetIds } from "./types";
 import type { Clip, Project, Track } from "./types";
@@ -251,5 +252,40 @@ describe("duplicate track", () => {
     expect(insertTrackAfter([a, b, c], "a", copy).map((t) => t.id)).toEqual(["a", copy.id, "b", "c"]);
     expect(insertTrackAfter([a, b, c], "c", copy).map((t) => t.id)).toEqual(["a", "b", "c", copy.id]);
     expect(insertTrackAfter([a, b], "missing", copy).map((t) => t.id)).toEqual(["a", "b", copy.id]);
+  });
+});
+
+describe("soloTracks (exclusive solo)", () => {
+  const t = (id: string, soloed = false) => ({ id, soloed }) as unknown as Track;
+  const soloed = (ts: Track[]) => ts.filter((x) => x.soloed).map((x) => x.id);
+
+  it("soloing a layer un-solos every other one", () => {
+    let ts = [t("a"), t("b"), t("c")];
+    ts = soloTracks(ts, "a");
+    ts = soloTracks(ts, "b");
+    expect(soloed(ts)).toEqual(["b"]);
+    ts = soloTracks(ts, "c");
+    expect(soloed(ts)).toEqual(["c"]);
+  });
+
+  it("clicking the only solo turns solo off", () => {
+    expect(soloed(soloTracks([t("a", true), t("b")], "a"))).toEqual([]);
+  });
+
+  it("additive click stacks solos and removes just one", () => {
+    let ts = soloTracks([t("a"), t("b"), t("c")], "a");
+    ts = soloTracks(ts, "b", true);
+    expect(soloed(ts)).toEqual(["a", "b"]);
+    expect(soloed(soloTracks(ts, "a", true))).toEqual(["b"]);
+  });
+
+  it("a plain click on one of several solos makes it the only one", () => {
+    expect(soloed(soloTracks([t("a", true), t("b", true), t("c", true)], "b"))).toEqual(["b"]);
+  });
+
+  it("unchanged layers keep their identity (no needless engine work)", () => {
+    const c = t("c");
+    const ts = soloTracks([t("a", true), t("b"), c], "b");
+    expect(ts[2]).toBe(c);
   });
 });

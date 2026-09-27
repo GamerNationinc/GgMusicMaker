@@ -20,6 +20,7 @@ import {
   cloneTrack,
   copyName,
   insertTrackAfter,
+  soloTracks,
 } from "../audio/edits";
 import { AudioEngine } from "../audio/engine";
 import { NativeBackend, type NativeEngineBridge } from "../audio/native";
@@ -652,8 +653,9 @@ export function toggleMute(trackId: string): void {
   updateTrack(trackId, (t) => ({ ...t, muted: !t.muted }));
 }
 
-export function toggleSolo(trackId: string): void {
-  updateTrack(trackId, (t) => ({ ...t, soloed: !t.soloed }));
+/** Solo this layer only (see `soloTracks`); `additive` keeps other solos. */
+export function toggleSolo(trackId: string, additive = false): void {
+  updateProject((p) => ({ ...p, tracks: soloTracks(p.tracks, trackId, additive) }));
 }
 
 export function renameTrack(trackId: string, name: string): void {

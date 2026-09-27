@@ -3,7 +3,7 @@ import { DEFAULT_MORPH } from "./morph";
 import { DEFAULT_PUNCH } from "./punch";
 import type { Track } from "../audio/types";
 import { DEFAULT_SYNTH, SYNTH_PRESETS, presetParams } from "./voice-synth";
-import { FX_ALL_ON, anyFxLit, normalizeFx, panText, slotEngaged, slotLit, slotSummary, widthText } from "./chain";
+import { FX_ALL_ON, activeSlots, anyFxLit, normalizeFx, panText, slotEngaged, slotLit, slotState, slotSummary, widthText } from "./chain";
 
 const base = (over: Partial<Track> = {}): Track => ({
   id: "t",
@@ -78,5 +78,23 @@ describe("fx chain strip", () => {
   it("normalizeFx defaults missing switches to on and ignores junk", () => {
     expect(normalizeFx(undefined)).toEqual(FX_ALL_ON);
     expect(normalizeFx({ eq: false, synth: "yes" })).toEqual({ place: true, eq: false, punch: true, morph: true, synth: true, reverb: true });
+  });
+});
+
+describe("slotState / activeSlots (what the track head shows)", () => {
+  it("a neutral layer has nothing active", () => {
+    expect(activeSlots(base())).toEqual([]);
+    expect(slotState(base(), "eq")).toBe("idle");
+  });
+
+  it("lists active modules in chain order", () => {
+    const t = base({ reverbSend: 0.3, pan: -0.5, eq: { ...base().eq, low: 3 } });
+    expect(activeSlots(t)).toEqual(["place", "eq", "reverb"]);
+  });
+
+  it("a set-up module that is switched off is bypassed, not active", () => {
+    const t = base({ reverbSend: 0.3, fx: { ...FX_ALL_ON, reverb: false } });
+    expect(slotState(t, "reverb")).toBe("bypassed");
+    expect(activeSlots(t)).toEqual([]);
   });
 });

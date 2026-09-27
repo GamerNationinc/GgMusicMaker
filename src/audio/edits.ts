@@ -97,6 +97,22 @@ export function anySoloed(project: Project): boolean {
  * Whether a track should be audible given the project's solo state:
  * muted tracks are silent; if anything is soloed, only soloed tracks play.
  */
+/** Solo is exclusive: soloing a layer un-solos every other one, so there is
+ *  never a pile of solos to undo in reverse order. `additive` (Ctrl/Shift-
+ *  click) toggles just this layer, for when you do want several. A plain
+ *  click on a layer that is soloed alongside others makes it the only one. */
+export function soloTracks(tracks: Track[], trackId: string, additive = false): Track[] {
+  const target = tracks.find((t) => t.id === trackId);
+  if (!target) return tracks;
+  if (additive) return tracks.map((t) => (t.id === trackId ? { ...t, soloed: !t.soloed } : t));
+  const othersSoloed = tracks.some((t) => t.id !== trackId && t.soloed);
+  const on = !target.soloed || othersSoloed;
+  return tracks.map((t) => {
+    const soloed = t.id === trackId ? on : false;
+    return t.soloed === soloed ? t : { ...t, soloed };
+  });
+}
+
 export function isTrackAudible(track: Track, projectHasSolo: boolean): boolean {
   if (track.muted) return false;
   if (projectHasSolo) return track.soloed;
