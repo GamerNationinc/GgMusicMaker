@@ -26,6 +26,9 @@
     sessionPath,
     dirty,
     lowPower,
+    clearAutosave,
+    recoverAutosave,
+    startAutosave,
   } from "../state/store";
   import { sessionDisplayName } from "../state/session";
   import { isNative, onCloseRequested, confirmDialog } from "../state/platform";
@@ -52,9 +55,14 @@
     onCloseRequested(async () => {
       if (!$dirty) return true;
       const quit = await confirmDialog(`${sessionName} has unsaved changes. Quit anyway?`, "Unsaved changes");
-      if (quit) dirty.set(false);
+      if (quit) {
+        dirty.set(false);
+        await clearAutosave();
+      }
       return quit;
     });
+    // Crash recovery first, so the timer never overwrites what it offers.
+    void recoverAutosave().then(startAutosave);
   });
 
   function onKey(e: KeyboardEvent) {

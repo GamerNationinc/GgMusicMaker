@@ -77,3 +77,6 @@ jobs:
 
       - name: Desktop app end to end (Electron + native engine)
         run: xvfb-run -a npm run test:app
+
+      - name: Crash recovery end to end (autosave, crash log, hung-window close)
+        run: xvfb-run -a npm run test:recovery

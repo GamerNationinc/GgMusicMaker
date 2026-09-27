@@ -71,29 +71,16 @@ export function referencedBufferIds(project: Project): string[] {
   return [...ids];
 }
 
-/** Serialise a project and its audio into a `.ggmm` file. */
-export function packSession(
-  project: Project,
-  extras: SessionExtras,
-  getBuffer: (id: string) => PcmSource | undefined,
-  now: Date = new Date(),
-): ArrayBuffer {
-  const wavs: ArrayBuffer[] = [];
-  const audio: AudioEntry[] = [];
-  let offset = 0;
-  for (const id of referencedBufferIds(project)) {
-    const buf = getBuffer(id);
-    if (!buf) throw new Error(`audio buffer ${id} is missing`);
-    // 32-bit float: lossless, so a reopened session is bit-identical.
-    const wav = encodeWav(buf, { float: true });
-    audio.push({ id, offset, length: wav.byteLength });
-    wavs.push(wav);
-    offset += wav.byteLength;
-  }
+/** The JSON header minus the audio table: everything about a session except
+ *  where its WAVs sit in the file. */
+export type SessionHeaderBase = Omit<SessionHeader, "audio">;
 
+/** Build the header for `project` at `now` (the audio table is added when
+ *  the container is packed). */
+export function sessionHeader(project: Project, extras: SessionExtras, now: Date = new Date()): SessionHeaderBase {
   // Arming is transport state; a reopened session should not surprise the
   // user by recording onto a layer they armed last week.
-  const header: SessionHeader = {
+  return {
     format: MAGIC,
     version: FORMAT_VERSION,
     app: "GgMusicMaker",
@@ -103,8 +90,23 @@ export function packSession(
       ...project,
       tracks: project.tracks.map((t) => ({ ...t, armed: false })),
     },
-    audio,
   };
+}
+
+/** Lay a header and already-encoded WAVs (keyed by buffer id) out as a
+ *  `.ggmm` file. Only buffers the project references are written. */
+export function packContainer(base: SessionHeaderBase, wavs: Map<string, ArrayBuffer>): ArrayBuffer {
+  const audio: AudioEntry[] = [];
+  const blobs: ArrayBuffer[] = [];
+  let offset = 0;
+  for (const id of referencedBufferIds(base.project)) {
+    const wav = wavs.get(id);
+    if (!wav) throw new Error(`audio buffer ${id} is missing`);
+    audio.push({ id, offset, length: wav.byteLength });
+    blobs.push(wav);
+    offset += wav.byteLength;
+  }
+  const header: SessionHeader = { ...base, audio };
   const headerBytes = new TextEncoder().encode(JSON.stringify(header));
 
   const out = new ArrayBuffer(PREAMBLE + headerBytes.byteLength + offset);
@@ -115,11 +117,33 @@ export function packSession(
   view.setUint32(8, headerBytes.byteLength, true);
   bytes.set(headerBytes, PREAMBLE);
   let pos = PREAMBLE + headerBytes.byteLength;
-  for (const wav of wavs) {
+  for (const wav of blobs) {
     bytes.set(new Uint8Array(wav), pos);
     pos += wav.byteLength;
   }
   return out;
+}
+
+/** One audio buffer as it is stored in a session: 32-bit float WAV, lossless,
+ *  so a reopened session is bit-identical. */
+export function sessionWav(buf: PcmSource): ArrayBuffer {
+  return encodeWav(buf, { float: true });
+}
+
+/** Serialise a project and its audio into a `.ggmm` file. */
+export function packSession(
+  project: Project,
+  extras: SessionExtras,
+  getBuffer: (id: string) => PcmSource | undefined,
+  now: Date = new Date(),
+): ArrayBuffer {
+  const wavs = new Map<string, ArrayBuffer>();
+  for (const id of referencedBufferIds(project)) {
+    const buf = getBuffer(id);
+    if (!buf) throw new Error(`audio buffer ${id} is missing`);
+    wavs.set(id, sessionWav(buf));
+  }
+  return packContainer(sessionHeader(project, extras, now), wavs);
 }
 
 /** Parse a `.ggmm` file. Throws a readable error for anything that isn't one. */

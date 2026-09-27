@@ -15,6 +15,8 @@ const path = require("node:path");
 const fs = require("node:fs/promises");
 const { pathToFileURL } = require("node:url");
 const nativeEngine = require("./engine.cjs");
+const crashlog = require("./crashlog.cjs");
+const autosave = require("./autosave.cjs");
 
 const DIST = path.join(__dirname, "..", "dist");
 const SCHEME = "app";
@@ -27,6 +29,11 @@ app.commandLine.appendSwitch("ozone-platform-hint", "auto");
 // Short audio buffers: PipeWire (via its Pulse server) handles these well.
 app.commandLine.appendSwitch("audio-buffer-size", "512");
 
+// GGMM_USER_DATA: automated tests keep their autosaves and logs out of the
+// real ~/.config/ggmusicmaker.
+if (process.env.GGMM_USER_DATA) app.setPath("userData", process.env.GGMM_USER_DATA);
+crashlog.start();
+
 protocol.registerSchemesAsPrivileged([
   { scheme: SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } },
 ]);
@@ -36,6 +43,23 @@ if (!app.requestSingleInstanceLock()) app.quit();
 
 let win = null;
 let allowClose = false;
+// Set when the page has said it heard a close request. A page that has died
+// or hung never does, and without this the window could never be closed.
+let closeAcked = false;
+const CLOSE_ACK_MS = 3000;
+
+// Tests can't click dialogs: GGMM_TEST_DIALOG=<button index> answers them.
+async function ask(opts) {
+  if (process.env.GGMM_TEST_DIALOG != null) return Number(process.env.GGMM_TEST_DIALOG);
+  return (await dialog.showMessageBox(win, opts)).response;
+}
+
+function forceClose() {
+  allowClose = true;
+  win?.destroy();
+}
+
+const clock = (iso) => (iso ? new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : null);
 
 function createWindow() {
   win = new BrowserWindow({
@@ -61,13 +85,55 @@ function createWindow() {
   if (!process.env.GGMM_HIDDEN) win.once("ready-to-show", () => win.show());
   win.loadURL(`${ORIGIN}/index.html`);
 
-  // Unsaved-work guard: ask the page; it answers with "close-ok".
+  // Unsaved-work guard: ask the page; it acks at once ("close-ack"), then
+  // answers with "close-ok" once the user has decided.
   win.on("close", (e) => {
     // GGMM_NO_CLOSE_GUARD: automated tests quit without answering the dialog.
     if (allowClose || !win || process.env.GGMM_NO_CLOSE_GUARD) return;
+    // A dead page can't answer. Its last autosave is still on disk and is
+    // offered on the next launch, so just close.
+    if (win.webContents.isCrashed()) return;
     e.preventDefault();
+    closeAcked = false;
     win.webContents.send("close-requested");
+    setTimeout(async () => {
+      if (closeAcked || allowClose || !win) return;
+      crashlog.logCrash("close-unanswered", { waitedMs: CLOSE_ACK_MS });
+      const r = await ask({
+        type: "warning",
+        title: "GgMusicMaker",
+        message: "GgMusicMaker isn't responding.",
+        detail: "Quit anyway? Your last autosave will be offered the next time you open GgMusicMaker.",
+        buttons: ["Quit", "Wait"],
+        defaultId: 0,
+        cancelId: 1,
+      });
+      if (r === 0) forceClose();
+    }, CLOSE_ACK_MS);
   });
+
+  // The page died (crash, out of memory, killed). Log why, then offer to
+  // bring it back; the fresh page finds the autosave and offers to restore.
+  win.webContents.on("render-process-gone", async (_e, d) => {
+    if (d.reason === "clean-exit" || allowClose) return;
+    crashlog.logCrash("page-gone", { reason: d.reason, exitCode: d.exitCode });
+    const at = clock(await autosave.lastSavedAt());
+    const r = await ask({
+      type: "error",
+      title: "GgMusicMaker",
+      message: "GgMusicMaker's window crashed.",
+      detail:
+        (at ? `Your work up to the autosave at ${at} can be recovered.` : "There was no unsaved work to recover.") +
+        `\n\nDetails were written to ${crashlog.logFile()}`,
+      buttons: ["Reopen", "Quit"],
+      defaultId: 0,
+      cancelId: 1,
+    });
+    if (r === 0) win?.webContents.reload();
+    else forceClose();
+  });
+  win.webContents.on("unresponsive", () => crashlog.logCrash("page-unresponsive"));
+  win.webContents.on("responsive", () => crashlog.logCrash("page-responsive-again"));
   // Links (if any ever appear) open in the real browser, never in the app window.
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:/.test(url)) shell.openExternal(url);
@@ -83,6 +149,7 @@ app.on("second-instance", () => {
 
 app.whenReady().then(() => {
   nativeEngine.register();
+  autosave.register();
   // Serve dist/ on app://ggmm/, refusing anything outside it.
   protocol.handle(SCHEME, (req) => {
     const { pathname } = new URL(req.url);
@@ -119,7 +186,8 @@ ipcMain.handle("save-file", async (_e, { bytes, defaultName, filters, path: know
     if (r.canceled || !r.filePath) return null;
     target = r.filePath;
   }
-  await fs.writeFile(target, Buffer.from(bytes));
+  // Atomic: a crash mid-save must not wreck the file being saved over.
+  await autosave.writeAtomic(target, Buffer.from(bytes));
   return target;
 });
 
@@ -135,7 +203,7 @@ ipcMain.handle("open-file", async (_e, { filters }) => {
 });
 
 ipcMain.handle("confirm", async (_e, { message, title }) => {
-  const r = await dialog.showMessageBox(win, {
+  const r = await ask({
     type: "warning",
     title: title ?? "GgMusicMaker",
     message,
@@ -143,7 +211,11 @@ ipcMain.handle("confirm", async (_e, { message, title }) => {
     defaultId: 1,
     cancelId: 1,
   });
-  return r.response === 0;
+  return r === 0;
+});
+
+ipcMain.on("close-ack", () => {
+  closeAcked = true;
 });
 
 ipcMain.on("close-ok", () => {
@@ -151,4 +223,10 @@ ipcMain.on("close-ok", () => {
   win?.close();
 });
 
-ipcMain.handle("app-info", () => ({ version: app.getVersion(), electron: process.versions.electron, chrome: process.versions.chrome }));
+ipcMain.handle("app-info", () => ({
+  version: app.getVersion(),
+  electron: process.versions.electron,
+  chrome: process.versions.chrome,
+  // GGMM_AUTOSAVE_MS: tests autosave every second or two instead of every minute.
+  autosaveMs: Number(process.env.GGMM_AUTOSAVE_MS) || undefined,
+}));

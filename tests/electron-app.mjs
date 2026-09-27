@@ -46,7 +46,13 @@ const packaged = process.env.GGMM_APP;
 const app = await electron.launch({
   ...(packaged ? { executablePath: resolve(packaged), args: ["--ozone-platform=x11"] } : { args: [ROOT, "--ozone-platform=x11"] }),
   // Electron's headless ozone backend segfaults on SteamOS; a hidden X11 window works.
-  env: { ...process.env, GGMM_TEST_SAVE_DIR: saveDir, GGMM_HIDDEN: "1", GGMM_NO_CLOSE_GUARD: "1" },
+  env: {
+    ...process.env,
+    GGMM_USER_DATA: await mkdtemp(join(tmpdir(), "ggmm-app-data-")),
+    GGMM_TEST_SAVE_DIR: saveDir,
+    GGMM_HIDDEN: "1",
+    GGMM_NO_CLOSE_GUARD: "1",
+  },
 });
 const page = await app.firstWindow();
 page.on("pageerror", (e) => check("no page errors", false, e.message));

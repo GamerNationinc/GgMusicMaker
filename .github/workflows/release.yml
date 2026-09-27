@@ -63,6 +63,7 @@ jobs:
         run: |
           npx playwright-core install --with-deps chromium
           GGMM_APP=release/linux-unpacked/ggmusicmaker xvfb-run -a npm run test:app
+          GGMM_APP=release/linux-unpacked/ggmusicmaker xvfb-run -a npm run test:recovery
 
       - name: Collect artifacts
         run: |

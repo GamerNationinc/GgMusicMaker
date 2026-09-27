@@ -59,7 +59,8 @@ import {
   sessionDisplayName,
   SESSION_EXTENSION,
 } from "./session";
-import { saveBytes, openBytes, confirmDialog, isNative } from "./platform";
+import { saveBytes, openBytes, confirmDialog, isNative, autosaveBridge, autosaveInterval } from "./platform";
+import { Autosaver, recoverBytes, AUTOSAVE_MS } from "./autosave";
 import { INITIAL_LOAD, type LoadState, frameUtilisation, ema, audioDropout } from "./load";
 
 /** The audio runtime. Typed as the interface, not the class, so a future
@@ -106,6 +107,7 @@ export async function setEngineKind(kind: EngineKind): Promise<void> {
     return;
   }
   dirty.set(false);
+  await autosaver?.clear();
   location.reload();
 }
 
@@ -188,6 +190,80 @@ engine.setHeadphones3d(get(headphones3d));
 export const sessionPath = writable<string | null>(null);
 /** True when the project has changed since it was last saved or opened. */
 export const dirty = writable<boolean>(false);
+
+// ---- autosave + crash recovery (desktop app) ------------------------------
+
+const autosaveStore = autosaveBridge();
+const autosaver = autosaveStore ? new Autosaver(autosaveStore, (id) => engine.getBuffer(id)) : null;
+
+/** Write unsaved work to the autosave now (no-op if nothing changed). */
+export async function autosaveNow(): Promise<boolean> {
+  if (!autosaver || !get(dirty) || get(transport).isRecording) return false;
+  try {
+    return await autosaver.save(
+      get(project),
+      { reverbSpace: get(reverbSpace), pixelsPerSecond: get(pixelsPerSecond), playhead: get(transport).playhead },
+      get(sessionPath),
+    );
+  } catch (err) {
+    console.error("autosave:", err);
+    return false;
+  }
+}
+
+/** Throw the autosave away: the user saved, or chose to discard. */
+export async function clearAutosave(): Promise<void> {
+  try {
+    await autosaver?.clear();
+  } catch (err) {
+    console.error("autosave clear:", err);
+  }
+}
+
+/** Start the autosave timer. Call once, after `recoverAutosave`. */
+export async function startAutosave(): Promise<void> {
+  if (!autosaver) return;
+  const ms = await autosaveInterval(AUTOSAVE_MS);
+  setInterval(() => void autosaveNow(), ms);
+}
+
+/** On launch: if the last run left unsaved work behind (it crashed, or was
+ *  killed), offer to bring it back. */
+export async function recoverAutosave(): Promise<void> {
+  if (!autosaveStore) return;
+  let saved;
+  try {
+    saved = await autosaveStore.load();
+  } catch (err) {
+    console.error("autosave load:", err);
+    return;
+  }
+  if (!saved) return;
+  const name = sessionDisplayName(saved.meta?.path ?? null);
+  const at = saved.meta?.savedAt
+    ? new Date(saved.meta.savedAt).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })
+    : "an earlier session";
+  const yes = await confirmDialog(
+    `GgMusicMaker didn't close properly last time. Recover the unsaved work in ${name} from ${at}?\n\n(No throws it away.)`,
+    "Recover unsaved work",
+  );
+  if (!yes) {
+    await clearAutosave();
+    status.set("Discarded the recovered work.");
+    return;
+  }
+  try {
+    await loadSessionBytes(recoverBytes(saved), saved.meta?.path ?? null);
+    // Recovered work is still unsaved until the user saves it. Autosave it
+    // again at once (this replaces the old autosave), so a second crash
+    // before the next timer tick can't lose it.
+    dirty.set(true);
+    await autosaveNow();
+    status.set(`Recovered ${name} from ${at} — save it to keep it.`);
+  } catch (err) {
+    status.set(`Couldn't recover the autosave: ${(err as Error).message}`);
+  }
+}
 
 // ---- internal helpers -----------------------------------------------------
 
@@ -972,6 +1048,7 @@ export async function newSession(): Promise<void> {
   resetWorkspace({ tracks: [], sampleRate: engine.sampleRate, surround: "stereo" });
   sessionPath.set(null);
   dirty.set(false);
+  await clearAutosave();
   status.set("New session.");
 }
 
@@ -999,6 +1076,7 @@ export async function saveSession(as = false): Promise<void> {
     }
     sessionPath.set(where);
     dirty.set(false);
+    await clearAutosave();
     const mb = (file.byteLength / 1048576).toFixed(1);
     status.set(`Saved ${sessionDisplayName(where)} (${mb} MB).`);
   } catch (err) {
@@ -1038,6 +1116,7 @@ export async function loadSessionBytes(bytes: ArrayBuffer, path: string | null):
 export async function loadSessionFile(file: File): Promise<void> {
   try {
     await loadSessionBytes(await file.arrayBuffer(), file.name);
+    await clearAutosave();
   } catch (err) {
     status.set(`Couldn't open ${file.name}: ${(err as Error).message}`);
   }
@@ -1060,6 +1139,7 @@ export async function openSession(): Promise<boolean> {
       return true;
     }
     await loadSessionBytes(picked.bytes, picked.path);
+    await clearAutosave();
   } catch (err) {
     status.set(`Couldn't open session: ${(err as Error).message}`);
   }

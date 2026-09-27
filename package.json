@@ -16,6 +16,7 @@
     "test:webkit": "scripts/test-webkit-in-container.sh",
     "app": "vite build && electron .",
     "test:app": "node tests/electron-app.mjs",
+    "test:recovery": "node tests/electron-recovery.mjs",
     "dist:deck": "vite build && electron-builder --linux dir AppImage"
   },
   "devDependencies": {

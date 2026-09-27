@@ -20,9 +20,21 @@ contextBridge.exposeInMainWorld("ggmmNative", {
     render: (project, ids, rates, data, sampleRate, tail) =>
       ipcRenderer.invoke("engine-render", { project, ids, rates, data, sampleRate, tail }),
   },
+  /** Unsaved work kept on disk for crash recovery (electron/autosave.cjs). */
+  autosave: {
+    audioKeys: () => ipcRenderer.invoke("autosave-audio-keys"),
+    putAudio: (key, bytes) => ipcRenderer.invoke("autosave-put-audio", { key, bytes }),
+    commit: (header, audioKeys, meta) => ipcRenderer.invoke("autosave-commit", { header, audioKeys, meta }),
+    load: () => ipcRenderer.invoke("autosave-load"),
+    clear: () => ipcRenderer.invoke("autosave-clear"),
+  },
+  /** Record an uncaught page error in the crash log. */
+  logError: (message, source) => ipcRenderer.send("log-error", { message, source }),
   /** `handler` resolves true to let the window close. */
   onCloseRequested: (handler) => {
     ipcRenderer.on("close-requested", async () => {
+      // Ack first: main treats silence as a hung page.
+      ipcRenderer.send("close-ack");
       if (await handler()) ipcRenderer.send("close-ok");
     });
   },

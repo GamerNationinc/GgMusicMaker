@@ -142,6 +142,21 @@ launched on this Steam Deck under KDE/Wayland.
 | NATIVE is the default in the desktop app (WEB still selectable; automatic fallback to WEB if the device won't open). | `npm run test:app` 18/18 |
 | CI (`ci.yml`) builds + tests the engine, runs parity, Chromium, WebKit and the Electron app under xvfb with ALSA's null device; `release.yml` packages with electron-builder and publishes AppImage + Steam depot tarball. | First runs: all green except the session-reopen render check — sessions stored audio as 16-bit PCM, which rounds and clips the recorded take (the runner's 44.1 kHz fake mic crossed the threshold). Sessions now embed **32-bit float** WAV (lossless; old 16-bit sessions still open): reopen is bit-identical (max delta 0.0000) in the CI container and on the Deck |
 
+### 2026-09-27 — autosave, crash recovery, crash log
+
+Trigger: the page (renderer) died mid-session; the window then froze on close because the quit guard waited forever for an answer from a page that no longer existed, and nothing had been saved.
+
+| Change | Verified how |
+|---|---|
+| **Autosave** (`src/state/autosave.ts` + `electron/autosave.cjs`): while there are unsaved changes, every 60 s (skipped while recording, and when only the playhead moved) the project goes to `~/.config/ggmusicmaker/autosave/`. Each buffer's WAV is sent once (audio never changes), later autosaves are just the project JSON. Keys carry a per-launch prefix (buffer ids restart every launch). All writes are temp-file + rename. Cleared after a real save, New, Open, or "Quit anyway". | `src/state/autosave.test.ts` (7): round-trip opens bit-identical, audio sent once, playhead-only skip, unused audio pruned + re-sent after undo, clear beats an in-flight save, two launches never share keys |
+| **Crash recovery**: on launch, a leftover autosave → "didn't close properly — recover?" → loads it as unsaved (`*`), then autosaves it again at once so a second crash can't lose it. If the page dies while running, main logs it and offers **Reopen / Quit**; Reopen reloads the page, which then offers the autosave. | `npm run test:recovery` (`tests/electron-recovery.mjs`) 14/14 on the dev tree and the packaged app: renderer SIGKILLed → logged → reopened → layer back and dirty; app relaunch → recovered; Ctrl+S → autosave gone |
+| **Close can't hang any more**: the page acks `close-requested` at once; no ack in 3 s → "isn't responding — Quit / Wait". A crashed page closes straight away (autosave kept for next launch). | Same test: page stuck in an infinite loop, window close → app exits, `close-unanswered` logged |
+| **Crash log** (`electron/crashlog.cjs`): `~/.config/ggmusicmaker/logs/crash.log` (JSON lines, rotates at 1 MB): page gone (reason + exit code), page unresponsive, other Chromium processes gone (GPU/audio service), main-process exceptions, uncaught page errors (first 20 per run). Chromium minidumps kept locally in `Crashpad/` (never uploaded). | Same test: `page-gone`, `close-unanswered`, `page-error` entries |
+| Sessions saved over an existing file are now written atomically (temp + rename) — a crash mid-save can't wreck the old file. | — |
+| Test hooks: `GGMM_USER_DATA` (isolated config dir), `GGMM_AUTOSAVE_MS`, `GGMM_TEST_DIALOG=<button>` (answers every dialog). `test:app` now uses an isolated config dir too. | `npm run test:app` 18/18, `npm run test:browser` 72/72 |
+
+Browser build (`npm run dev`) has no autosave — desktop app only.
+
 ### Native Steam Deck build
 
 | Step | Verified how |

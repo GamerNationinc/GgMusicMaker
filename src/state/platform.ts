@@ -6,6 +6,8 @@
 // download and opening goes through an <input type="file">. Everything that
 // touches the filesystem goes through here so the store stays platform-blind.
 
+import type { AutosaveBridge } from "./autosave";
+
 export interface FileFilter {
   name: string;
   extensions: string[];
@@ -15,8 +17,10 @@ interface NativeBridge {
   saveFile(bytes: Uint8Array, defaultName: string, filters: FileFilter[], path?: string | null): Promise<string | null>;
   openFile(filters: FileFilter[]): Promise<{ path: string; bytes: Uint8Array } | null>;
   confirm(message: string, title?: string): Promise<boolean>;
-  appInfo(): Promise<{ version: string; electron: string; chrome: string }>;
+  appInfo(): Promise<{ version: string; electron: string; chrome: string; autosaveMs?: number }>;
   onCloseRequested(handler: () => Promise<boolean>): void;
+  autosave?: AutosaveBridge;
+  logError?(message: string, source?: string): void;
 }
 
 function bridge(): NativeBridge | null {
@@ -66,4 +70,20 @@ export async function confirmDialog(message: string, title = "GgMusicMaker"): Pr
 /** Desktop app: run `shouldClose` when the window is asked to close. */
 export function onCloseRequested(shouldClose: () => Promise<boolean>): void {
   bridge()?.onCloseRequested(shouldClose);
+}
+
+/** Desktop app: the on-disk autosave store (null in a browser). */
+export function autosaveBridge(): AutosaveBridge | null {
+  return bridge()?.autosave ?? null;
+}
+
+/** Desktop app: how often to autosave (ms), when the shell overrides it. */
+export async function autosaveInterval(fallbackMs: number): Promise<number> {
+  const ms = (await bridge()?.appInfo())?.autosaveMs;
+  return typeof ms === "number" && ms > 0 ? ms : fallbackMs;
+}
+
+/** Desktop app: record an uncaught page error in the crash log. */
+export function logError(message: string, source?: string): void {
+  bridge()?.logError?.(message, source);
 }
