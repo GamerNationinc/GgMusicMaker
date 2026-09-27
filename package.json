@@ -1,7 +1,7 @@
 {
   "name": "ggmusicmaker",
   "version": "0.1.0",
-  "description": "GgMusicMaker — a simple, playful DAW for the Steam Deck",
+  "description": "GgMusicMaker \u2014 a simple, playful DAW for the Steam Deck",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -12,7 +12,8 @@
     "test:watch": "vitest",
     "tauri": "tauri",
     "build:deck": "tauri build && bash scripts/fix-appimage.sh",
-    "test:browser": "node tests/browser-integration.mjs"
+    "test:browser": "node tests/browser-integration.mjs",
+    "test:webkit": "scripts/test-webkit-in-container.sh"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^5.0.3",

@@ -524,6 +524,12 @@
     flex: 1 1 auto;
     overflow-x: auto;
     overflow-y: hidden;
+    /* Size to the lanes, not to the visible body. WebKit (the Deck's engine)
+       stretches a flex item that is a scroll container to the parent's
+       *visible* height, so with overflow-y hidden every lane below the
+       first screenful was clipped away — the blank layers past ~5-10.
+       Chromium grows it to the content, which is why only WebKit showed it. */
+    align-self: flex-start;
   }
   .lanes {
     position: relative;
