@@ -63,6 +63,8 @@ export class AudioEngine implements AudioBackend {
   private recSampleRate = 48000;
   /** True when the current take is being captured on the audio thread. */
   private recUsedWorklet = false;
+  /** deviceId (from `listInputDevices`) to record from; "" = default mic. */
+  private inputDeviceId = "";
 
   private meterBuf: Uint8Array<ArrayBuffer>;
   private preTimeBuf: Float32Array<ArrayBuffer>;
@@ -375,6 +377,30 @@ export class AudioEngine implements AudioBackend {
 
   // ---- Recording ----------------------------------------------------------
 
+  setInputDevice(id: string | undefined): void {
+    this.inputDeviceId = id ?? "";
+  }
+
+  /**
+   * List audio input devices for a picker. Labels are blank until the mic
+   * permission has been granted; pass `unlock` (only from a user gesture —
+   * this prompts) to open and immediately close the default mic to get them.
+   */
+  async listInputDevices(unlock = false): Promise<{ id: string; label: string }[]> {
+    if (!navigator.mediaDevices?.enumerateDevices) return [];
+    let devices = await navigator.mediaDevices.enumerateDevices();
+    if (unlock && devices.some((d) => d.kind === "audioinput") && devices.every((d) => d.kind !== "audioinput" || !d.label)) {
+      try {
+        const probe = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        probe.getTracks().forEach((t) => t.stop());
+        devices = await navigator.mediaDevices.enumerateDevices();
+      } catch {
+        // Permission denied: fall through with unlabelled devices.
+      }
+    }
+    return devices.filter((d) => d.kind === "audioinput").map((d) => ({ id: d.deviceId, label: d.label || "Microphone" }));
+  }
+
   /**
    * Start capturing from a mic/line input.
    *
@@ -383,10 +409,10 @@ export class AudioEngine implements AudioBackend {
    * ScriptProcessorNode when the worklet can't load (older WebKitGTK), so
    * recording still works rather than failing outright.
    */
-  async startRecording(deviceId?: string): Promise<void> {
+  async startRecording(): Promise<void> {
     await this.ensureRunning();
     this.recStream = await navigator.mediaDevices.getUserMedia({
-      audio: deviceId ? { deviceId: { exact: deviceId } } : true,
+      audio: this.inputDeviceId ? { deviceId: { exact: this.inputDeviceId } } : true,
       video: false,
     });
     const src = this.ctx.createMediaStreamSource(this.recStream);

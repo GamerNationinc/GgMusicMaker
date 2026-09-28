@@ -51,9 +51,13 @@ export interface NativeEngineBridge {
   render(project: string, ids: string[], rates: number[], data: Float32Array[][], sampleRate: number, tail: number): Promise<Float32Array[]>;
   /** Export from the buffers the engine already holds (no audio over IPC). */
   renderLoaded?(project: string, sampleRate: number, tail: number): Promise<Float32Array[]>;
-  /** Native capture (older shells don't have it: recording stays web). */
-  recStart?(): Promise<{ sampleRate: number; channels: number; device: string }>;
+  /** Native capture (older shells don't have it: recording stays web).
+   *  `device`: a cpal device name from `listInputDevices`, or undefined for
+   *  the default. */
+  recStart?(device?: string): Promise<{ sampleRate: number; channels: number; device: string }>;
   recStop?(): Promise<NativeTake>;
+  /** cpal input device names (older shells don't have it). */
+  listInputDevices?(): Promise<string[]>;
 }
 
 export interface NativeStatus {
@@ -122,6 +126,9 @@ export class NativeBackend implements AudioBackend {
   /** A native take is being captured. */
   private nativeRec = false;
   private inputDevice = "default";
+  /** cpal device name (native) or browser deviceId (web fallback) to record
+   *  from next; "" = default mic. Set by `setInputDevice`. */
+  private wantDevice = "";
   takeStart: number | null = null;
   takeNote = "";
   onFallback: (why: string) => void = () => {};
@@ -334,13 +341,25 @@ export class NativeBackend implements AudioBackend {
     return readLatency(this.deviceKey());
   }
 
-  async startRecording(deviceId?: string): Promise<void> {
+  /** cpal device names natively, or the web engine's own list in fallback
+   *  mode — whichever id-space `setInputDevice`/`startRecording` need. */
+  async listInputDevices(unlock = false): Promise<{ id: string; label: string }[]> {
+    if (this.fallback || !this.native.listInputDevices) return this.web.listInputDevices(unlock);
+    const names = await this.native.listInputDevices();
+    return names.map((n) => ({ id: n, label: n }));
+  }
+
+  setInputDevice(id: string | undefined): void {
+    this.wantDevice = id ?? "";
+    this.web.setInputDevice(id);
+  }
+
+  async startRecording(): Promise<void> {
     this.takeStart = null;
     this.takeNote = "";
-    // A specific browser device id means the web path was asked for.
-    if (!this.fallback && this.native.recStart && !deviceId) {
+    if (!this.fallback && this.native.recStart) {
       try {
-        const info = await this.native.recStart();
+        const info = await this.native.recStart(this.wantDevice || undefined);
         this.inputDevice = info.device;
         this.nativeRec = true;
         return;
@@ -350,7 +369,7 @@ export class NativeBackend implements AudioBackend {
         this.takeNote = ` (native capture unavailable: ${why} — recorded through the web engine)`;
       }
     }
-    return this.web.startRecording(deviceId);
+    return this.web.startRecording();
   }
 
   async stopRecording(): Promise<AudioBuffer> {
@@ -414,7 +433,7 @@ export class NativeBackend implements AudioBackend {
     );
     let started = false;
     try {
-      const info = await this.native.recStart();
+      const info = await this.native.recStart(this.wantDevice || undefined);
       started = true;
       this.inputDevice = info.device;
       await sleep(250);

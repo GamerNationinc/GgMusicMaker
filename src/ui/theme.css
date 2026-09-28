@@ -149,7 +149,8 @@ canvas {
   z-index: 2;
 }
 
-button.btn {
+button.btn,
+select.btn {
   font-family: var(--font);
   font-weight: bold;
   text-transform: uppercase;
@@ -164,13 +165,21 @@ button.btn {
   box-shadow: var(--extrude);
 }
 
+/* A <select> styled as a .btn: no native appearance, so it matches buttons
+ * instead of the OS's own dropdown chrome. */
+select.btn {
+  appearance: none;
+  -webkit-appearance: none;
+}
+
 /* Pressing sinks the button into its own shadow. */
 button.btn:active {
   background: var(--panel-lo);
   transform: translate(1px, 1px);
   box-shadow: none;
 }
-button.btn:hover:not(:disabled) {
+button.btn:hover:not(:disabled),
+select.btn:hover:not(:disabled) {
   border-color: var(--green);
 }
 
@@ -201,7 +210,8 @@ button.btn.on {
   box-shadow: inset 0 0 0 2px var(--amber);
 }
 
-button.btn:disabled {
+button.btn:disabled,
+select.btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }

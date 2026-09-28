@@ -98,7 +98,8 @@ contextBridge.exposeInMainWorld("ggmmNative", {
     stop: () => ipcRenderer.send("engine-stop"),
     status: () => invoke("engine-status"),
     scope: () => invoke("engine-scope"),
-    recStart: () => invoke("engine-rec-start"),
+    recStart: (device) => invoke("engine-rec-start", device),
+    listInputDevices: () => invoke("engine-list-input-devices"),
     recStop: async () => {
       const take = await invoke("engine-rec-stop");
       const { token, size, frames, channelCount, ...rest } = take;

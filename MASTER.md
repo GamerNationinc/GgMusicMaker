@@ -202,6 +202,14 @@ Trigger: the app crashed at every startup. The user had imported a 24-stem song 
 | Long native takes and stems come back in chunks; stem input goes up in chunks. | `test:record`, `test:stems` |
 | `tests/electron-big.mjs` (`npm run test:big`): 1.24 GB session (the old code survived 550 MB, died at 1.1 GB) — autosave, app SIGKILLed, relaunch recovers, save, reopen, export, app alive. In CI and release. | 6/6 on the fix |
 
+### 2026-09-28 — input device picker
+
+Recording always used "default" (or the `GGMM_INPUT_DEVICE` test env var); there was no way to pick a mic from the app, e.g. after plugging in a USB or Bluetooth headset.
+
+| Change | Verified how |
+|---|---|
+| A 🎤 dropdown in the toolbar, next to Record. Native: lists cpal input device names (`native/src/record.rs: list_input_devices`, default listed first), `rec_start(device)` opens the chosen one (falls back to `GGMM_INPUT_DEVICE`, then default, if none is passed — test hook unchanged). Web: lists `navigator.mediaDevices` audio inputs; labels are blank until the mic permission is granted, so opening the picker (a user gesture) unlocks them via a throwaway `getUserMedia` probe — the automatic startup listing never prompts. The choice is remembered (`localStorage`, per browser/engine id-space) and also picked up by latency calibration, since it opens the same device. | Rust: `cargo test` unaffected (6/6). `test:app`: 18/18 (one pre-existing timing flake on a rerun, unrelated). `test:record`: 13/13, including the existing "no such device" fallback path now going through the new `device` parameter instead of only the env var. Manual: launched the packaged dev build headless, `listInputDevices()` returned this Deck's real devices (`default`, `pipewire`, `pulse`, `jack`), `recStart("default")` opened successfully and reported back `device: "default"`, `recStart("definitely-not-a-real-device")` rejected with "no input device named …". Screenshot of the toolbar at 1280×800 confirms the picker matches the existing button styling. |
+
 ### Native Steam Deck build
 
 | Step | Verified how |

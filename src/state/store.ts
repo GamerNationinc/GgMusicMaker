@@ -114,6 +114,44 @@ if (canCalibrate) {
   setTimeout(() => recordLatency.set(engine.recordLatency ?? null), 1500);
 }
 
+/** Input devices for the mic picker (native: cpal names; web: browser
+ *  devices, labelled once permission is granted). */
+export const inputDevices = writable<{ id: string; label: string }[]>([]);
+const INPUT_DEVICE_KEY = "ggmm.inputDevice";
+/** The chosen device's id, or "" for the default mic. */
+export const selectedInputDevice = writable<string>("");
+try {
+  const saved = localStorage.getItem(INPUT_DEVICE_KEY) ?? "";
+  selectedInputDevice.set(saved);
+  engine.setInputDevice(saved || undefined);
+} catch {
+  // Storage unavailable (private browsing): default mic only.
+}
+
+/** Refresh the device list. Call on startup (unlabelled is fine — the
+ *  picker still offers "Default mic") and pass `unlock: true` from a user
+ *  gesture (opening the picker) to prompt for the mic permission and get
+ *  the web engine's real device labels. */
+export async function refreshInputDevices(unlock = false): Promise<void> {
+  const devices = await engine.listInputDevices(unlock).catch(() => []);
+  inputDevices.set(devices);
+  // A device that's since disappeared (unplugged) quietly falls back to
+  // the default rather than erroring on the next recording.
+  const wanted = get(selectedInputDevice);
+  if (wanted && !devices.some((d) => d.id === wanted)) setInputDevice("");
+}
+void refreshInputDevices();
+
+export function setInputDevice(id: string): void {
+  selectedInputDevice.set(id);
+  engine.setInputDevice(id || undefined);
+  try {
+    localStorage.setItem(INPUT_DEVICE_KEY, id);
+  } catch {
+    // Storage unavailable: the choice just won't persist across launches.
+  }
+}
+
 /** Measure the speaker → mic round trip so native takes land in time. */
 export async function calibrateRecording(): Promise<void> {
   if (!engine.calibrateLatency) return;

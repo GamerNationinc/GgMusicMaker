@@ -83,10 +83,14 @@ function register() {
   ipcMain.handle("engine-scope", () => getEngine()?.scope() ?? null);
   // Native recording (native/src/record.rs). Errors reject the invoke, and
   // the page falls back to recording through Chromium.
-  ipcMain.handle("engine-rec-start", () => {
+  ipcMain.handle("engine-rec-start", (_e, device) => {
     const e = getEngine();
     if (!e) throw new Error(loadError || "native engine unavailable");
-    return e.recStart();
+    return e.recStart(device || undefined);
+  });
+  ipcMain.handle("engine-list-input-devices", () => {
+    if (!getEngine()) throw new Error(loadError || "native engine unavailable");
+    return getModule().listInputDevices();
   });
   ipcMain.handle("engine-rec-stop", () => {
     const e = getEngine();

@@ -6,6 +6,10 @@
     deleteSelectedClip,
     startRecording,
     stopRecording,
+    inputDevices,
+    selectedInputDevice,
+    setInputDevice,
+    refreshInputDevices,
     exportMix,
     separateStems,
     stemsUnavailable,
@@ -51,6 +55,10 @@
   function toggleRecord() {
     if ($transport.isRecording) void stopRecording();
     else void startRecording();
+  }
+
+  function onInputDeviceChange(e: Event) {
+    setInputDevice((e.target as HTMLSelectElement).value);
   }
 
   // Multiplicative zoom over a wide range: from a whole song on one screen
@@ -123,6 +131,21 @@
     {$transport.isRecording ? "● REC…" : "● Record"}
   </button>
 
+  <select
+    class="btn input-device"
+    data-role="input-device"
+    disabled={$transport.isRecording}
+    value={$selectedInputDevice}
+    onchange={onInputDeviceChange}
+    onmousedown={() => void refreshInputDevices(true)}
+    title="Which microphone to record from"
+  >
+    <option value="">🎤 Default mic</option>
+    {#each $inputDevices as d (d.id)}
+      <option value={d.id}>🎤 {d.label}</option>
+    {/each}
+  </select>
+
   <span class="divider"></span>
 
   <div class="zoom">
@@ -137,6 +160,12 @@
 </div>
 
 <style>
+  .input-device {
+    max-width: 160px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
   .toolbar {
     display: flex;
     align-items: center;

@@ -182,6 +182,19 @@ fn pick_input(name: Option<&str>) -> Result<cpal::Device, String> {
     host.default_input_device().ok_or_else(|| "no audio input device".to_string())
 }
 
+/// Every input device's name, for a picker. The default device (if it can
+/// still be named) is listed first.
+pub fn list_input_devices() -> Result<Vec<String>, String> {
+    let host = cpal::default_host();
+    let mut names: Vec<String> = host.input_devices().map_err(|e| format!("input devices: {e}"))?.filter_map(|d| d.name().ok()).collect();
+    if let Some(default) = host.default_input_device().and_then(|d| d.name().ok()) {
+        if let Some(pos) = names.iter().position(|n| n == &default) {
+            names.swap(0, pos);
+        }
+    }
+    Ok(names)
+}
+
 impl Recording {
     /// Open the input (`device`, or the default) and start capturing,
     /// preferring f32 at `want_rate` (the output's rate, so nothing resamples).

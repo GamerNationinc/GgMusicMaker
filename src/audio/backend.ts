@@ -92,7 +92,16 @@ export interface AudioBackend {
   masterSpectrum(out: Float32Array): Float32Array;
 
   // Recording
-  startRecording(deviceId?: string): Promise<void>;
+  /** Input devices for a picker: `id` is whatever `setInputDevice` expects
+   *  (a browser deviceId on the web engine, a cpal device name natively).
+   *  On the web engine, labels are blank until the mic permission has been
+   *  granted; pass `unlock` (from a user gesture, e.g. opening the picker)
+   *  to prompt for it and get real labels back. */
+  listInputDevices(unlock?: boolean): Promise<{ id: string; label: string }[]>;
+  /** Which input `startRecording`/`calibrateLatency` should use next.
+   *  undefined/"" = the default device. */
+  setInputDevice(id: string | undefined): void;
+  startRecording(): Promise<void>;
   stopRecording(): Promise<AudioBuffer>;
   readonly isRecording: boolean;
   /** False when capture fell back to the deprecated main-thread path, which

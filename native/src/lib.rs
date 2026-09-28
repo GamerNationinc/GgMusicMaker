@@ -369,13 +369,15 @@ impl NativeEngine {
         }
     }
 
-    /// Start capturing from the input device (GGMM_INPUT_DEVICE, or the
-    /// default). A take already running is discarded.
+    /// Start capturing from `device` (its cpal name, from `list_input_devices`),
+    /// falling back to GGMM_INPUT_DEVICE (tests) and then the default. A take
+    /// already running is discarded.
     #[napi]
-    pub fn rec_start(&self) -> Result<RecordingInfo> {
+    pub fn rec_start(&self, device: Option<String>) -> Result<RecordingInfo> {
         let mut slot = self.rec.lock().unwrap();
         slot.take();
-        let r = record::Recording::start(env_device("GGMM_INPUT_DEVICE").as_deref(), self.sr, self.clock.clone()).map_err(Error::from_reason)?;
+        let want = device.filter(|s| !s.is_empty()).or_else(|| env_device("GGMM_INPUT_DEVICE"));
+        let r = record::Recording::start(want.as_deref(), self.sr, self.clock.clone()).map_err(Error::from_reason)?;
         let info = RecordingInfo { sample_rate: r.rate, channels: r.channels as u32, device: r.device.clone() };
         *slot = Some(r);
         Ok(info)
@@ -450,6 +452,13 @@ pub fn render(mut p: ProjectSpec, buffers: &[(String, Arc<Buffer>)], sr: f64, ta
 
 /// Offline render (export, tests) on a worker thread. Returns one
 /// Float32Array per channel of the project's layout.
+/// Every input device's name, for a picker in the UI. The default device (if
+/// it can still be named) is listed first.
+#[napi]
+pub fn list_input_devices() -> Result<Vec<String>> {
+    record::list_input_devices().map_err(Error::from_reason)
+}
+
 #[napi]
 pub fn render_offline(project_json: String, buffer_ids: Vec<String>, buffer_rates: Vec<f64>, buffer_data: Vec<Vec<Float32Array>>, sample_rate: f64, tail_seconds: f64) -> Result<AsyncTask<RenderTask>> {
     let mut project: ProjectSpec = serde_json::from_str(&project_json).map_err(|e| Error::from_reason(format!("project: {e}")))?;
