@@ -9,6 +9,9 @@
   import MatrixRain from "./MatrixRain.svelte";
   import LoadMeter from "./LoadMeter.svelte";
   import EngineSwitch from "./EngineSwitch.svelte";
+  import ModeSwitch from "./ModeSwitch.svelte";
+  import InstrumentView from "./InstrumentView.svelte";
+  import { mode, startController, deckPerforming } from "../input/controller";
   import {
     togglePlay,
     splitAtPlayhead,
@@ -41,6 +44,9 @@
     status.set(`Theme: ${t.label} (T to cycle).`);
   }
 
+  const STUDIO_KEYS = [["space", "play"], ["s", "split"], ["r", "rec"], ["del", "delete"], ["t", "theme"], ["^z", "undo"], ["^d", "dup layer"], ["^s", "save"]];
+  const INSTRUMENT_KEYS = [["R-pad", "notes"], ["L-pad", "cutoff/reverb"], ["ABXY", "drums"], ["L1/R1+ABXY", "chords"], ["R2", "swell"], ["L5", "sustain"], ["R5", "tilt bend"], ["View+Menu", "studio"]];
+
   const sessionName = $derived(sessionDisplayName($sessionPath));
 
   // Losing an hour of takes to a stray close click is the worst thing a DAW
@@ -64,9 +70,16 @@
     });
     // Crash recovery first, so the timer never overwrites what it offers.
     void recoverAutosave().then(startAutosave);
+    startController();
   });
 
   function onKey(e: KeyboardEvent) {
+    // Performing on the Deck: Steam's desktop layout also types keys for the
+    // face buttons (A = Enter, B = Escape…) — none of them may edit.
+    if ($mode !== "studio") {
+      if ($deckPerforming) e.preventDefault();
+      return;
+    }
     const tag = (e.target as HTMLElement)?.tagName;
     if (tag === "INPUT" || tag === "TEXTAREA") return;
     if (e.ctrlKey || e.metaKey) {
@@ -132,32 +145,37 @@
       {sessionName}{#if $dirty}<span class="dirty">*</span>{/if}
     </span>
   </div>
+  <ModeSwitch />
   <LoadMeter />
   <EngineSwitch />
-  <button class="btn theme-btn" onclick={onTheme} title="Cycle colour mode (T)" data-role="theme">
-    <span class="theme-icon">◐</span> {$theme.label}
+  <button class="btn theme-btn" onclick={onTheme} title="Colour mode: {$theme.label} — click or T to cycle" data-role="theme">
+    <span class="theme-icon">◐</span> <span class="theme-label">{$theme.label}</span>
   </button>
   <Transport />
 </header>
 
-<Toolbar />
+{#if $mode === "instrument"}
+  <InstrumentView />
+{:else}
+  <Toolbar />
 
-<main class="workspace box" data-title="layers">
-  {#if !$lowPower}
-    <MatrixRain />
-  {/if}
-  <Timeline />
-</main>
+  <main class="workspace box" data-title="layers">
+    {#if !$lowPower}
+      <MatrixRain />
+    {/if}
+    <Timeline />
+  </main>
 
-<FxRack />
+  <FxRack />
+{/if}
 
 <footer class="bottom">
   <div class="box meter-box" data-title="vu · pre-limit">
     <AnalogMeter />
   </div>
   <div class="box status-box" data-title="status">
-    <div class="keys" aria-label="Keyboard shortcuts">
-      {#each [["space", "play"], ["s", "split"], ["r", "rec"], ["del", "delete"], ["t", "theme"], ["^z", "undo"], ["^d", "dup layer"], ["^s", "save"]] as [k, what]}
+    <div class="keys" aria-label={$mode === "instrument" ? "Controller" : "Keyboard shortcuts"}>
+      {#each $mode === "instrument" ? INSTRUMENT_KEYS : STUDIO_KEYS as [k, what] (k)}
         <span class="key"><b>{k}</b> {what}</span>
       {/each}
     </div>
@@ -186,6 +204,18 @@
   }
   .theme-icon {
     color: var(--magenta);
+  }
+  /* Narrow windows (the Deck's own screen, a default-size window): the
+     wordmark and the theme's name make way for the controls — the name is
+     in the window title, the theme's in the button's tooltip. */
+  @media (max-width: 1400px) {
+    .app-header {
+      gap: 6px;
+    }
+    .theme-label,
+    .title {
+      display: none;
+    }
   }
   .brand {
     display: flex;

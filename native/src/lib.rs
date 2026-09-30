@@ -12,7 +12,9 @@
 //! both read one process clock so a take is placed where the music was.
 
 pub mod binaural;
+pub mod deckpad;
 pub mod dsp;
+pub mod live;
 pub mod mixer;
 pub mod morph;
 pub mod placer;
@@ -35,6 +37,7 @@ enum Cmd {
     SetProject(Box<ProjectSpec>, Vec<(String, TrackDsp)>, Option<Box<Reverb>>),
     Play(f64),
     Stop,
+    Live(live::LiveEvent),
 }
 
 #[allow(dead_code)]
@@ -99,6 +102,7 @@ impl Audio {
                 }
                 Cmd::Play(t) => m.play(t),
                 Cmd::Stop => m.stop(),
+                Cmd::Live(e) => m.live_event(e),
             }
         }
         // Where this buffer sits in the song and when it will be heard: what
@@ -350,6 +354,13 @@ impl NativeEngine {
         self.send(Cmd::Stop)
     }
 
+    /// One live-instrument event (JSON, see live.rs `LiveEvent`).
+    #[napi]
+    pub fn live(&self, json: String) -> Result<()> {
+        let e: live::LiveEvent = serde_json::from_str(&json).map_err(|e| Error::from_reason(format!("live: {e}")))?;
+        self.send(Cmd::Live(e))
+    }
+
     #[napi]
     pub fn status(&self) -> EngineStatus {
         self.collect_garbage();
@@ -488,11 +499,17 @@ pub fn process_module(kind: String, params_json: String, inputs: Vec<Float32Arra
         P(placer::Placer, f64, f64),
         B(binaural::Binaural),
         R(Box<Reverb>),
+        L(Box<live::Live>, Vec<(usize, live::LiveEvent)>),
     }
     #[derive(serde::Deserialize)]
     struct Pw {
         pan: f64,
         width: f64,
+    }
+    #[derive(serde::Deserialize)]
+    struct Ls {
+        /// (quantum index, event) — applied before that 128-frame quantum.
+        events: Vec<(usize, live::LiveEvent)>,
     }
     #[derive(serde::Deserialize)]
     struct Rs {
@@ -518,6 +535,10 @@ pub fn process_module(kind: String, params_json: String, inputs: Vec<Float32Arra
             let p: Rs = serde_json::from_str(&params_json).map_err(bad)?;
             M::R(Box::new(Reverb::new(p.space, sample_rate)))
         }
+        "live" => {
+            let p: Ls = serde_json::from_str(&params_json).map_err(bad)?;
+            M::L(Box::new(live::Live::new(sample_rate)), p.events)
+        }
         _ => return Err(Error::from_reason("unknown module")),
     };
     let mut i = 0;
@@ -538,6 +559,20 @@ pub fn process_module(kind: String, params_json: String, inputs: Vec<Float32Arra
                     let (l, r) = b.step(&frame[..inp.len()]);
                     o[0][n] = l as f32;
                     o[1][n] = r as f32;
+                }
+            }
+            M::L(l, events) => {
+                // out: dry L, dry R, send L, send R
+                for &(_, e) in events.iter().filter(|(k, _)| *k == i / 128) {
+                    l.event(e);
+                }
+                let mut b = [[0f64; 128]; 4];
+                let [b0, b1, b2, b3] = &mut b;
+                l.render([&mut b0[..q], &mut b1[..q]], [&mut b2[..q], &mut b3[..q]]);
+                for (c, ch) in o.iter_mut().enumerate().take(4) {
+                    for n in 0..q {
+                        ch[n] = b[c][n] as f32;
+                    }
                 }
             }
             M::R(r) => {

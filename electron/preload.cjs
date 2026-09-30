@@ -84,6 +84,31 @@ contextBridge.exposeInMainWorld("ggmmNative", {
     close: (token) => invoke("download-done", { token }),
   },
   confirm: (message, title) => invoke("confirm", { message, title }),
+  /** The Steam Deck's own controller, raw (electron/deckpad.cjs). */
+  deckpad: {
+    start: () => invoke("deckpad-start"),
+    stop: () => ipcRenderer.send("deckpad-stop"),
+    /** "full" (every report) or "buttons" (only when a button changes). */
+    detail: (d) => ipcRenderer.send("deckpad-detail", d),
+    feature: (bytes) => ipcRenderer.send("deckpad-feature", bytes),
+    /** cb(report: Uint8Array) per state report; returns an unsubscribe. */
+    onReport: (cb) => {
+      const h = (_e, bytes) => cb(new Uint8Array(bytes));
+      ipcRenderer.on("deckpad-report", h);
+      return () => ipcRenderer.off("deckpad-report", h);
+    },
+    /** cb(present: boolean) when the controller goes away / comes back. */
+    onPresence: (cb) => {
+      const lost = () => cb(false);
+      const found = () => cb(true);
+      ipcRenderer.on("deckpad-lost", lost);
+      ipcRenderer.on("deckpad-found", found);
+      return () => {
+        ipcRenderer.off("deckpad-lost", lost);
+        ipcRenderer.off("deckpad-found", found);
+      };
+    },
+  },
   appInfo: () => invoke("app-info"),
   /** The native (Rust) audio engine in the main process. */
   engine: {
@@ -96,6 +121,7 @@ contextBridge.exposeInMainWorld("ggmmNative", {
     setProject: (json) => ipcRenderer.send("engine-project", json),
     play: (from) => ipcRenderer.send("engine-play", from),
     stop: () => ipcRenderer.send("engine-stop"),
+    live: (json) => ipcRenderer.send("engine-live", json),
     status: () => invoke("engine-status"),
     scope: () => invoke("engine-scope"),
     recStart: (device) => invoke("engine-rec-start", device),

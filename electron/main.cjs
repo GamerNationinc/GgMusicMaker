@@ -15,6 +15,7 @@ const path = require("node:path");
 const fs = require("node:fs/promises");
 const { pathToFileURL } = require("node:url");
 const nativeEngine = require("./engine.cjs");
+const deckpad = require("./deckpad.cjs");
 const crashlog = require("./crashlog.cjs");
 const autosave = require("./autosave.cjs");
 const stems = require("./stems.cjs");
@@ -151,6 +152,7 @@ app.on("second-instance", () => {
 
 app.whenReady().then(() => {
   nativeEngine.register();
+  deckpad.register();
   transfer.register();
   autosave.register();
   stems.register();

@@ -78,7 +78,7 @@ async function launch() {
     },
   });
   const page = await app.firstWindow();
-  await page.waitForSelector(".title");
+  await page.waitForSelector(".app-header");
   return { app, page, proc: app.process() };
 }
 const layers = (page) => page.evaluate(() => document.querySelectorAll(".head").length);

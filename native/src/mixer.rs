@@ -13,6 +13,7 @@ use crate::binaural::Binaural;
 use crate::dsp::{Biquad, Compressor, Kind, Punch, PunchParams};
 use crate::morph::{Morph, MorphParams};
 use crate::placer::Placer;
+use crate::live::{Live, LiveEvent};
 use crate::reverb::{Reverb, Space};
 use crate::synth::{SynthParams, VoiceSynth};
 use crate::util::MAX_CH;
@@ -212,6 +213,8 @@ pub struct Mixer {
     project: ProjectSpec,
     dsp: HashMap<String, TrackDsp>,
     reverb: Reverb,
+    /// The instrument played live from the controller (Instrument mode).
+    live: Live,
     binaural: Option<(usize, Binaural)>,
     comps: Vec<Compressor>,
     /// The compressor's look-ahead line (Chromium's DynamicsCompressor
@@ -249,6 +252,7 @@ impl Mixer {
             project: ProjectSpec { tracks: vec![], master_gain: 0.9, surround: 2, reverb: Space::Hall, binaural: false },
             dsp: HashMap::new(),
             reverb: Reverb::new(Space::Hall, sr),
+            live: Live::new(sr),
             binaural: None,
             comps: vec![],
             ahead: vec![[0.0; MAX_CH]; ((sr * 0.006).round() as usize).max(1)],
@@ -321,6 +325,10 @@ impl Mixer {
             self.master = self.project.master_gain;
         }
         (old, dropped, old_reverb)
+    }
+
+    pub fn live_event(&mut self, e: LiveEvent) {
+        self.live.event(e);
     }
 
     pub fn reverb_space(&self) -> Space {
@@ -515,6 +523,13 @@ impl Mixer {
                 }
             }
             self.pos += q as u64;
+        }
+
+        // --- live instrument (plays whether or not the transport runs) ---
+        if self.live.active() {
+            let (b0, b1) = self.bus.split_at_mut(1);
+            let (s0, s1) = self.send.split_at_mut(1);
+            self.live.render([&mut b0[0][..q], &mut b1[0][..q]], [&mut s0[0][..q], &mut s1[0][..q]]);
         }
 
         // --- reverb return → bus L/R (runs always so tails ring out) ---

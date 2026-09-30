@@ -15,6 +15,7 @@
 import type { Project, Track } from "./types";
 import type { ReverbSpace } from "./reverb";
 import type { SurroundLayout } from "../fx/voice-synth";
+import type { LiveEvent } from "./live";
 
 export interface DecodedAudio {
   bufferId: string;
@@ -74,6 +75,9 @@ export interface AudioBackend {
   setHeadphones3d(on: boolean): boolean;
   /** True while the live bus ends in the binaural monitor. */
   readonly binauralMonitor: boolean;
+
+  // Live instrument (Instrument mode): plays whether or not the transport runs.
+  live(e: LiveEvent): void;
 
   // Transport
   play(project: Project, fromTime: number): void;

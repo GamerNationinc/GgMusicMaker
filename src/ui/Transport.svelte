@@ -83,4 +83,11 @@
     width: 120px;
     gap: 2px;
   }
+  /* Narrow screens (a default-size window, the Deck's own screen): the footer's
+     VU already shows the level, so the header keeps room for the controls. */
+  @media (max-width: 1400px) {
+    .meter {
+      display: none;
+    }
+  }
 </style>

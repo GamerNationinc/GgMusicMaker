@@ -70,6 +70,7 @@ jobs:
           GGMM_APP=release/linux-unpacked/ggmusicmaker xvfb-run -a npm run test:app
           GGMM_APP=release/linux-unpacked/ggmusicmaker xvfb-run -a npm run test:recovery
           GGMM_APP=release/linux-unpacked/ggmusicmaker xvfb-run -a npm run test:record
+          GGMM_APP=release/linux-unpacked/ggmusicmaker xvfb-run -a npm run test:instrument
           GGMM_APP=release/linux-unpacked/ggmusicmaker xvfb-run -a npm run test:stems
           GGMM_APP=release/linux-unpacked/ggmusicmaker xvfb-run -a npm run test:big
 

@@ -73,7 +73,7 @@ const isDirty = () => inPage(`!!document.querySelector(".session .dirty")`);
 // 1. Unsaved work is autosaved.
 let app = await launch();
 let page = await app.firstWindow();
-await page.waitForSelector(".title");
+await page.waitForSelector(".app-header");
 await page.setInputFiles("input[type=file][accept='audio/*']", [wavPath]);
 await page.waitForFunction(() => document.querySelectorAll(".head").length === 1);
 check("autosaves unsaved work within a couple of seconds", await waitFor(() => exists(sessionJson), 10000));
@@ -102,7 +102,7 @@ check("the autosave outlives the app", await exists(sessionJson));
 // 4. Next launch offers it back; a real save clears it.
 app = await launch();
 page = await app.firstWindow();
-await page.waitForSelector(".title");
+await page.waitForSelector(".app-header");
 check("next launch recovers the work", await waitFor(() => inPage(recovered), 20000));
 await page.keyboard.press("Control+s");
 check("saving writes the session", await waitFor(async () => (await readdir(saveDir)).some((f) => f.endsWith(".ggmm"))));

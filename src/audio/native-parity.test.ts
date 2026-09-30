@@ -11,6 +11,8 @@ import synthSrc from "../../public/voice-synth-processor.js?raw";
 import morphSrc from "../../public/morph-processor.js?raw";
 import placerSrc from "../../public/placer-processor.js?raw";
 import binauralSrc from "../../public/binaural-processor.js?raw";
+import liveSrc from "../../public/live-processor.js?raw";
+import type { LiveEvent } from "./live";
 import { DEFAULT_SYNTH, SYNTH_PRESETS, presetParams } from "../fx/voice-synth";
 import { DEFAULT_MORPH, MORPH_PRESETS, morphPresetParams } from "../fx/morph";
 import { impulseChannels, type ReverbSpace } from "./reverb";
@@ -182,4 +184,46 @@ describe.skipIf(!has)("Rust ports match the JS worklets", () => {
       expect(relErr([expL, expR], [l, r])).toBeLessThan(1e-5);
     });
   }
+
+  describe("live instrument", () => {
+    type LiveProc = { event(e: LiveEvent): void; process(i: Float32Array[][], o: Float32Array[][]): boolean };
+    const Live = load(liveSrc, "live-processor") as unknown as new () => LiveProc;
+    const ctl = (o: Partial<Extract<LiveEvent, { t: "ctl" }>>): LiveEvent => ({ t: "ctl", bend: 0, mod: 0, cutoff: 0.7, send: 0.3, expr: 1, sustain: false, ...o });
+    /** [quantum, event] — a little performance touching every path. */
+    const script: [number, LiveEvent][] = [
+      [0, ctl({ send: 0.4 })],
+      [2, { t: "on", id: 1, note: 60, vel: 0.9, patch: 0 }],
+      [2, { t: "on", id: 2, note: 64, vel: 0.7, patch: 1 }],
+      [5, { t: "drum", kind: 0, vel: 1 }],
+      [9, { t: "drum", kind: 1, vel: 0.8 }],
+      [12, { t: "drum", kind: 2, vel: 0.6 }],
+      [15, { t: "drum", kind: 3, vel: 0.7 }],
+      [40, ctl({ bend: 1.5, mod: 0.6, cutoff: 0.4, send: 0.1, expr: 0.7, sustain: true })],
+      [60, { t: "glide", id: 1, note: 67 }],
+      [80, { t: "on", id: 3, note: 43, vel: 1, patch: 3 }],
+      [90, { t: "on", id: 4, note: 72, vel: 0.5, patch: 2 }],
+      [120, { t: "off", id: 1 }],
+      [130, { t: "off", id: 2 }],
+      [200, ctl({ sustain: false })],
+      [260, { t: "off", id: 3 }],
+      [300, { t: "off", id: 4 }],
+    ];
+    it("plays a scripted performance the same (dry + send)", () => {
+      const len = SR * 1.2;
+      const js = Array.from({ length: 4 }, () => new Float32Array(len));
+      const proc = new Live();
+      for (let i = 0, k = 0; i < len; i += 128, k++) {
+        for (const [at, e] of script) if (at === k) proc.event(e);
+        const q = Math.min(128, len - i);
+        const o = [[new Float32Array(q), new Float32Array(q)], [new Float32Array(q), new Float32Array(q)]];
+        proc.process([], o);
+        o.flat().forEach((c, n) => js[n].set(c, i));
+      }
+      const nat = native!.processModule("live", JSON.stringify({ events: script }), [new Float32Array(len)], 4, SR);
+      expect(rms(js[0])).toBeGreaterThan(0.01);
+      expect(rms(js[2])).toBeGreaterThan(0.001);
+      const e = relErr(js, nat);
+      expect(e, `rel err ${e.toExponential(2)}`).toBeLessThan(1e-3);
+    });
+  });
 });

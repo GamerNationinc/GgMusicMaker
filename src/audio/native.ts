@@ -15,6 +15,7 @@
 // this mode — unless the native engine can't open a device, in which case
 // everything falls back to it (recording too, if only the input fails).
 
+import type { LiveEvent } from "./live";
 import type { AudioBackend, DecodedAudio, MasterMeter } from "./backend";
 import type { AudioEngine } from "./engine";
 import type { Project, Track } from "./types";
@@ -46,6 +47,8 @@ export interface NativeEngineBridge {
   setProject(json: string): void;
   play(from: number): void;
   stop(): void;
+  /** One live-instrument event as JSON (older shells don't have it). */
+  live?(json: string): void;
   status(): Promise<NativeStatus | null>;
   scope(): Promise<Float32Array | null>;
   render(project: string, ids: string[], rates: number[], data: Float32Array[][], sampleRate: number, tail: number): Promise<Float32Array[]>;
@@ -277,6 +280,13 @@ export class NativeBackend implements AudioBackend {
     if (this.fallback) return this.web.binauralMonitor;
     const want = surroundChannels(this.surround);
     return this.headphones && want > (this.status?.deviceChannels ?? 2);
+  }
+
+  // ---- live instrument -------------------------------------------------------
+
+  live(e: LiveEvent): void {
+    if (this.fallback || !this.native.live) return this.web.live(e);
+    this.native.live(JSON.stringify(e));
   }
 
   // ---- transport -------------------------------------------------------------

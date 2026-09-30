@@ -119,7 +119,7 @@ async function launch(extraEnv = {}, extraArgs = []) {
   });
   const page = await app.firstWindow();
   page.on("pageerror", (e) => check("no page errors", false, e.message));
-  await page.waitForSelector(".title");
+  await page.waitForSelector(".app-header");
   return { app, page, saveDir };
 }
 const statusText = (page) => page.textContent(".statusbar").then((s) => s.trim());

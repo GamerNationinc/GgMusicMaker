@@ -57,7 +57,7 @@ const app = await electron.launch({
 });
 const page = await app.firstWindow();
 page.on("pageerror", (e) => check("no page errors", false, e.message));
-await page.waitForSelector(".title");
+await page.waitForSelector(".app-header");
 
 const info = await page.evaluate(() => window.ggmmNative?.appInfo());
 check("runs in the desktop shell with its own Chromium", !!info?.chrome, info ? `Electron ${info.electron}, Chromium ${info.chrome}` : "no native bridge");
@@ -135,7 +135,7 @@ check("exports a WAV to disk through the native save path", bytes.length > 1_000
 // quietly, and prove the native engine is the one moving the playhead + meters.
 await page.evaluate(() => localStorage.removeItem("ggmm.engine"));
 await page.reload();
-await page.waitForSelector(".title");
+await page.waitForSelector(".app-header");
 check("ENGINE switch shows NATIVE", (await page.$("[data-role=engine-native].on")) !== null);
 const avail = await page.evaluate(() => window.ggmmNative.engine.available());
 check("the native engine opened the audio device", avail.ok === true, avail.ok ? `${avail.device} @ ${avail.sampleRate} Hz` : avail.error);
@@ -197,7 +197,7 @@ check("session saved for the engine swap", !!session, session ?? "none");
 
 await page.evaluate(() => localStorage.setItem("ggmm.engine", "web"));
 await page.reload();
-await page.waitForSelector(".title");
+await page.waitForSelector(".app-header");
 check("ENGINE switch shows WEB", (await page.$("[data-role=engine-web].on")) !== null);
 await page.setInputFiles("input[data-role=session-file]", join(saveDir, session));
 await page.waitForFunction(() => document.querySelectorAll(".head").length === 5, null, { timeout: 30000 });

@@ -40,7 +40,7 @@ const app = await electron.launch({
 });
 const page = await app.firstWindow();
 page.on("pageerror", (e) => check("no page errors", false, e.message));
-await page.waitForSelector(".title");
+await page.waitForSelector(".app-header");
 
 const avail = await page.evaluate(() => window.ggmmNative.separation.available());
 check("stem separation is available (engine + model)", avail.ok, avail.error ?? "");

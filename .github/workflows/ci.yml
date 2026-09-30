@@ -91,6 +91,9 @@ jobs:
       - name: Native recording end to end (calibration + overdub alignment, null-sink loopback)
         run: xvfb-run -a npm run test:record
 
+      - name: Instrument mode end to end (injected Deck controller reports → live instrument)
+        run: xvfb-run -a npm run test:instrument
+
       - name: Stem separation end to end (real song → stems that add back up; cancel)
         run: xvfb-run -a npm run test:stems
 

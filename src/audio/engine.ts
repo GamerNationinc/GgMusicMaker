@@ -12,6 +12,7 @@ import type { Project, Track } from "./types";
 import { nextId } from "./types";
 import { anySoloed, isTrackAudible } from "./edits";
 import { makeImpulseResponse, type ReverbSpace } from "./reverb";
+import type { LiveEvent } from "./live";
 import { TrackChannel } from "./channel";
 import type { AudioBackend, DecodedAudio, MasterMeter } from "./backend";
 import { blockLevels, logBands } from "./spectrum";
@@ -26,6 +27,7 @@ const PUNCH_CORE_URL = `${import.meta.env.BASE_URL}punch-core.js`;
 const PUNCH_WORKLET_URL = `${import.meta.env.BASE_URL}punch-processor.js`;
 const MORPH_WORKLET_URL = `${import.meta.env.BASE_URL}morph-processor.js`;
 const BINAURAL_WORKLET_URL = `${import.meta.env.BASE_URL}binaural-processor.js`;
+const LIVE_WORKLET_URL = `${import.meta.env.BASE_URL}live-processor.js`;
 const RECORDER_WORKLET_URL = `${import.meta.env.BASE_URL}recorder-processor.js`;
 
 export class AudioEngine implements AudioBackend {
@@ -126,11 +128,30 @@ export class AudioEngine implements AudioBackend {
     if (ctx === this.ctx) {
       if (ok) this.synthAvailable = true;
       this.binauralAvailable = await this.loadWorklet(ctx, BINAURAL_WORKLET_URL);
+      this.liveAvailable = await this.loadWorklet(ctx, LIVE_WORKLET_URL);
     }
     return ok;
   }
 
   private binauralAvailable = false;
+  private liveAvailable = false;
+  /** The live instrument (public/live-processor.js): output 0 dry → master,
+   *  output 1 → the reverb. Built on the first event. */
+  private liveNode: AudioWorkletNode | null = null;
+
+  live(e: LiveEvent): void {
+    if (!this.liveAvailable) return;
+    if (!this.liveNode) {
+      this.liveNode = new AudioWorkletNode(this.ctx, "live-processor", {
+        numberOfInputs: 0,
+        numberOfOutputs: 2,
+        outputChannelCount: [2, 2],
+      });
+      this.liveNode.connect(this.master.input, 0);
+      this.liveNode.connect(this.convolver, 1);
+    }
+    this.liveNode.port.postMessage(e);
+  }
 
   /** Resume the context and make sure the synth worklet had a chance to load. */
   async ensureRunning(): Promise<void> {
@@ -207,6 +228,11 @@ export class AudioEngine implements AudioBackend {
     this.preTimeBuf = new Float32Array(new ArrayBuffer(4 * this.master.preTap.fftSize));
     this.preFreqBuf = new Uint8Array(new ArrayBuffer(this.master.preTap.frequencyBinCount));
     this.reverbReturn.connect(this.master.input);
+    if (this.liveNode) {
+      this.liveNode.disconnect();
+      this.liveNode.connect(this.master.input, 0);
+      this.liveNode.connect(this.convolver, 1);
+    }
     for (const [id, ch] of this.channels) {
       ch.dispose();
       this.channels.delete(id);

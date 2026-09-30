@@ -210,6 +210,18 @@ Recording always used "default" (or the `GGMM_INPUT_DEVICE` test env var); there
 |---|---|
 | A 🎤 dropdown in the toolbar, next to Record. Native: lists cpal input device names (`native/src/record.rs: list_input_devices`, default listed first), `rec_start(device)` opens the chosen one (falls back to `GGMM_INPUT_DEVICE`, then default, if none is passed — test hook unchanged). Web: lists `navigator.mediaDevices` audio inputs; labels are blank until the mic permission is granted, so opening the picker (a user gesture) unlocks them via a throwaway `getUserMedia` probe — the automatic startup listing never prompts. The choice is remembered (`localStorage`, per browser/engine id-space) and also picked up by latency calibration, since it opens the same device. | Rust: `cargo test` unaffected (6/6). `test:app`: 18/18 (one pre-existing timing flake on a rerun, unrelated). `test:record`: 13/13, including the existing "no such device" fallback path now going through the new `device` parameter instead of only the env var. Manual: launched the packaged dev build headless, `listInputDevices()` returned this Deck's real devices (`default`, `pipewire`, `pulse`, `jack`), `recStart("default")` opened successfully and reported back `device: "default"`, `recStart("definitely-not-a-real-device")` rejected with "no input device named …". Screenshot of the toolbar at 1280×800 confirms the picker matches the existing button styling. |
 
+### 2026-09-30 — Deck dual mode, milestone 1: raw controller + Instrument mode
+
+Spec, decisions, full mapping and what's still open: **`docs/deck-dual-mode.md`**.
+
+| Change | Verified how |
+|---|---|
+| **Raw Deck controller** (`native/src/deckpad.rs` → `electron/deckpad.cjs` → `src/input/deckpad.ts`): the controller's own 250 Hz state report read from hidraw alongside Steam — trackpads (+ pressure), all buttons incl. L4/R4/L5/R5, sticks, analog triggers, accelerometer; haptic pulses out. Gamepad API fallback into the same state. Studio mode only forwards reports when a button changes. | Unit (6); on this Deck: 251 reports/s from Node with Steam running, app idle in Studio 0 msg/s, Instrument ≈ 232/s, haptic report accepted |
+| **Modes**: STUDIO / INSTRUMENT / DJ switch in the header (DJ = next milestone), **View + Menu** on the Deck. While the Deck performs, keys and mouse clicks (Steam's desktop-layout emulation of the same buttons) are ignored; touch works. | `test:instrument` |
+| **Instrument mode** (`src/input/instrument.ts`, `src/ui/InstrumentView.svelte`): right pad = scale-locked 3-octave note grid with haptic ticks, left pad = cutoff/reverb macro, sticks = bend/mod, R2 swell, ABXY drums, L1/R1 + ABXY chords, L4/R4 octave, L5 sustain, R5 tilt bend, d-pad key/scale, L3 sound; all playable on the touchscreen too. | Unit (10); `npm run test:instrument` 18/18 (real app, injected Deck reports, sound measured on the native engine's meters) |
+| **Live instrument in the engine** (`native/src/live.rs` + `public/live-processor.js`): 16-voice synth (keys/pluck/pad/bass) + 4 synthesised drums, into the bus before the reverb return with its own send. `AudioBackend.live(event)`. | Rust (6); parity test: scripted performance JS vs Rust < 0.1 % |
+| **Header fits 1282 px** again (the mode switch pushed the master fader off): under 1400 CSS px the wordmark, the theme's name and the header LED meter (the footer VU shows the level) give way. Tests wait for `.app-header` instead of `.title`. | measured `scrollWidth` 1456 → 1269 = `clientWidth` |
+
 ### Native Steam Deck build
 
 | Step | Verified how |
@@ -243,7 +255,8 @@ npm run test:browser  49/49 checks
 - The Voice Synth is JavaScript on the audio thread: measured natively at ~30 % of the audio thread for two FX layers (Choir + Chipmunk) plus a dry one. Many layers on the heaviest presets could still provoke the D lamp; WebKit's per-worklet-node call overhead is noticeable (a dry 3-layer project sat at 25 % before idle layers were routed around their nodes, 20 % after), so folding the two placer nodes into the synth node (one worklet per layer, two outputs) is the next lever if it is ever needed.
 - No LICENSE file in the repo.
 - The `.deb` is untested anywhere.
-- Gamepad navigation (Gaming Mode) does not exist yet; the app is touch/trackpad/keyboard only.
+- Gamepad *navigation* of the editor (Gaming Mode) does not exist yet. The controller plays Instrument mode (raw Deck input, 2026-09-30) and switches modes, but Studio is touch/trackpad/keyboard only. Instrument mode has not been played by a person yet, and haptics are unconfirmed by feel — see `docs/deck-dual-mode.md` → Open.
+- `test:browser` 77/79 on `main` as of 2026-09-30 (checked on a clean worktree of 425dc62): "every linked layer has audio before the delete" sees the 5th lane empty, so "undo brings it back" fails too. Probably the 🎤 picker (2026-09-28) wrapping the toolbar at 1280 px (EXPORT drops to a second row), which shortens the timeline.
 - The CPU readout is **UI-thread** load, not audio-thread load — a WebView cannot see the audio thread. The D lamp is the only audio-side signal, and it has not yet been provoked on the Deck (it is verified only to stay off during a normal session).
 
 ---
@@ -371,6 +384,7 @@ npm run check            # svelte-check
 npm test                 # vitest
 npm run build            # production frontend → dist/
 npm run test:browser     # needs Chromium: `npx playwright-core install chromium`, or set CHROME_PATH
+npm run test:instrument  # Instrument mode in the Electron app, injected Deck reports (after npm run build)
 
 # ---- native (needs Rust + WebKitGTK dev libs; i.e. Ubuntu 22.04 or the container) ----
 npm run tauri dev        # dev server + native window
@@ -412,6 +426,7 @@ git tag v0.1.0 && git push origin v0.1.0     # release.yml builds + attaches art
 
 ### Near term
 
+- **Deck dual mode, next milestones** (`docs/deck-dual-mode.md`): DJ mix table mode, library + bulk import with analysis, album view.
 - **Gamepad navigation** so the app is usable in Gaming Mode (Steam Input → keyboard is the cheap first step; a focus ring + D-pad model is the real one).
 - LICENSE file.
 - A real screenshot for the README (the current one predates the meter/undo).

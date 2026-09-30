@@ -79,6 +79,14 @@ function register() {
   });
   ipcMain.on("engine-play", (_e, from) => getEngine()?.play(from));
   ipcMain.on("engine-stop", () => getEngine()?.stop());
+  // Instrument mode: one live-instrument event (JSON), fire and forget.
+  ipcMain.on("engine-live", (_e, json) => {
+    try {
+      getEngine()?.live(json);
+    } catch (err) {
+      console.error("engine-live:", err);
+    }
+  });
   ipcMain.handle("engine-status", () => getEngine()?.status() ?? null);
   ipcMain.handle("engine-scope", () => getEngine()?.scope() ?? null);
   // Native recording (native/src/record.rs). Errors reject the invoke, and
@@ -112,5 +120,5 @@ function register() {
   );
 }
 
-module.exports = { register };
+module.exports = { register, getModule };
 void app;
