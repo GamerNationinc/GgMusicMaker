@@ -85,14 +85,25 @@ export interface WaveSummary {
   peak: number;
 }
 
-export function summarize(buffer: PeakSource, bucket = SUMMARY_BUCKET): WaveSummary {
+function emptySummary(buffer: PeakSource, bucket: number): WaveSummary {
   const channels = Math.min(2, Math.max(1, buffer.numberOfChannels));
   const buckets = Math.max(1, Math.ceil(buffer.length / bucket));
   const s: WaveSummary = { bucket, buckets, channels, length: buffer.length, min: [], max: [], sq: [], peak: 0 };
   for (let c = 0; c < channels; c++) {
+    s.min.push(new Float32Array(buckets));
+    s.max.push(new Float32Array(buckets));
+    s.sq.push(new Float32Array(buckets));
+  }
+  return s;
+}
+
+/** Fill buckets [b0, b1) of every channel. */
+function fillBuckets(buffer: PeakSource, s: WaveSummary, b0: number, b1: number): void {
+  const bucket = s.bucket;
+  for (let c = 0; c < s.channels; c++) {
     const data = buffer.getChannelData(c);
-    const mn = new Float32Array(buckets), mx = new Float32Array(buckets), sq = new Float32Array(buckets);
-    for (let b = 0; b < buckets; b++) {
+    const mn = s.min[c], mx = s.max[c], sq = s.sq[c];
+    for (let b = b0; b < b1; b++) {
       const end = Math.min(buffer.length, (b + 1) * bucket);
       let lo = 0, hi = 0, acc = 0;
       for (let i = b * bucket; i < end; i++) {
@@ -105,8 +116,12 @@ export function summarize(buffer: PeakSource, bucket = SUMMARY_BUCKET): WaveSumm
       if (hi > s.peak) s.peak = hi;
       if (-lo > s.peak) s.peak = -lo;
     }
-    s.min.push(mn); s.max.push(mx); s.sq.push(sq);
   }
+}
+
+export function summarize(buffer: PeakSource, bucket = SUMMARY_BUCKET): WaveSummary {
+  const s = emptySummary(buffer, bucket);
+  fillBuckets(buffer, s, 0, s.buckets);
   return s;
 }
 
@@ -118,6 +133,30 @@ export function getSummary(buffer: PeakSource): WaveSummary {
     summaries.set(buffer, s);
   }
   return s;
+}
+
+/** Buckets per slice of `prepareSummary`: 4 M samples per channel, a few ms. */
+const PREPARE_BUCKETS = 32768;
+
+/**
+ * Build a buffer's summary ahead of drawing, a slice at a time with the page
+ * free to run in between, and cache it for `getSummary`. An hour of audio is
+ * ~345 M samples — summarised in one go (what the first draw would do) that
+ * freezes the page for most of a second, longer on the Deck.
+ */
+export async function prepareSummary(
+  buffer: PeakSource,
+  pause: () => Promise<void> = () => new Promise((r) => setTimeout(r, 0)),
+): Promise<void> {
+  if (summaries.has(buffer)) return;
+  const s = emptySummary(buffer, SUMMARY_BUCKET);
+  for (let b = 0; b < s.buckets; b += PREPARE_BUCKETS) {
+    fillBuckets(buffer, s, b, Math.min(s.buckets, b + PREPARE_BUCKETS));
+    if (b + PREPARE_BUCKETS < s.buckets) await pause();
+    // Drawn meanwhile (computed in one go): nothing left to do.
+    if (summaries.has(buffer)) return;
+  }
+  summaries.set(buffer, s);
 }
 
 export interface ColumnStats {

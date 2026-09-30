@@ -39,8 +39,12 @@ class FakeStore implements AutosaveBridge {
   async audioKeys() {
     return [...this.wavs.keys()];
   }
-  async putAudio(key: string, bytes: Uint8Array) {
+  async putAudio(key: string, parts: Iterable<ArrayBuffer>) {
     this.puts++;
+    const list = [...parts];
+    const bytes = new Uint8Array(list.reduce((n, p) => n + p.byteLength, 0));
+    let at = 0;
+    for (const p of list) (bytes.set(new Uint8Array(p), at), (at += p.byteLength));
     this.wavs.set(key, bytes);
   }
   async commit(header: SessionHeaderBase, keys: Record<string, string>, meta: AutosaveMeta) {

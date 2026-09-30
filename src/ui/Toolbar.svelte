@@ -138,7 +138,7 @@
     value={$selectedInputDevice}
     onchange={onInputDeviceChange}
     onmousedown={() => void refreshInputDevices(true)}
-    title="Which microphone to record from"
+    title={`Microphone: ${$inputDevices.find((d) => d.id === $selectedInputDevice)?.label || "default"} — pick which one to record from`}
   >
     <option value="">🎤 Default mic</option>
     {#each $inputDevices as d (d.id)}
@@ -197,5 +197,20 @@
   }
   .spacer {
     flex: 1 1 auto;
+  }
+  /* Narrow windows (a default-size window, the Deck's own screen): the mic
+     picker shows just the start of its name (the whole name is in the
+     tooltip) and zoom tightens, so Export stays on the one row. */
+  @media (max-width: 1400px) {
+    .toolbar {
+      gap: 4px;
+    }
+    .input-device {
+      max-width: 72px;
+    }
+    .zoom :global(button.btn) {
+      padding: 0 6px;
+      min-width: 32px;
+    }
   }
 </style>

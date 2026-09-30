@@ -5,6 +5,7 @@
 // structure updates the store immutably and syncs the engine. This is the one
 // place the UI and the audio runtime meet.
 
+import { prepareSummary } from "../render/peaks";
 import { writable, get } from "svelte/store";
 import type { Project, Track, Clip, TransportState } from "../audio/types";
 import { nextId, reserveIds, TRACK_COLORS, EQ_CUT_OFF } from "../audio/types";
@@ -26,7 +27,7 @@ import { AudioEngine } from "../audio/engine";
 import { NativeBackend, type NativeEngineBridge } from "../audio/native";
 import type { AudioBackend, MasterMeter } from "../audio/backend";
 import * as history from "./history";
-import { encodeWav } from "../audio/wav";
+import { encodeWav, wavParts } from "../audio/wav";
 import {
   DEFAULT_SYNTH,
   SYNTH_PRESETS,
@@ -58,7 +59,6 @@ import {
   packSessionParts,
   planSession,
   readSession,
-  sessionWav,
   unpackSession,
   type SessionHeaderBase,
   sessionDisplayName,
@@ -762,6 +762,8 @@ export async function importFiles(files: FileList | File[]): Promise<void> {
       status.set(`Decoding ${file.name}…`);
       const bytes = await file.arrayBuffer();
       const { bufferId, buffer } = await engine.decodeBytes(bytes);
+      // The waveform, a slice at a time, before the lane first draws it.
+      await prepareSummary(buffer);
       const track = makeTrack(file.name.replace(/\.[^.]+$/, ""));
       const clip: Clip = {
         id: nextId("clip"),
@@ -1156,9 +1158,14 @@ export async function saveSession(as = false): Promise<void> {
         await files.uploadPart(up, plan.head);
         for (const [i, id] of plan.ids.entries()) {
           status.set(`Saving session… (${i + 1}/${plan.ids.length})`);
-          const wav = sessionWav(engine.getBuffer(id)!);
-          if (wav.byteLength !== plan.lengths[i]) throw new Error(`audio ${id} changed while saving`);
-          await files.uploadPart(up, wav);
+          // In pieces: an hour-long layer is 1.4 GB, too big to encode or
+          // hand to the shell in one go.
+          let sent = 0;
+          for (const part of wavParts(engine.getBuffer(id)!, { float: true })) {
+            await files.uploadPart(up, part);
+            sent += part.byteLength;
+          }
+          if (sent !== plan.lengths[i]) throw new Error(`audio ${id} changed while saving`);
         }
       } catch (err) {
         await files.uploadAbort(up).catch(() => {});

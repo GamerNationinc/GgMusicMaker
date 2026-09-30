@@ -117,6 +117,8 @@ contextBridge.exposeInMainWorld("ggmmNative", {
       channelBytes(channels) <= CHUNK
         ? invoke("engine-load", { id, sampleRate, channels })
         : invoke("engine-load-upload", { id, sampleRate, channelCount: channels.length, uploadId: await upload(channels) }),
+    /** Load audio the page streamed itself (files.uploadBegin/uploadPart), planar f32. */
+    loadUpload: (id, sampleRate, channelCount, uploadId) => invoke("engine-load-upload", { id, sampleRate, channelCount, uploadId }),
     remove: (id) => invoke("engine-remove", { id }),
     setProject: (json) => ipcRenderer.send("engine-project", json),
     play: (from) => ipcRenderer.send("engine-play", from),
@@ -151,6 +153,8 @@ contextBridge.exposeInMainWorld("ggmmNative", {
   autosave: {
     audioKeys: () => invoke("autosave-audio-keys"),
     putAudio: async (key, bytes) => invoke("autosave-put-audio", { key, uploadId: await upload([bytes]) }),
+    /** Store an upload the page streamed itself (files.uploadBegin/uploadPart). */
+    putUpload: (key, uploadId) => invoke("autosave-put-audio", { key, uploadId }),
     commit: (header, audioKeys, meta) => invoke("autosave-commit", { header, audioKeys, meta }),
     /** The project and its audio keys; audio comes one WAV at a time via readAudio. */
     load: () => invoke("autosave-load"),

@@ -106,8 +106,44 @@ export function separationBridge(): SeparationBridge | null {
 }
 
 /** Desktop app: the on-disk autosave store (null in a browser). */
+/** The shell's autosave bridge as preload exposes it (electron/preload.cjs). */
+interface RawAutosaveBridge extends Omit<AutosaveBridge, "putAudio"> {
+  putAudio(key: string, bytes: Uint8Array): Promise<void>;
+  /** Store a finished upload (files.uploadBegin/uploadPart) as the WAV. */
+  putUpload?(key: string, uploadId: number): Promise<void>;
+}
+
 export function autosaveBridge(): AutosaveBridge | null {
-  return bridge()?.autosave ?? null;
+  const b = bridge();
+  const raw = b?.autosave as RawAutosaveBridge | undefined;
+  if (!raw) return null;
+  const files = b?.files;
+  return {
+    audioKeys: () => raw.audioKeys(),
+    commit: (header, keys, meta) => raw.commit(header, keys, meta),
+    load: () => raw.load(),
+    readAudio: (key) => raw.readAudio(key),
+    clear: () => raw.clear(),
+    async putAudio(key, parts) {
+      if (files && raw.putUpload) {
+        // One piece at a time: each crosses into the shell on its own and
+        // the page gets to run between them.
+        const id = await files.uploadBegin();
+        try {
+          for (const part of parts) await files.uploadPart(id, part);
+        } catch (err) {
+          await files.uploadAbort(id).catch(() => {});
+          throw err;
+        }
+        return raw.putUpload(key, id);
+      }
+      const list = [...parts];
+      const bytes = new Uint8Array(list.reduce((n, x) => n + x.byteLength, 0));
+      let at = 0;
+      for (const x of list) (bytes.set(new Uint8Array(x), at), (at += x.byteLength));
+      return raw.putAudio(key, bytes);
+    },
+  };
 }
 
 /** Desktop app: how often to autosave (ms), when the shell overrides it. */

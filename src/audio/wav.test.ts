@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { encodeWav, decodeWav, speakerMask, type PcmSource } from "./wav";
+import { encodeWav, decodeWav, speakerMask, wavParts, wavByteLength, type PcmSource } from "./wav";
 import { computePeaks } from "../render/peaks";
 
 function fakeBuffer(channels: Float32Array[], sampleRate = 48000): PcmSource {
@@ -162,5 +162,33 @@ describe("32-bit float WAV (session audio)", () => {
     expect(v.getUint16(20, true)).toBe(0xfffe);
     expect(v.getUint16(44, true)).toBe(3);
     expect(decodeWav(bytes).channels[5]).toEqual(new Float32Array([0.5, -2, 1]));
+  });
+});
+
+describe("wavParts (streamed encoding)", () => {
+  const src = (channels: number, length: number) => {
+    const data = Array.from({ length: channels }, (_, c) => Float32Array.from({ length }, (_, i) => Math.sin(i * 0.01 * (c + 1)) * 1.3));
+    return { numberOfChannels: channels, sampleRate: 48000, length, getChannelData: (c: number) => data[c] };
+  };
+  const join = (parts: Iterable<ArrayBuffer>) => {
+    const list = [...parts];
+    const out = new Uint8Array(list.reduce((n, p) => n + p.byteLength, 0));
+    let at = 0;
+    for (const p of list) (out.set(new Uint8Array(p), at), (at += p.byteLength));
+    return out;
+  };
+  for (const channels of [1, 2, 6])
+    for (const float of [false, true])
+      it(`${channels} ch ${float ? "float" : "16-bit"}: pieces join into exactly encodeWav's bytes`, () => {
+        const b = src(channels, 10007);
+        const whole = new Uint8Array(encodeWav(b, { float }));
+        const parts = [...wavParts(b, { float }, 1000)];
+        expect(parts.length).toBeGreaterThan(10);
+        expect(parts.slice(1).every((p) => p.byteLength <= 1000)).toBe(true);
+        expect(join(parts)).toEqual(whole);
+        expect(whole.byteLength).toBe(wavByteLength(b, { float }));
+      });
+  it("an empty buffer is just the header", () => {
+    expect(join(wavParts(src(2, 0)))).toEqual(new Uint8Array(encodeWav(src(2, 0))));
   });
 });

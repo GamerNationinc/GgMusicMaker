@@ -11,12 +11,11 @@
 // No Svelte, no Web Audio: unit-tested with a fake bridge.
 
 import type { Project } from "../audio/types";
-import { decodeWav, type DecodedPcm, type PcmSource } from "../audio/wav";
+import { decodeWav, wavParts, type DecodedPcm, type PcmSource } from "../audio/wav";
 import {
   migrateProject,
   referencedBufferIds,
   sessionHeader,
-  sessionWav,
   type SessionExtras,
   type SessionHeaderBase,
 } from "./session";
@@ -39,7 +38,9 @@ export interface LoadedAutosave {
 /** What the shell provides (see electron/preload.cjs). */
 export interface AutosaveBridge {
   audioKeys(): Promise<string[]>;
-  putAudio(key: string, bytes: Uint8Array): Promise<void>;
+  /** Store one WAV, given as pieces (`wavParts`) so an hour-long buffer is
+   *  never encoded, or sent to the shell, in one go. */
+  putAudio(key: string, parts: Iterable<ArrayBuffer>): Promise<void>;
   commit(header: SessionHeaderBase, audioKeys: Record<string, string>, meta: AutosaveMeta): Promise<void>;
   /** The project only — audio is read one WAV at a time (`readAudio`): a
    *  big session's audio is over a GB, too much for one IPC message. */
@@ -89,7 +90,7 @@ export class Autosaver {
         if (!this.stored.has(key)) {
           const buf = this.getBuffer(id);
           if (!buf) throw new Error(`audio buffer ${id} is missing`);
-          await this.bridge.putAudio(key, new Uint8Array(sessionWav(buf)));
+          await this.bridge.putAudio(key, wavParts(buf, { float: true }));
           this.stored.add(key);
         }
         keys[id] = key;

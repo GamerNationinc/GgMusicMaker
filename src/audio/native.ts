@@ -15,6 +15,7 @@
 // this mode — unless the native engine can't open a device, in which case
 // everything falls back to it (recording too, if only the input fails).
 
+import { fileStreams } from "../state/platform";
 import type { LiveEvent } from "./live";
 import type { AudioBackend, DecodedAudio, MasterMeter } from "./backend";
 import type { AudioEngine } from "./engine";
@@ -43,6 +44,9 @@ export interface NativeTake {
 export interface NativeEngineBridge {
   available(): Promise<{ ok: boolean; error?: string; sampleRate?: number; device?: string }>;
   load(id: string, sampleRate: number, channels: Float32Array[]): Promise<void>;
+  /** Load audio the page streamed itself (planar f32 upload); older shells
+   *  don't have it. */
+  loadUpload?(id: string, sampleRate: number, channelCount: number, uploadId: number): Promise<void>;
   remove(id: string): Promise<void>;
   setProject(json: string): void;
   play(from: number): void;
@@ -185,7 +189,31 @@ export class NativeBackend implements AudioBackend {
   private mirror(id: string, buffer: AudioBuffer): void {
     if (this.loaded.has(id)) return;
     this.loaded.add(id);
-    this.pendingLoads.push(this.native.load(id, buffer.sampleRate, channelsOf(buffer)).catch(() => this.loaded.delete(id)));
+    this.pendingLoads.push(this.loadChannels(id, buffer).catch(() => this.loaded.delete(id)));
+  }
+
+  /** Hand a buffer to the engine. Big ones (a long song is over a GB) go
+   *  in 8 MB pieces, planar, each one copied and sent on its own, so the page
+   *  keeps running between them — never one copy of the whole thing. */
+  private async loadChannels(id: string, buffer: AudioBuffer): Promise<void> {
+    const n = Math.min(2, buffer.numberOfChannels);
+    const files = fileStreams();
+    if (!this.native.loadUpload || !files || buffer.length * n * 4 <= LOAD_PART_BYTES) {
+      return this.native.load(id, buffer.sampleRate, channelsOf(buffer));
+    }
+    const up = await files.uploadBegin();
+    try {
+      const step = LOAD_PART_BYTES / 4;
+      for (let c = 0; c < n; c++) {
+        const data = buffer.getChannelData(c);
+        // slice, not subarray: a view would carry its whole buffer across.
+        for (let i = 0; i < data.length; i += step) await files.uploadPart(up, data.slice(i, i + step).buffer);
+      }
+    } catch (err) {
+      await files.uploadAbort(up).catch(() => {});
+      throw err;
+    }
+    await this.native.loadUpload(id, buffer.sampleRate, n, up);
   }
 
   async decodeBytes(bytes: ArrayBuffer): Promise<DecodedAudio> {
@@ -485,6 +513,8 @@ export class NativeBackend implements AudioBackend {
     return out;
   }
 }
+
+const LOAD_PART_BYTES = 8 * 1024 * 1024;
 
 function channelsOf(b: AudioBuffer): Float32Array[] {
   const out: Float32Array[] = [];

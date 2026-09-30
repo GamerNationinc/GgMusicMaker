@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { summarize, columnStats, SUMMARY_BUCKET, type ColumnStats } from "./peaks";
+import { summarize, columnStats, getSummary, prepareSummary, SUMMARY_BUCKET, type ColumnStats } from "./peaks";
 
 function src(chs: Float32Array[]) {
   return { length: chs[0].length, numberOfChannels: chs.length, getChannelData: (c: number) => chs[c] };
@@ -41,5 +41,25 @@ describe("waveform summary", () => {
     let mx = -1;
     for (let i = n - 100; i < n - 40; i++) mx = Math.max(mx, l[i]);
     expect(a.max).toBe(mx);
+  });
+});
+
+describe("prepareSummary", () => {
+  it("builds, in slices, exactly what summarize builds, and caches it", async () => {
+    const n = 32768 * 128 * 2 + 777; // three slices
+    const d = [Float32Array.from({ length: n }, (_, i) => Math.sin(i * 0.001) * ((i % 1000) / 1000)), new Float32Array(n)];
+    const buf = { numberOfChannels: 2, sampleRate: 48000, length: n, getChannelData: (c: number) => d[c] };
+    let pauses = 0;
+    await prepareSummary(buf, async () => void pauses++);
+    expect(pauses).toBe(2);
+    const got = getSummary(buf);
+    const want = summarize(buf);
+    expect(got.peak).toBe(want.peak);
+    expect(got.buckets).toBe(want.buckets);
+    for (let c = 0; c < 2; c++) {
+      expect(got.min[c]).toEqual(want.min[c]);
+      expect(got.max[c]).toEqual(want.max[c]);
+      expect(got.sq[c]).toEqual(want.sq[c]);
+    }
   });
 });

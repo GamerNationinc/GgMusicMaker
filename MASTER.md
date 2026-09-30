@@ -222,6 +222,21 @@ Spec, decisions, full mapping and what's still open: **`docs/deck-dual-mode.md`*
 | **Live instrument in the engine** (`native/src/live.rs` + `public/live-processor.js`): 16-voice synth (keys/pluck/pad/bass) + 4 synthesised drums, into the bus before the reverb return with its own send. `AudioBackend.live(event)`. | Rust (6); parity test: scripted performance JS vs Rust < 0.1 % |
 | **Header fits 1282 px** again (the mode switch pushed the master fader off): under 1400 CSS px the wordmark, the theme's name and the header LED meter (the footer VU shows the level) give way. Tests wait for `.app-header` instead of `.title`. | measured `scrollWidth` 1456 → 1269 = `clientWidth` |
 
+### 2026-09-30 — long tracks no longer freeze the app; toolbar on one row
+
+Reported: importing a really long track freezes the app. Reproduced with a 60-minute MP3 in the real app (a 50 ms heartbeat timer logs every stall > 150 ms; CDP CPU profile for the causes).
+
+| Change | Verified how |
+|---|---|
+| **Autosave never saved a long track and froze the app every minute trying.** It encoded the whole buffer as one float WAV (1.4 GB for an hour) and handed it to preload in one call; a typed array that big doesn't survive the page → preload bridge (arrives as `null`), so the save threw, and the next tick encoded it again: a 3.4 s freeze per autosave, forever. Now `wavParts` (`src/audio/wav.ts`) encodes 8 MB pieces on demand and `autosaveBridge().putAudio` streams them through `files.uploadBegin/uploadPart` → `autosave.putUpload`. | Before: stalls of 3.2–3.8 s at every autosave (5 s interval in the test), `autosave: Cannot read properties of null` each time. After: none; the 1.38 GB WAV lands in `autosave/audio`. `wav.test.ts`: pieces join into exactly `encodeWav`'s bytes (1/2/6 ch, float/16-bit, odd sizes, empty) |
+| **Save had the same flaw** (one WAV per layer in one call) — a session with an hour-long layer couldn't be saved. Now streamed with `wavParts`. | Saved the 60-min session: 1382 MB `.ggmm` |
+| **Import → native engine** copied every channel whole (`slice()`, 1.4 GB) on the UI thread, then passed it through the bridge in one call. Now `NativeBackend.loadChannels` sends 8 MB planar pieces itself (`engine.loadUpload`). | Stall at import end 5.7 s → 1.2 s; plays from the engine (heard at 7:52, past the first piece) |
+| **Waveform summary** of the whole song was built in one go on first draw (345 M samples). `prepareSummary` (`render/peaks.ts`) builds it in 4 M-sample slices during import. | Unit test: sliced == one-pass summary. Last stall 1.2 s → **0.45 s** (Chromium finishing the decode — the only one left) |
+| `encodeWav` interleaves through `Float32Array` / `Int16Array` instead of a `DataView` per sample (little-endian hosts; DataView fallback kept). | Same byte-exact tests |
+| **Toolbar back on one row** at a default-size window (the 🎤 picker of 2026-09-28 pushed EXPORT to a second row, which shortened the timeline and hid the 5th lane): under 1400 px the picker is 72 px (full name in its tooltip), zoom and gaps tighten. | New and Export on the same row, measured; `test:browser` **79/79** (its "every linked layer has audio" check failed on `main` since 425dc62 — bisected) |
+
+`test:app`'s "UI playhead follows the native engine" reads the on-screen clock, which a hidden test window updates about once a second (Chromium throttles its timers), so it sits on the 00:00.9x / 00:01.0x edge; it passed 5 of 6 runs today, unrelated to these changes.
+
 ### Native Steam Deck build
 
 | Step | Verified how |
@@ -256,7 +271,6 @@ npm run test:browser  49/49 checks
 - No LICENSE file in the repo.
 - The `.deb` is untested anywhere.
 - Gamepad *navigation* of the editor (Gaming Mode) does not exist yet. The controller plays Instrument mode (raw Deck input, 2026-09-30) and switches modes, but Studio is touch/trackpad/keyboard only. Instrument mode has not been played by a person yet, and haptics are unconfirmed by feel — see `docs/deck-dual-mode.md` → Open.
-- `test:browser` 77/79 on `main` as of 2026-09-30 (checked on a clean worktree of 425dc62): "every linked layer has audio before the delete" sees the 5th lane empty, so "undo brings it back" fails too. Probably the 🎤 picker (2026-09-28) wrapping the toolbar at 1280 px (EXPORT drops to a second row), which shortens the timeline.
 - The CPU readout is **UI-thread** load, not audio-thread load — a WebView cannot see the audio thread. The D lamp is the only audio-side signal, and it has not yet been provoked on the Deck (it is verified only to stay off during a normal session).
 
 ---

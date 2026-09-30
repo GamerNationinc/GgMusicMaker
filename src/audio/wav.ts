@@ -37,31 +37,26 @@ function clampSample(x: number): number {
   return x;
 }
 
-/** Encode an audio buffer to a WAV: 16-bit PCM by default, or 32-bit IEEE
- *  float (`float: true` — lossless, keeps values beyond ±1). */
 /** Exactly how many bytes `encodeWav` will produce, without encoding. */
 export function wavByteLength(buffer: Pick<PcmSource, "numberOfChannels" | "length">, opts: { float?: boolean } = {}): number {
   const fmtSize = buffer.numberOfChannels > 2 ? 40 : 16;
   return 12 + 8 + fmtSize + 8 + buffer.length * buffer.numberOfChannels * (opts.float ? 4 : 2);
 }
 
-export function encodeWav(buffer: PcmSource, opts: { float?: boolean } = {}): ArrayBuffer {
+/** The RIFF/fmt/data headers of the WAV `encodeWav` writes. */
+function wavHeader(buffer: PcmSource, float: boolean): ArrayBuffer {
   const channels = buffer.numberOfChannels;
-  const frames = buffer.length;
-  const float = !!opts.float;
   const bytesPerSample = float ? 4 : 2;
   const blockAlign = channels * bytesPerSample;
-  const dataSize = frames * blockAlign;
+  const dataSize = buffer.length * blockAlign;
   const extensible = channels > 2;
   const fmtSize = extensible ? 40 : 16;
   const headerSize = 12 + 8 + fmtSize + 8;
-  const out = new ArrayBuffer(headerSize + dataSize);
+  const out = new ArrayBuffer(headerSize);
   const view = new DataView(out);
-
   const writeStr = (offset: number, s: string) => {
     for (let i = 0; i < s.length; i++) view.setUint8(offset + i, s.charCodeAt(i));
   };
-
   // RIFF header
   writeStr(0, "RIFF");
   view.setUint32(4, headerSize - 8 + dataSize, true);
@@ -87,25 +82,84 @@ export function encodeWav(buffer: PcmSource, opts: { float?: boolean } = {}): Ar
   const dataChunk = 12 + 8 + fmtSize;
   writeStr(dataChunk, "data");
   view.setUint32(dataChunk + 4, dataSize, true);
+  return out;
+}
 
-  // Interleave channels, converting float [-1,1] to signed 16-bit.
-  const chanData: Float32Array[] = [];
-  for (let c = 0; c < channels; c++) chanData.push(buffer.getChannelData(c));
+const LITTLE_ENDIAN = new Uint8Array(new Uint16Array([1]).buffer)[0] === 1;
 
-  let pos = headerSize;
-  for (let i = 0; i < frames; i++) {
+/** Interleave frames [from, to) into `out` at byte `at`: float [-1,1] to
+ *  signed 16-bit, or 32-bit float as is. */
+function writeFrames(chanData: Float32Array[], from: number, to: number, float: boolean, out: ArrayBuffer, at: number): void {
+  const channels = chanData.length;
+  const n = (to - from) * channels;
+  if (LITTLE_ENDIAN && float) {
+    const o = new Float32Array(out, at, n);
     for (let c = 0; c < channels; c++) {
-      if (float) {
-        view.setFloat32(pos, chanData[c][i], true);
-        pos += 4;
-      } else {
-        const s = clampSample(chanData[c][i]);
-        view.setInt16(pos, s < 0 ? s * 0x8000 : s * 0x7fff, true);
-        pos += 2;
+      const d = chanData[c];
+      for (let i = from, k = c; i < to; i++, k += channels) o[k] = d[i];
+    }
+  } else if (LITTLE_ENDIAN) {
+    const o = new Int16Array(out, at, n);
+    for (let c = 0; c < channels; c++) {
+      const d = chanData[c];
+      for (let i = from, k = c; i < to; i++, k += channels) {
+        const s = clampSample(d[i]);
+        o[k] = s < 0 ? s * 0x8000 : s * 0x7fff;
+      }
+    }
+  } else {
+    const view = new DataView(out);
+    let pos = at;
+    for (let i = from; i < to; i++) {
+      for (let c = 0; c < channels; c++) {
+        if (float) {
+          view.setFloat32(pos, chanData[c][i], true);
+          pos += 4;
+        } else {
+          const s = clampSample(chanData[c][i]);
+          view.setInt16(pos, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+          pos += 2;
+        }
       }
     }
   }
+}
+
+/** Encode an audio buffer to a WAV: 16-bit PCM by default, or 32-bit IEEE
+ *  float (`float: true` — lossless, keeps values beyond ±1). */
+export function encodeWav(buffer: PcmSource, opts: { float?: boolean } = {}): ArrayBuffer {
+  const float = !!opts.float;
+  const header = wavHeader(buffer, float);
+  const out = new ArrayBuffer(wavByteLength(buffer, opts));
+  new Uint8Array(out).set(new Uint8Array(header));
+  const chanData = Array.from({ length: buffer.numberOfChannels }, (_, c) => buffer.getChannelData(c));
+  writeFrames(chanData, 0, buffer.length, float, out, header.byteLength);
   return out;
+}
+
+/** Default size of one `wavParts` piece. */
+export const WAV_PART_BYTES = 8 * 1024 * 1024;
+
+/**
+ * The same bytes as `encodeWav`, as a sequence of pieces of about
+ * `partBytes` each (the header is the first). For big buffers: an hour of
+ * stereo is 1.4 GB as a float WAV — encoded in one go it freezes the page for
+ * seconds, and it can't cross into the desktop shell in one call at all.
+ * Pieces are made on demand, so the caller can send one, let the page
+ * breathe, then ask for the next.
+ */
+export function* wavParts(buffer: PcmSource, opts: { float?: boolean } = {}, partBytes = WAV_PART_BYTES): Generator<ArrayBuffer> {
+  const float = !!opts.float;
+  yield wavHeader(buffer, float);
+  const chanData = Array.from({ length: buffer.numberOfChannels }, (_, c) => buffer.getChannelData(c));
+  const frameBytes = Math.max(1, buffer.numberOfChannels) * (float ? 4 : 2);
+  const framesPer = Math.max(1, Math.floor(partBytes / frameBytes));
+  for (let from = 0; from < buffer.length; from += framesPer) {
+    const to = Math.min(buffer.length, from + framesPer);
+    const out = new ArrayBuffer((to - from) * frameBytes);
+    writeFrames(chanData, from, to, float, out, 0);
+    yield out;
+  }
 }
 
 /** Decoded PCM: one Float32Array per channel, all the same length. */
