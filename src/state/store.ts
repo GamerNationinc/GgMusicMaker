@@ -1027,6 +1027,30 @@ export function seek(time: number): void {
 
 // ---- recording ------------------------------------------------------------
 
+/** The take being recorded, for the timeline to draw live on its layer:
+ *  where it started (song seconds) and a counter that ticks as audio comes
+ *  in. The waveform itself is `engine.liveTake()`. */
+export const liveRecording = writable<{ trackId: string; start: number; tick: number } | null>(null);
+let liveTimer: ReturnType<typeof setInterval> | null = null;
+
+function startLiveView(trackId: string, start: number): void {
+  liveRecording.set({ trackId, start, tick: 0 });
+  let lastFrames = -1;
+  // ~15 redraws a second (a timer, not frames: it must run in a hidden window too).
+  liveTimer = setInterval(() => {
+    const frames = engine.liveTake()?.frames ?? 0;
+    if (frames === lastFrames) return;
+    lastFrames = frames;
+    liveRecording.update((r) => (r ? { ...r, tick: r.tick + 1 } : r));
+  }, 66);
+}
+
+function stopLiveView(): void {
+  if (liveTimer) clearInterval(liveTimer);
+  liveTimer = null;
+  liveRecording.set(null);
+}
+
 export async function startRecording(): Promise<void> {
   let armed = get(project).tracks.find((t) => t.armed);
   if (!armed) {
@@ -1037,6 +1061,7 @@ export async function startRecording(): Promise<void> {
   try {
     await engine.startRecording();
     transport.update((s) => ({ ...s, isRecording: true }));
+    startLiveView(armed.id, get(transport).playhead);
     status.set(`Recording onto ${armed.name}…${engine.takeNote ?? ""}`);
   } catch (err) {
     status.set(`Mic unavailable: ${(err as Error).message}`);
@@ -1046,10 +1071,14 @@ export async function startRecording(): Promise<void> {
 export async function stopRecording(): Promise<void> {
   if (!engine.isRecording) return;
   const playheadAtStop = get(transport).playhead;
+  const liveStart = get(liveRecording)?.start;
   const usedWorklet = engine.recordingUsesWorklet;
   const buffer = await engine.stopRecording();
-  // The native engine knows where the take belongs from the device clocks.
-  const startedAt = engine.takeStart ?? playheadAtStop;
+  stopLiveView();
+  // The native engine knows where the take belongs from the device clocks;
+  // otherwise it starts where the playhead was when recording began (the
+  // web path used to place it at the playhead at *stop* — wrong mid-play).
+  const startedAt = engine.takeStart ?? liveStart ?? playheadAtStop;
   const bufferId = engine.registerBuffer(buffer);
   const armed = get(project).tracks.find((t) => t.armed);
   transport.update((s) => ({ ...s, isRecording: false }));

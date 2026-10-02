@@ -156,6 +156,48 @@ struct Shared {
     dropped: AtomicU64,
     stop: AtomicBool,
     anchor: Mutex<Option<Anchor>>,
+    /// Live waveform of the take so far: (min, max) over all channels per
+    /// PEAK_BUCKET frames, appended by the drain thread for the UI to draw.
+    peaks: Mutex<Vec<f32>>,
+}
+
+/// Frames per live-waveform bucket (2.7 ms at 48 kHz).
+pub const PEAK_BUCKET: usize = 128;
+
+/// Running (min, max) over interleaved frames, emitting one pair per
+/// PEAK_BUCKET frames. Kept apart from the drain thread so it is unit-tested.
+#[derive(Default)]
+pub struct PeakAcc {
+    lo: f32,
+    hi: f32,
+    /// Frames in the bucket so far.
+    n: usize,
+}
+
+impl PeakAcc {
+    /// Feed interleaved samples (whole frames); append finished pairs to `out`.
+    pub fn feed(&mut self, data: &[f32], channels: usize, out: &mut Vec<f32>) {
+        for frame in data.chunks_exact(channels.max(1)) {
+            let (mut lo, mut hi) = (frame[0], frame[0]);
+            for &v in &frame[1..] {
+                lo = lo.min(v);
+                hi = hi.max(v);
+            }
+            if self.n == 0 {
+                self.lo = lo;
+                self.hi = hi;
+            } else {
+                self.lo = self.lo.min(lo);
+                self.hi = self.hi.max(hi);
+            }
+            self.n += 1;
+            if self.n == PEAK_BUCKET {
+                out.push(self.lo);
+                out.push(self.hi);
+                self.n = 0;
+            }
+        }
+    }
 }
 
 /// An open capture stream. Dropping it without `finish` discards the take.
@@ -224,7 +266,7 @@ impl Recording {
         }
         let channels = cfg.channels() as usize;
         let rate = cfg.sample_rate().0 as f64;
-        let shared = Arc::new(Shared { frames: AtomicU64::new(0), dropped: AtomicU64::new(0), stop: AtomicBool::new(false), anchor: Mutex::new(None) });
+        let shared = Arc::new(Shared { frames: AtomicU64::new(0), dropped: AtomicU64::new(0), stop: AtomicBool::new(false), anchor: Mutex::new(None), peaks: Mutex::new(Vec::new()) });
         // Four seconds of headroom; the drain thread empties it every 10 ms.
         let (prod, mut cons) = rtrb::RingBuffer::<f32>::new((rate as usize * channels * 4).max(1 << 16));
 
@@ -241,6 +283,9 @@ impl Recording {
             .name("ggmm-rec-drain".into())
             .spawn(move || {
                 let mut out: Vec<f32> = Vec::with_capacity(rate as usize * channels * 60);
+                let mut acc = PeakAcc::default();
+                let mut fresh: Vec<f32> = Vec::new();
+                let mut seen = 0usize;
                 loop {
                     let done = sh.stop.load(Ordering::Acquire);
                     let n = cons.slots();
@@ -252,6 +297,16 @@ impl Recording {
                             chunk.commit_all();
                         }
                     }
+                    // Whole frames only; a partial frame waits for the next pass.
+                    let whole = (out.len() / channels.max(1)) * channels.max(1);
+                    if whole > seen {
+                        acc.feed(&out[seen..whole], channels, &mut fresh);
+                        seen = whole;
+                        if !fresh.is_empty() {
+                            sh.peaks.lock().unwrap().extend_from_slice(&fresh);
+                            fresh.clear();
+                        }
+                    }
                     if done {
                         break out;
                     }
@@ -261,6 +316,13 @@ impl Recording {
             .map_err(|e| format!("drain thread: {e}"))?;
 
         Ok(Recording { stream, shared, drain: Some(drain), rate, channels, device: name })
+    }
+
+    /// Live waveform pairs from pair index `from` on; also the frames captured.
+    pub fn peaks_since(&self, from: usize) -> (Vec<f32>, u64) {
+        let p = self.shared.peaks.lock().unwrap();
+        let start = (from * 2).min(p.len());
+        (p[start..].to_vec(), self.shared.frames.load(Ordering::Relaxed))
     }
 
     /// Stop capturing and hand back the take.
@@ -331,6 +393,21 @@ where
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn live_peaks_are_min_max_per_bucket_over_channels() {
+        let mut acc = super::PeakAcc::default();
+        let mut out = Vec::new();
+        // Stereo: L ramps up, R is its negative; bucket 1 then half of bucket 2.
+        let frames = super::PEAK_BUCKET + super::PEAK_BUCKET / 2;
+        let data: Vec<f32> = (0..frames).flat_map(|i| [i as f32 / 1000.0, -(i as f32) / 1000.0]).collect();
+        // Fed in uneven pieces (whole frames), as the drain thread does.
+        acc.feed(&data[..100], 2, &mut out);
+        acc.feed(&data[100..], 2, &mut out);
+        assert_eq!(out.len(), 2);
+        let last = (super::PEAK_BUCKET - 1) as f32 / 1000.0;
+        assert_eq!(out, vec![-last, last]);
+    }
+
     use super::*;
 
     fn mark(song: f64, heard_ns: i64) -> OutMark {

@@ -52,6 +52,17 @@ function serve() {
   return new Promise((r) => server.listen(PORT, () => r(server)));
 }
 
+const redPixels = (page) =>
+  page.evaluate(() => {
+    const c = document.querySelector(".lanes canvas");
+    const hex = getComputedStyle(document.documentElement).getPropertyValue("--danger").trim().replace("#", "");
+    const [r, g, b] = [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16));
+    const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+    let n = 0;
+    for (let i = 0; i < d.length; i += 4) if (Math.abs(d[i] - r) + Math.abs(d[i + 1] - g) + Math.abs(d[i + 2] - b) < 40) n++;
+    return n;
+  });
+
 const results = [];
 function check(name, pass, detail = "") {
   results.push({ name, pass, detail });
@@ -152,7 +163,11 @@ async function main() {
 
   // --- recording (previously untested) ----------------------------------
   await page.click("button:has-text('Record')");
-  await page.waitForTimeout(1800);
+  await page.waitForTimeout(700);
+  const liveRed1 = await redPixels(page);
+  await page.waitForTimeout(1100);
+  const liveRed2 = await redPixels(page);
+  check("the take draws live on its layer and grows (web capture)", liveRed1 > 100 && liveRed2 > liveRed1 * 1.4, `${liveRed1} → ${liveRed2} red px`);
   await page.click("button:has-text('REC')");
   await page.waitForTimeout(900);
   const status = await page.textContent(".statusbar");

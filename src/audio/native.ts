@@ -25,6 +25,7 @@ import type { SurroundLayout } from "../fx/voice-synth";
 import { anySoloed, isTrackAudible } from "./edits";
 import { punchIsActive } from "../fx/punch";
 import { bassIsActive } from "../fx/bass";
+import { LivePeaks } from "./liveTake";
 import { synthIsActive, surroundChannels } from "../fx/voice-synth";
 import { morphIsActive } from "../fx/morph";
 import { analyserBytes, logBands } from "./spectrum";
@@ -64,6 +65,8 @@ export interface NativeEngineBridge {
    *  the default. */
   recStart?(device?: string): Promise<{ sampleRate: number; channels: number; device: string }>;
   recStop?(): Promise<NativeTake>;
+  /** Live waveform of the running take from pair `from` on (older shells: absent). */
+  recPeaks?(from: number): Promise<{ peaks: Float32Array; frames: number; sampleRate: number; bucket: number } | null>;
   /** cpal input device names (older shells don't have it). */
   listInputDevices?(): Promise<string[]>;
 }
@@ -394,6 +397,38 @@ export class NativeBackend implements AudioBackend {
     this.web.setInputDevice(id);
   }
 
+  /** The running native take's waveform, filled by `startLivePoll`. */
+  private recLive: LivePeaks | null = null;
+  private liveTimer: ReturnType<typeof setInterval> | null = null;
+
+  liveTake(): LivePeaks | null {
+    return this.nativeRec ? this.recLive : this.web.liveTake();
+  }
+
+  /** Pull the native take's new waveform pairs ~20 times a second. */
+  private startLivePoll(rate: number): void {
+    this.recLive = new LivePeaks(rate);
+    if (!this.native.recPeaks) return;
+    let busy = false;
+    this.liveTimer = setInterval(() => {
+      const live = this.recLive;
+      if (busy || !live) return;
+      busy = true;
+      this.native.recPeaks!(live.pairs)
+        .then((r) => {
+          if (r && this.recLive === live) live.appendPairs(r.peaks, r.frames);
+        })
+        .catch(() => undefined)
+        .finally(() => (busy = false));
+    }, 50);
+  }
+
+  private stopLivePoll(): void {
+    if (this.liveTimer) clearInterval(this.liveTimer);
+    this.liveTimer = null;
+    this.recLive = null;
+  }
+
   async startRecording(): Promise<void> {
     this.takeStart = null;
     this.takeNote = "";
@@ -402,6 +437,7 @@ export class NativeBackend implements AudioBackend {
         const info = await this.native.recStart(this.wantDevice || undefined);
         this.inputDevice = info.device;
         this.nativeRec = true;
+        this.startLivePoll(info.sampleRate);
         return;
       } catch (err) {
         // Electron wraps IPC errors: "Error invoking remote method '…': Error: why".
@@ -415,6 +451,7 @@ export class NativeBackend implements AudioBackend {
   async stopRecording(): Promise<AudioBuffer> {
     if (!this.nativeRec) return this.web.stopRecording();
     this.nativeRec = false;
+    this.stopLivePoll();
     const take = await this.native.recStop!();
     let channels = take.channels.length ? take.channels : [new Float32Array(1)];
     const notes = ["native capture"];

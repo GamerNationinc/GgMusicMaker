@@ -128,6 +128,7 @@ contextBridge.exposeInMainWorld("ggmmNative", {
     scope: () => invoke("engine-scope"),
     recStart: (device) => invoke("engine-rec-start", device),
     listInputDevices: () => invoke("engine-list-input-devices"),
+    recPeaks: (from) => invoke("engine-rec-peaks", from),
     recStop: async () => {
       const take = await invoke("engine-rec-stop");
       const { token, size, frames, channelCount, ...rest } = take;

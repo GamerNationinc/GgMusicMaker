@@ -17,6 +17,7 @@ import { TrackChannel } from "./channel";
 import type { AudioBackend, DecodedAudio, MasterMeter } from "./backend";
 import { blockLevels, logBands } from "./spectrum";
 import { assembleTake, type Chunk } from "./recording";
+import { LivePeaks } from "./liveTake";
 import { buildMasterBus, deviceChannelsFor, type MasterBus } from "./master";
 import { surroundChannels, type SurroundLayout } from "../fx/voice-synth";
 import { punchIsActive } from "../fx/punch";
@@ -65,6 +66,7 @@ export class AudioEngine implements AudioBackend {
   private recNode: AudioWorkletNode | ScriptProcessorNode | null = null;
   private recMonitor: GainNode | null = null;
   private recChunks: Chunk[] = [];
+  private recLive: LivePeaks | null = null;
   private recSampleRate = 48000;
   /** True when the current take is being captured on the audio thread. */
   private recUsedWorklet = false;
@@ -454,6 +456,7 @@ export class AudioEngine implements AudioBackend {
     const src = this.ctx.createMediaStreamSource(this.recStream);
     this.recChunks = [];
     this.recSampleRate = this.ctx.sampleRate;
+    this.recLive = new LivePeaks(this.ctx.sampleRate);
 
     const useWorklet = await this.loadWorklet(this.ctx, RECORDER_WORKLET_URL);
     let node: AudioWorkletNode | ScriptProcessorNode;
@@ -466,7 +469,10 @@ export class AudioEngine implements AudioBackend {
       });
       worklet.port.onmessage = (e: MessageEvent) => {
         const data = e.data as { type?: string; channels?: Float32Array[] };
-        if (data?.type === "chunk" && data.channels) this.recChunks.push(data.channels);
+        if (data?.type === "chunk" && data.channels) {
+          this.recChunks.push(data.channels);
+          this.recLive?.feedPlanar(data.channels);
+        }
       };
       node = worklet;
     } else {
@@ -478,6 +484,7 @@ export class AudioEngine implements AudioBackend {
           frame.push(new Float32Array(inBuf.getChannelData(ch)));
         }
         this.recChunks.push(frame);
+        this.recLive?.feedPlanar(frame);
       };
       node = processor;
     }
@@ -492,6 +499,10 @@ export class AudioEngine implements AudioBackend {
     monitor.connect(this.ctx.destination);
     this.recNode = node;
     this.recMonitor = monitor;
+  }
+
+  liveTake(): LivePeaks | null {
+    return this.recLive;
   }
 
   /** Whether the in-flight take is using the audio-thread worklet path. */
@@ -517,6 +528,7 @@ export class AudioEngine implements AudioBackend {
     this.recMonitor = null;
     this.recStream = null;
     this.recChunks = [];
+    this.recLive = null;
 
     const { channels, frames } = assembleTake(chunks);
     const out = this.ctx.createBuffer(channels.length, Math.max(1, frames), rate);

@@ -194,6 +194,18 @@ pub struct RecordingInfo {
     pub device: String,
 }
 
+/// The live waveform of the take being recorded (see record::PEAK_BUCKET).
+#[napi(object)]
+pub struct RecPeaks {
+    /// (min, max) pairs from the requested pair index on.
+    pub peaks: Float32Array,
+    /// Frames captured so far.
+    pub frames: f64,
+    pub sample_rate: f64,
+    /// Frames per pair.
+    pub bucket: u32,
+}
+
 /// A device name from the environment (tests, or picking a device by hand).
 fn env_device(var: &str) -> Option<String> {
     std::env::var(var).ok().filter(|s| !s.is_empty())
@@ -409,6 +421,16 @@ impl NativeEngine {
             dropped: t.dropped as f64,
             device: t.device,
         })
+    }
+
+    /// Live waveform pairs of the running take from pair `from` on (null
+    /// when not recording) — polled by the page to draw the take as it grows.
+    #[napi]
+    pub fn rec_peaks(&self, from: u32) -> Option<RecPeaks> {
+        let slot = self.rec.lock().unwrap();
+        let r = slot.as_ref()?;
+        let (peaks, frames) = r.peaks_since(from as usize);
+        Some(RecPeaks { peaks: Float32Array::new(peaks), frames: frames as f64, sample_rate: r.rate, bucket: record::PEAK_BUCKET as u32 })
     }
 
     #[napi]

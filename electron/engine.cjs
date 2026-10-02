@@ -96,6 +96,8 @@ function register() {
     if (!e) throw new Error(loadError || "native engine unavailable");
     return e.recStart(device || undefined);
   });
+  // Live waveform of the take while it records (small: a few KB per poll).
+  ipcMain.handle("engine-rec-peaks", (_e, from) => getEngine()?.recPeaks(from >>> 0) ?? null);
   ipcMain.handle("engine-list-input-devices", () => {
     if (!getEngine()) throw new Error(loadError || "native engine unavailable");
     return getModule().listInputDevices();

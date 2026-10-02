@@ -9,6 +9,7 @@
     selectClip,
     moveClipTo,
     trimClipTo,
+    liveRecording,
   } from "../state/store";
   import { getSummary, columnStats, type ColumnStats } from "../render/peaks";
   import { clipEnd, projectDuration } from "../audio/edits";
@@ -33,7 +34,13 @@
 
   const EDGE = 8; // px hit zone for edge-trim
 
-  let contentWidth = $derived(Math.max(projectDuration($project) + 4, 30) * $pixelsPerSecond);
+  /** Where the take being recorded ends right now (it may run past the song). */
+  const liveEnd = $derived.by(() => {
+    if (!$liveRecording) return 0;
+    void $liveRecording.tick;
+    return $liveRecording.start + (engine.liveTake()?.seconds ?? 0);
+  });
+  let contentWidth = $derived(Math.max(projectDuration($project) + 4, liveEnd + 4, 30) * $pixelsPerSecond);
   let contentHeight = $derived(Math.max(1, $project.tracks.length) * LANE_HEIGHT);
 
   // The canvases only ever cover what is on screen. One canvas the size of
@@ -116,6 +123,7 @@
         if (cx > vx + w || cx + clip.duration * pps < vx) continue;
         drawClip(ctx, track, clip, laneColor($theme, track.color), y);
       }
+      if ($liveRecording?.trackId === track.id) drawLiveTake(ctx, y);
     }
     ctx.restore();
   }
@@ -309,6 +317,59 @@
     void buffer;
   }
 
+  /** The take being recorded, drawn as it grows (Ableton-style): a red clip
+   *  from where recording began to now, its waveform filled in as audio
+   *  arrives. Replaced by the real clip when recording stops. */
+  function drawLiveTake(ctx: CanvasRenderingContext2D, laneY: number) {
+    const rec = $liveRecording;
+    const live = engine.liveTake();
+    if (!rec || !live) return;
+    const pps = $pixelsPerSecond;
+    const k = $theme.tokens;
+    const red = k.danger;
+    const x = rec.start * pps;
+    const cw = Math.max(2, live.seconds * pps);
+    const { x: vx, w: vw } = view;
+    const x0 = Math.max(x, vx - 2), x1 = Math.min(x + cw, vx + vw + 2);
+    if (x1 <= x0) return;
+    const pad = 4;
+    const top = laneY + pad;
+    const clipH = LANE_HEIGHT - pad * 2;
+    ctx.fillStyle = k["clip-bg"];
+    ctx.fillRect(x0, top, x1 - x0, clipH);
+    ctx.fillStyle = red;
+    ctx.globalAlpha = 0.16;
+    ctx.fillRect(x0, top, x1 - x0, clipH);
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = red;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x + 0.5, top + 0.5, cw - 1, clipH - 1);
+    // Header: blinking dot + running length.
+    ctx.fillStyle = red;
+    ctx.fillRect(x0, top, x1 - x0, 13);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x + 3, top, Math.max(0, cw - 6), 13);
+    ctx.clip();
+    ctx.fillStyle = k["on-accent"];
+    ctx.font = "bold 10px 'DejaVu Sans Mono', monospace";
+    const dot = rec.tick % 10 < 6 ? "●" : "○";
+    ctx.fillText(`${dot} REC ${live.seconds.toFixed(1)}s`, Math.max(x + 3, vx + 3), top + 10);
+    ctx.restore();
+    // Waveform, one column per pixel, from the live min/max summary.
+    const wfTop = top + 15, wfH = clipH - 17, mid = wfTop + wfH / 2;
+    ctx.strokeStyle = red;
+    ctx.beginPath();
+    for (let px = Math.floor(x0); px < x1; px++) {
+      const r = live.range((px - x) / pps, (px + 1 - x) / pps);
+      if (!r) break;
+      const lo = Math.max(-1, r[0]), hi = Math.min(1, r[1]);
+      ctx.moveTo(px + 0.5, mid - hi * (wfH / 2));
+      ctx.lineTo(px + 0.5, mid - lo * (wfH / 2) + 1);
+    }
+    ctx.stroke();
+  }
+
   function drawRuler() {
     if (!rulerCanvas) return;
     const pps = $pixelsPerSecond;
@@ -340,6 +401,7 @@
     void $selectedClipId;
     void $theme;
     void $previewTick;
+    void $liveRecording;
     void view;
     drawLanes();
     drawRuler();

@@ -11,6 +11,7 @@
 // to be represented somehow. A native backend would swap them for opaque
 // buffer handles, which is why the store always refers to buffers by `bufferId`
 // and only touches raw buffers for waveform drawing.
+import type { LivePeaks } from "./liveTake";
 
 import type { Project, Track } from "./types";
 import type { ReverbSpace } from "./reverb";
@@ -108,6 +109,8 @@ export interface AudioBackend {
   startRecording(): Promise<void>;
   stopRecording(): Promise<AudioBuffer>;
   readonly isRecording: boolean;
+  /** The waveform of the take while it records (null when not recording). */
+  liveTake(): LivePeaks | null;
   /** False when capture fell back to the deprecated main-thread path, which
    *  can drop samples under load — worth surfacing to the user. */
   readonly recordingUsesWorklet: boolean;

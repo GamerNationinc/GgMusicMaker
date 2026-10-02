@@ -29,6 +29,16 @@ function check(name, ok, detail = "") {
   ok ? passed++ : failed++;
   console.log(`  ${ok ? "PASS" : "FAIL"}  ${name}${detail ? ` — ${detail}` : ""}`);
 }
+const redPixels = (page) =>
+  page.evaluate(() => {
+    const c = document.querySelector(".lanes canvas");
+    const hex = getComputedStyle(document.documentElement).getPropertyValue("--danger").trim().replace("#", "");
+    const [r, g, b] = [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16));
+    const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+    let n = 0;
+    for (let i = 0; i < d.length; i += 4) if (Math.abs(d[i] - r) + Math.abs(d[i + 1] - g) + Math.abs(d[i + 2] - b) < 40) n++;
+    return n;
+  });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ---- the room ---------------------------------------------------------------
@@ -155,9 +165,16 @@ async function waitStatus(page, re, ms = 20000) {
   await page.keyboard.press("r");
   const recStatus = await waitStatus(page, /Recording onto/);
   check("recording starts", /Recording onto/.test(recStatus), recStatus);
-  await sleep(3000);
+  await sleep(1000);
+  const red1 = await redPixels(page);
+  await sleep(1500);
+  const red2 = await redPixels(page);
+  check("the take draws live on its layer and grows while recording", red1 > 200 && red2 > red1 * 1.5, `${red1} → ${red2} red px`);
+  await sleep(500);
   await page.keyboard.press("r");
   const done = await waitStatus(page, /^Recorded /);
+  await sleep(200);
+  check("…and becomes a normal clip when recording stops", (await redPixels(page)) < 50, `${await redPixels(page)} red px`);
   await page.click("button[aria-label='Stop']");
   check("the take was captured natively and compensated", /native capture, [\d.]+ ms latency compensated/.test(done), done);
   check("no samples dropped", !/dropped/.test(done), done);
