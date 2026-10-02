@@ -127,13 +127,14 @@ export function activeSlots(track: Track): FxSlot[] {
 }
 
 /** Short names for the track-head badges (the rack uses the full labels). */
+/** Four letters at most: seven of them share a 200 px track head. */
 export const SLOT_SHORT: Record<FxSlot, string> = {
   place: "PAN",
   eq: "EQ",
-  punch: "PUNCH",
+  punch: "PNCH",
   bass: "BASS",
-  morph: "MORPH",
-  synth: "SYNTH",
+  morph: "MRPH",
+  synth: "SYN",
   reverb: "VERB",
 };
 

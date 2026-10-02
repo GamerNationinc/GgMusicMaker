@@ -69,6 +69,7 @@ import { saveBytes, confirmDialog, isNative, autosaveBridge, autosaveInterval, s
 import { STEM_RATE, audibleStems, rms, stemLayerName, stemSummary } from "../audio/stems";
 import { Autosaver, recoverAutosave as readAutosave, AUTOSAVE_MS } from "./autosave";
 import type { DecodedPcm } from "../audio/wav";
+import { withLoading } from "./loading";
 import { INITIAL_LOAD, type LoadState, frameUtilisation, ema, audioDropout } from "./load";
 
 /** The audio runtime. Typed as the interface, not the class, so a future
@@ -329,10 +330,13 @@ export async function recoverAutosave(): Promise<void> {
     return;
   }
   try {
-    const { header, audio } = await readAutosave(saved, autosaveStore, (done, total) =>
-      status.set(`Recovering ${name}: audio ${done} of ${total}…`),
-    );
-    await loadSession(header, audio, saved.meta?.path ?? null);
+    await withLoading("RECOVERING SESSION", async (report) => {
+      const { header, audio } = await readAutosave(saved, autosaveStore!, (done, total) => {
+        status.set(`Recovering ${name}: audio ${done} of ${total}…`);
+        report(total ? done / total : null, `${name} · audio ${done} of ${total}`);
+      });
+      await loadSession(header, audio, saved.meta?.path ?? null);
+    }, name);
     // Recovered work is still unsaved until the user saves it. Autosave it
     // again at once (this replaces the old autosave), so a second crash
     // before the next timer tick can't lose it.
@@ -775,8 +779,14 @@ export function armTrack(trackId: string): void {
 /** Decode files and drop each onto its own new layer at the playhead. */
 export async function importFiles(files: FileList | File[]): Promise<void> {
   const list = Array.from(files);
+  if (list.length === 0) return;
+  await withLoading(list.length > 1 ? `IMPORTING ${list.length} FILES` : "IMPORTING AUDIO", (report) => importList(list, report));
+}
+
+async function importList(list: File[], report: (p: number | null, detail?: string) => void): Promise<void> {
   const at = get(transport).playhead;
-  for (const file of list) {
+  for (const [i, file] of list.entries()) {
+    report(list.length > 1 ? i / list.length : null, file.name);
     try {
       status.set(`Decoding ${file.name}…`);
       const bytes = await file.arrayBuffer();
@@ -1246,7 +1256,7 @@ async function loadSession(header: SessionHeaderBase, audio: Map<string, Decoded
  *  confirmed discarding unsaved work via `confirmDiscardForOpen`). */
 export async function loadSessionFile(file: File): Promise<void> {
   try {
-    await loadSessionBytes(await file.arrayBuffer(), file.name);
+    await withLoading("OPENING SESSION", async () => loadSessionBytes(await file.arrayBuffer(), file.name), sessionDisplayName(file.name));
     await clearAutosave();
   } catch (err) {
     status.set(`Couldn't open ${file.name}: ${(err as Error).message}`);
@@ -1272,15 +1282,18 @@ export async function openSession(): Promise<boolean> {
     }
     // Header, then one WAV at a time: a 1 GB+ session is never read whole.
     const name = sessionDisplayName(picked.path);
-    let session;
-    try {
-      session = await readSession((off, len) => files.read(picked.token, off, len), picked.size, (done, total) =>
-        status.set(`Opening ${name}: audio ${done} of ${total}…`),
-      );
-    } finally {
-      await files.close(picked.token).catch(() => {});
-    }
-    await loadSession(session.header, session.audio, picked.path);
+    await withLoading("OPENING SESSION", async (report) => {
+      let session;
+      try {
+        session = await readSession((off, len) => files.read(picked.token, off, len), picked.size, (done, total) => {
+          status.set(`Opening ${name}: audio ${done} of ${total}…`);
+          report(total ? done / total : null, `${name} · audio ${done} of ${total}`);
+        });
+      } finally {
+        await files.close(picked.token).catch(() => {});
+      }
+      await loadSession(session.header, session.audio, picked.path);
+    }, name);
     await clearAutosave();
   } catch (err) {
     status.set(`Couldn't open session: ${(err as Error).message}`);

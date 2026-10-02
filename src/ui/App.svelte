@@ -11,6 +11,8 @@
   import EngineSwitch from "./EngineSwitch.svelte";
   import ModeSwitch from "./ModeSwitch.svelte";
   import InstrumentView from "./InstrumentView.svelte";
+  import AsciiLoader from "./AsciiLoader.svelte";
+  import { withBoot } from "../state/loading";
   import { mode, startController, deckPerforming, arrowGuard } from "../input/controller";
   import { nav } from "./timelineNav";
   import { clipEnd } from "../audio/edits";
@@ -48,7 +50,7 @@
     status.set(`Theme: ${t.label} (T to cycle).`);
   }
 
-  const STUDIO_KEYS = [["space", "play"], ["s", "split"], ["r", "rec"], ["del", "delete"], ["^z", "undo"], ["^s", "save"], ["←→ / L-stick", "scroll"], ["↑↓ / ruler drag", "zoom"], ["L-pad", "swipe · press+drag zoom"], ["z", "fit"], ["f", "follow"], ["t", "theme"]];
+  const STUDIO_KEYS = [["space", "play"], ["s", "split"], ["r", "rec"], ["del", "delete"], ["^z", "undo"], ["^s", "save"], ["←→↑↓", "scroll/zoom"], ["L-pad", "swipe · click+drag zoom"], ["z", "fit"], ["f", "follow"], ["t", "theme"]];
   const INSTRUMENT_KEYS = [["R-pad", "notes"], ["L-pad", "cutoff/reverb"], ["ABXY", "drums"], ["L1/R1+ABXY", "chords"], ["R2", "swell"], ["L5", "sustain"], ["R5", "tilt bend"], ["View+Menu", "studio"]];
 
   const sessionName = $derived(sessionDisplayName($sessionPath));
@@ -72,9 +74,17 @@
       }
       return quit;
     });
-    // Crash recovery first, so the timer never overwrites what it offers.
-    void recoverAutosave().then(startAutosave);
-    startController();
+    // The boot screen while the shell and controller come up; then crash
+    // recovery (before the timer, so it never overwrites what it offers).
+    void withBoot(async (report) => {
+      report(null, "connecting the controller");
+      startController();
+      // The first layout and paint happen under the boot screen. (A timer,
+      // not animation frames: a hidden window never runs those.)
+      await new Promise((r) => setTimeout(r, 80));
+    })
+      .then(recoverAutosave)
+      .then(startAutosave);
   });
 
   function onKey(e: KeyboardEvent) {
@@ -223,6 +233,7 @@
 
 <ExportDialog />
 <StemsDialog />
+<AsciiLoader />
 
 <style>
   .app-header {

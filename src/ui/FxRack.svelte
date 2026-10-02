@@ -994,7 +994,7 @@
     background: var(--panel-lo);
     border: 2px solid var(--bevel-dark);
     box-shadow: 2px 2px 0 #000;
-    flex: 1 1 180px;
+    flex: 1 1 140px;
     min-width: 0;
   }
   .slot.selected {

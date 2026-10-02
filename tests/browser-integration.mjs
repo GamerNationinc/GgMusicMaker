@@ -239,7 +239,7 @@ async function main() {
   check("FX chip on the head lights up", (await page.$(".head:nth-child(1) .chip.fx.lit")) !== null);
   const fxCount = (await page.textContent(".head:nth-child(1) .chip.fx .count")).trim();
   const lit = await page.$$eval(".head:nth-child(1) .badge.active", (els) => els.map((e) => e.textContent.trim()));
-  check("the head counts its active effects and badges them", fxCount === String(lit.length) && lit.includes("SYNTH"), `FX ${fxCount} · ${lit.join(" ")}`);
+  check("the head counts its active effects and badges them", fxCount === String(lit.length) && lit.includes("SYN"), `FX ${fxCount} · ${lit.join(" ")}`);
   check("the open layer's head is highlighted", (await page.$(".head:nth-child(1).selected")) !== null);
   check("the rack title says how many are active", /^\d+ of 7 active$/.test((await page.textContent(".active-count")).trim()));
   const wet = await exportBytes();
