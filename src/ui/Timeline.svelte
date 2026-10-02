@@ -13,13 +13,16 @@
   import { getSummary, columnStats, type ColumnStats } from "../render/peaks";
   import { clipEnd, projectDuration } from "../audio/edits";
   import type { Clip, Track } from "../audio/types";
-  import { LANE_HEIGHT, HEAD_WIDTH, RULER_HEIGHT } from "./constants";
+  import { LANE_HEIGHT, HEAD_WIDTH, RULER_HEIGHT, ZOOM_MIN, ZOOM_MAX } from "./constants";
+  import { nav, registerTimeline, follow, followHeld } from "./timelineNav";
+  import { Glide, fitRange, followScroll, zoomAround } from "./navMath";
+  import { wheelGuard } from "../input/controller";
   import TrackHead from "./TrackHead.svelte";
   import { theme } from "./themeStore";
   import { laneColor } from "./themes";
   import { punchPreviewFor, previewTick } from "./punchPreviewStore";
   import type { PunchPreview } from "../render/punchPreview";
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
 
   let laneCanvas: HTMLCanvasElement;
   let rulerCanvas: HTMLCanvasElement;
@@ -361,7 +364,95 @@
     ro.observe(lanesScroll);
     ro.observe(bodyEl);
     measure();
-    return () => ro.disconnect();
+    registerTimeline({ apply, fit });
+    // Not passive: ctrl+wheel must not zoom the whole page.
+    timelineEl.addEventListener("wheel", onWheel, { passive: false });
+    return () => {
+      ro.disconnect();
+      registerTimeline(null);
+      timelineEl.removeEventListener("wheel", onWheel);
+    };
+  });
+
+  // ---- navigation (see timelineNav.ts) -------------------------------------
+
+  let timelineEl: HTMLDivElement;
+  let rulerRow: HTMLDivElement;
+
+  /** Zoom anchor when none is given: the playhead if it's on screen, else the middle. */
+  function defaultAnchor(): number {
+    const w = lanesScroll.clientWidth;
+    const x = $transport.playhead * $pixelsPerSecond - lanesScroll.scrollLeft;
+    return x >= 0 && x <= w ? x : w / 2;
+  }
+
+  /** Set zoom + horizontal scroll together: the scroll has to wait for the
+   *  lanes to take their new width, or the browser clamps it to the old one. */
+  async function setView(pps: number, scrollLeft: number) {
+    if (pps !== $pixelsPerSecond) {
+      pixelsPerSecond.set(pps);
+      await tick();
+    }
+    lanesScroll.scrollLeft = scrollLeft;
+    measure();
+  }
+
+  function apply(dx: number, dy: number, zoom: number, anchorPx: number | null) {
+    if (!lanesScroll || !bodyEl) return;
+    bodyEl.scrollTop += dy;
+    if (zoom === 1) {
+      lanesScroll.scrollLeft += dx;
+      return;
+    }
+    const r = zoomAround($pixelsPerSecond, lanesScroll.scrollLeft + dx, anchorPx ?? defaultAnchor(), zoom, ZOOM_MIN, ZOOM_MAX);
+    void setView(r.pps, r.scrollLeft);
+  }
+
+  function fit(range?: [number, number]) {
+    if (!lanesScroll) return;
+    const w = lanesScroll.clientWidth - 2;
+    if (range) {
+      const r = fitRange(range[0], range[1], w, ZOOM_MIN, ZOOM_MAX);
+      void setView(r.pps, r.scrollLeft);
+    } else {
+      // The timeline always shows 4 s past the end (min 30 s) — fit that.
+      void setView(Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, w / Math.max(projectDuration($project) + 4, 30))), 0);
+    }
+  }
+
+  /** Mouse wheel / touchpad. Ctrl (or a touchpad pinch) zooms at the pointer;
+   *  Shift, the ruler, or a timeline with no layers to scroll through scroll
+   *  sideways; otherwise the layers scroll as usual. */
+  function onWheel(e: WheelEvent) {
+    if (wheelGuard()) {
+      // The Deck's left pad is driving the timeline itself; Steam's own
+      // scroll-wheel emulation of that pad must not scroll it twice.
+      e.preventDefault();
+      return;
+    }
+    const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? lanesScroll.clientWidth : 1;
+    const dy = e.deltaY * unit, dx = e.deltaX * unit;
+    if (e.ctrlKey || e.metaKey || e.altKey) {
+      e.preventDefault();
+      nav.zoomBy(Math.exp(-dy * 0.002), e.clientX - lanesScroll.getBoundingClientRect().left);
+      return;
+    }
+    const noLayersToScroll = bodyEl.scrollHeight <= bodyEl.clientHeight + 1;
+    if (e.shiftKey || rulerRow.contains(e.target as Node) || (noLayersToScroll && dx === 0)) {
+      e.preventDefault();
+      nav.scrollBy(dy + dx, 0);
+    }
+  }
+
+  // Follow: turn the page when the playhead runs off the view.
+  $effect(() => {
+    const ph = $transport.playhead;
+    if (!$transport.isPlaying || !$follow || !lanesScroll || followHeld() || drag || pinch || pan || rulerDrag) return;
+    const s = followScroll(ph * $pixelsPerSecond, lanesScroll.scrollLeft, lanesScroll.clientWidth);
+    if (s !== null) {
+      lanesScroll.scrollLeft = s;
+      measure();
+    }
   });
 
   // ---- interaction --------------------------------------------------------
@@ -377,14 +468,44 @@
     return Math.max(0, (e.clientX - rect.left) / $pixelsPerSecond);
   }
 
+  /** Capture can refuse (a pointer that has already gone): carry on uncaptured. */
+  function capture(el: Element, id: number) {
+    try {
+      el.setPointerCapture(id);
+    } catch {
+      /* not capturable */
+    }
+  }
+
   function onPointerDown(e: PointerEvent) {
+    nav.stopGlide();
+    const touch = e.pointerType === "touch";
+    if (touch) {
+      touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      capture(lanesEl, e.pointerId);
+      if (touches.size === 2) {
+        // Second finger: whatever the first one started becomes a pinch.
+        drag = null;
+        pan = null;
+        startPinch();
+        return;
+      }
+      if (touches.size > 2) return;
+    }
     const rect = lanesEl.getBoundingClientRect();
     const time = eventTime(e);
     const ti = Math.floor((e.clientY - rect.top) / LANE_HEIGHT);
     const track = $project.tracks[ti];
-    if (!track) {
+    const empty = () => {
+      if (touch) {
+        pan = { x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, moved: false, time };
+        return;
+      }
       selectClip(null);
       seek(time);
+    };
+    if (!track) {
+      empty();
       return;
     }
     const pps = $pixelsPerSecond;
@@ -397,8 +518,7 @@
       if (x >= cx && x <= cxEnd) hit = clip;
     }
     if (!hit) {
-      selectClip(null);
-      seek(time);
+      empty();
       return;
     }
     selectClip(hit.id);
@@ -411,10 +531,29 @@
     } else {
       drag = { kind: "move", trackId: track.id, clipId: hit.id, grab: time - hit.startTime };
     }
-    lanesEl.setPointerCapture(e.pointerId);
+    capture(lanesEl, e.pointerId);
   }
 
   function onPointerMove(e: PointerEvent) {
+    if (e.pointerType === "touch" && touches.has(e.pointerId)) {
+      touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pinch && touches.size >= 2) {
+        movePinch();
+        return;
+      }
+      if (pan) {
+        const dx = e.clientX - pan.x, dy = e.clientY - pan.y;
+        pan.x = e.clientX;
+        pan.y = e.clientY;
+        if (!pan.moved && Math.hypot(e.clientX - pan.sx, e.clientY - pan.sy) < 8) return;
+        pan.moved = true;
+        // Content follows the finger.
+        lanesScroll.scrollLeft -= dx;
+        bodyEl.scrollTop -= dy;
+        touchGlide.track(performance.now(), -dx, -dy);
+        return;
+      }
+    }
     if (!drag) return;
     const time = eventTime(e);
     if (drag.kind === "move") {
@@ -427,6 +566,24 @@
   }
 
   function onPointerUp(e: PointerEvent) {
+    if (e.pointerType === "touch") {
+      touches.delete(e.pointerId);
+      if (pinch && touches.size < 2) {
+        pinch = null;
+        // The finger left behind doesn't start anything new.
+        touches.clear();
+      }
+      if (pan) {
+        if (!pan.moved) {
+          selectClip(null);
+          seek(pan.time);
+        } else if (touchGlide.release(performance.now())) {
+          nav.fling(touchGlide.vx, touchGlide.vy);
+        }
+        touchGlide.stop();
+        pan = null;
+      }
+    }
     drag = null;
     try {
       lanesEl.releasePointerCapture(e.pointerId);
@@ -435,23 +592,95 @@
     }
   }
 
+  // Ruler: click = jump there. Drag = Ableton's zoom drag: down zooms in,
+  // up zooms out, and the time you grabbed stays under the pointer, so
+  // sideways scrolls. Double-click = whole song.
+  let rulerDrag: { x0: number; y0: number; pps0: number; t: number; moved: boolean } | null = null;
+
+  function rulerX(e: PointerEvent): number {
+    return e.clientX - rulerScroll.getBoundingClientRect().left;
+  }
+
   function onRulerDown(e: PointerEvent) {
-    const rect = rulerCanvas.getBoundingClientRect();
-    seek(Math.max(0, (e.clientX - rect.left + view.x) / $pixelsPerSecond));
+    nav.stopGlide();
+    const t = Math.max(0, (rulerX(e) + lanesScroll.scrollLeft) / $pixelsPerSecond);
+    rulerDrag = { x0: e.clientX, y0: e.clientY, pps0: $pixelsPerSecond, t, moved: false };
+    capture(rulerCanvas, e.pointerId);
+  }
+
+  function onRulerMove(e: PointerEvent) {
+    if (!rulerDrag) return;
+    const dy = e.clientY - rulerDrag.y0;
+    if (!rulerDrag.moved && Math.hypot(e.clientX - rulerDrag.x0, dy) < 4) return;
+    rulerDrag.moved = true;
+    const pps = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, rulerDrag.pps0 * Math.exp(dy * 0.012)));
+    void setView(pps, Math.max(0, rulerDrag.t * pps - rulerX(e)));
+  }
+
+  function onRulerUp(e: PointerEvent) {
+    if (rulerDrag && !rulerDrag.moved) seek(rulerDrag.t);
+    rulerDrag = null;
+    try {
+      rulerCanvas.releasePointerCapture(e.pointerId);
+    } catch {
+      /* not captured */
+    }
+  }
+
+  // ---- touch: one finger on empty lane pans (flick to glide), tap seeks;
+  // two fingers pinch-zoom round their midpoint and pan together. A finger
+  // on a clip still moves / trims it.
+  const touches = new Map<number, { x: number; y: number }>();
+  let pan: { x: number; y: number; sx: number; sy: number; moved: boolean; time: number } | null = null;
+  let pinch: { d0: number; pps0: number; t: number; my: number } | null = null;
+  const touchGlide = new Glide();
+
+  function startPinch() {
+    const [a, b] = [...touches.values()];
+    const mx = (a.x + b.x) / 2 - lanesScroll.getBoundingClientRect().left;
+    pinch = {
+      d0: Math.max(20, Math.hypot(a.x - b.x, a.y - b.y)),
+      pps0: $pixelsPerSecond,
+      t: (lanesScroll.scrollLeft + mx) / $pixelsPerSecond,
+      my: (a.y + b.y) / 2,
+    };
+  }
+
+  function movePinch() {
+    if (!pinch) return;
+    const [a, b] = [...touches.values()];
+    const d = Math.max(20, Math.hypot(a.x - b.x, a.y - b.y));
+    const mx = (a.x + b.x) / 2 - lanesScroll.getBoundingClientRect().left;
+    const my = (a.y + b.y) / 2;
+    const pps = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, (pinch.pps0 * d) / pinch.d0));
+    bodyEl.scrollTop -= my - pinch.my;
+    pinch.my = my;
+    void setView(pps, Math.max(0, pinch.t * pps - mx));
   }
 </script>
 
-<div class="timeline">
+<div class="timeline" bind:this={timelineEl}>
   <!-- Ruler row: corner + scrollable ruler -->
-  <div class="ruler-row" style:height="{RULER_HEIGHT}px">
+  <div class="ruler-row" style:height="{RULER_HEIGHT}px" bind:this={rulerRow}>
     <div class="corner" style:width="{HEAD_WIDTH}px">
       <span class="label">LAYERS</span>
+      <button
+        class="follow"
+        class:on={$follow}
+        onclick={() => nav.toggleFollow()}
+        aria-pressed={$follow}
+        title="Follow: the view turns the page with the playhead (F)">⇥ FOLLOW</button>
     </div>
     <div class="ruler-scroll" bind:this={rulerScroll}>
       <div class="ruler-track" style:width="{contentWidth}px" style:height="{RULER_HEIGHT}px">
         <canvas
           bind:this={rulerCanvas}
           onpointerdown={onRulerDown}
+          onpointermove={onRulerMove}
+          onpointerup={onRulerUp}
+          onpointercancel={onRulerUp}
+          ondblclick={() => nav.fit()}
+          title="Click: jump · drag down/up: zoom in/out · drag sideways: scroll · double-click: whole song"
           style:height="{RULER_HEIGHT}px"
         ></canvas>
       </div>
@@ -470,7 +699,7 @@
     </div>
 
     <div class="lanes-scroll" bind:this={lanesScroll} onscroll={onScroll}>
-      <div class="lanes" bind:this={lanesEl} style:width="{contentWidth}px" style:height="{contentHeight}px" onpointerdown={onPointerDown} onpointermove={onPointerMove} onpointerup={onPointerUp} role="presentation">
+      <div class="lanes" bind:this={lanesEl} style:width="{contentWidth}px" style:height="{contentHeight}px" onpointerdown={onPointerDown} onpointermove={onPointerMove} onpointerup={onPointerUp} onpointercancel={onPointerUp} role="presentation">
         <canvas bind:this={laneCanvas}></canvas>
         <div class="playhead" style:left="{$transport.playhead * $pixelsPerSecond}px"></div>
       </div>
@@ -495,7 +724,8 @@
     flex: 0 0 auto;
     display: flex;
     align-items: center;
-    padding-left: 10px;
+    justify-content: space-between;
+    padding: 0 4px 0 10px;
     border-right: 1px solid var(--box);
     border-bottom: 1px solid var(--box);
   }
@@ -544,6 +774,25 @@
   }
   .ruler-track {
     position: relative;
+  }
+  .ruler-track canvas {
+    cursor: zoom-in;
+    touch-action: none;
+  }
+  .follow {
+    font-family: var(--font);
+    font-size: 9px;
+    letter-spacing: 1px;
+    min-height: 20px;
+    padding: 0 6px;
+    border: 1px solid var(--box, var(--bevel-dark));
+    background: var(--panel-lo);
+    color: var(--ink-dim);
+    cursor: pointer;
+  }
+  .follow.on {
+    color: var(--green);
+    border-color: var(--green);
   }
   .playhead {
     position: absolute;

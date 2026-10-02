@@ -158,6 +158,54 @@ try {
   check("View + Menu goes back to Studio", !!(await page.$(".workspace")) && !(await page.$("[data-role=instrument]")));
   await send({ buttons: { a: true } });
   check("in Studio the controller plays nothing", (await peakOver(250)) < 1e-3);
+  await send();
+
+  // --- Studio: the left pad and stick drive the timeline ---
+  await page.setInputFiles("input[type=file][accept='audio/*']", [join(ROOT, "tests", "fixtures", "tone-4s.wav")]);
+  await page.waitForSelector(".head", { timeout: 10000 });
+  const lanesBox = await page.$eval(".lanes-scroll", (el) => {
+    const r = el.getBoundingClientRect();
+    return { x: r.x + r.width / 2, y: r.y + 40 };
+  });
+  await page.mouse.move(lanesBox.x, lanesBox.y); // Steam's cursor rests on the timeline
+  const scrollX = () => page.$eval(".lanes-scroll", (el) => el.scrollLeft);
+  const laneWidth = () => page.$eval(".lanes", (el) => el.getBoundingClientRect().width);
+  await page.evaluate(() => (document.querySelector(".lanes-scroll").scrollLeft = 0));
+  for (let i = 0; i <= 12; i++) {
+    await send({ lpad: { x: 0.7 - i * 0.1, y: 0, touch: true } });
+    await sleep(8);
+  }
+  await send();
+  await sleep(150);
+  const swiped = await scrollX();
+  check("left pad swipe scrolls the song (content follows the thumb)", swiped > 300, `scrollLeft ${swiped}`);
+  await sleep(1200); // let the glide settle
+  const w0 = await laneWidth();
+  for (let i = 0; i <= 8; i++) {
+    await send({ lpad: { x: 0, y: 0.4 - i * 0.08, touch: true }, buttons: { lpadClick: true } });
+    await sleep(8);
+  }
+  await send();
+  await sleep(150);
+  const w1 = await laneWidth();
+  check("left pad press + drag down zooms in", w1 > w0 * 1.5, `${Math.round(w0)} → ${Math.round(w1)} px`);
+  const s0 = await scrollX();
+  for (let i = 0; i < 40; i++) {
+    await send({ lstick: { x: 1, y: 0 } });
+    await sleep(10);
+  }
+  await send();
+  await sleep(100);
+  const s1 = await scrollX();
+  check("left stick scrolls smoothly", s1 - s0 > 200, `${s0} → ${s1}`);
+  for (let i = 0; i < 30; i++) {
+    await send({ lstick: { x: 0, y: -1 } });
+    await sleep(10);
+  }
+  await send();
+  await sleep(100);
+  check("left stick down zooms out", (await laneWidth()) < w1, `${Math.round(w1)} → ${Math.round(await laneWidth())} px`);
+  check("Follow is on by default", (await page.getAttribute(".follow", "aria-pressed")) === "true");
 } finally {
   await app.close().catch(() => {});
   await rm(userData, { recursive: true, force: true });

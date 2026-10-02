@@ -5,13 +5,15 @@
 // through `handle`: View + Menu together cycles the mode from anywhere; in
 // Instrument mode the state drives the live instrument.
 //
-// Studio mode only asks the shell for reports when a button changes (the
-// combo is all it needs); Instrument mode takes all 250 a second.
+// Studio mode drives the timeline (studioNav.ts): the left pad is a
+// trackpad for it and the left stick scrolls / zooms, so every mode takes
+// all 250 reports a second.
 
 import { get, writable } from "svelte/store";
 import { engine, status } from "../state/store";
 import { emptyState, fromGamepad, hapticPulse, parseDeckReport, type ControllerState } from "./deckpad";
 import { Instrument, type Haptic, type InstrumentView, type Output } from "./instrument";
+import { StudioNav } from "./studioNav";
 
 export type AppMode = "studio" | "instrument" | "dj";
 
@@ -43,6 +45,16 @@ export function screenOnly<E extends Event>(fn: (e: E) => void): (e: E) => void 
 }
 
 const instrument = new Instrument();
+const studio = new StudioNav();
+
+/** True while the Deck's left pad is driving the timeline (and a moment
+ *  after): Steam's desktop layout turns that pad into a scroll wheel too,
+ *  and its wheel events must not scroll the timeline a second time. */
+export const wheelGuard = (): boolean => studio.padBusy(performance.now());
+
+/** True while the raw left stick is moving the timeline: Steam also types
+ *  arrow keys for it, which the key handler must then ignore. */
+export const arrowGuard = (): boolean => studio.stickBusy(performance.now());
 export const instrumentView = writable<InstrumentView>(instrument.view());
 
 interface DeckBridge {
@@ -83,13 +95,25 @@ export function startController(): void {
       deckOk = r.ok;
       if (r.ok) {
         controllerSource.set("deck");
-        deck!.detail(get(mode) === "studio" ? "buttons" : "full");
+        deck!.detail("full");
       }
       updatePerforming();
     });
   }
   if (typeof window !== "undefined") {
     window.addEventListener("gamepadconnected", pollGamepads);
+    // Where the mouse is (the Deck's right pad moves it): the left pad only
+    // takes over the timeline when the pointer isn't over something else
+    // that scrolls (the FX rack, a dialog) — there Steam's wheel keeps working.
+    window.addEventListener("pointermove", (e) => studio.pointerAt(e.clientX, e.clientY), { passive: true });
+    // Steam maps a left-pad click to the middle mouse button.
+    const swallow = (e: MouseEvent) => {
+      if (e.button === 1 && wheelGuard()) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
+    for (const t of ["mousedown", "mouseup", "auxclick"] as const) window.addEventListener(t, swallow, true);
   }
 }
 
@@ -126,6 +150,8 @@ function handle(s: ControllerState): void {
   if (get(mode) === "instrument") {
     send(instrument.update(s));
     scheduleView();
+  } else if (get(mode) === "studio") {
+    for (const side of studio.update(s, performance.now())) haptic({ side, strength: "tick" });
   }
 }
 
@@ -166,7 +192,7 @@ export function setMode(m: AppMode): void {
   if (from === "instrument") send(instrument.release());
   mode.set(m);
   updatePerforming();
-  if (deckOk) deck?.detail(m === "studio" ? "buttons" : "full");
+  studio.reset();
   if (m === "instrument") {
     void engine.ensureRunning();
     // Nothing keeps focus: Steam's desktop layout sends Enter/Space for

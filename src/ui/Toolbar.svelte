@@ -18,7 +18,6 @@
     canUndo,
     canRedo,
     transport,
-    pixelsPerSecond,
     newSession,
     openSession,
     saveSession,
@@ -28,7 +27,7 @@
   } from "../state/store";
   import { SESSION_EXTENSION } from "../state/session";
   import { projectDuration } from "../audio/edits";
-  import { ZOOM_MIN, ZOOM_MAX } from "./constants";
+  import { nav } from "./timelineNav";
 
   let fileInput: HTMLInputElement;
   let sessionInput: HTMLInputElement;
@@ -63,18 +62,15 @@
 
   // Multiplicative zoom over a wide range: from a whole song on one screen
   // down to a few samples per pixel for trimming dead space.
+  // Zooms round the playhead (if it's on screen), like the keys and the Deck.
   function zoom(factor: number) {
-    pixelsPerSecond.update((p) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, p * factor)));
+    nav.zoomBy(factor);
   }
 
   /** Fit the whole project into the visible lanes. */
   function zoomFit() {
-    const lanes = document.querySelector<HTMLElement>(".lanes-scroll");
-    const dur = projectDuration($project);
-    if (!lanes || dur <= 0) return;
-    // The timeline always shows 4 s past the end (min 30 s) — fit that.
-    pixelsPerSecond.set(Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, (lanes.clientWidth - 2) / Math.max(dur + 4, 30))));
-    lanes.scrollLeft = 0;
+    if (projectDuration($project) <= 0) return;
+    nav.fit();
   }
 </script>
 

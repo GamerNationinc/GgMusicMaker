@@ -684,6 +684,102 @@ async function main() {
   await page.click(".head:nth-child(3) .chip.solo");
   check("clicking the only solo turns solo off", (await soloed()) === "", await soloed());
 
+  // --- timeline navigation: wheel, ruler drag, keys, touch ------------------
+  {
+    const lanesW = () => page.$eval(".lanes", (el) => el.getBoundingClientRect().width);
+    const scrollX = () => page.$eval(".lanes-scroll", (el) => el.scrollLeft);
+    await page.keyboard.press("z"); // fit the song
+    await page.waitForTimeout(150);
+    const fitW = await lanesW();
+    const box = await page.$eval(".lanes-scroll", (el) => {
+      const r = el.getBoundingClientRect();
+      return { x: r.x, y: r.y, w: r.width };
+    });
+    // Ctrl + wheel zooms in at the pointer, keeping that moment under it.
+    const px = box.x + box.w * 0.6;
+    const tBefore = await page.evaluate((x) => {
+      const l = document.querySelector(".lanes-scroll");
+      return (l.scrollLeft + x - l.getBoundingClientRect().x) / document.querySelector(".lanes").getBoundingClientRect().width;
+    }, px);
+    await page.mouse.move(px, box.y + 30);
+    await page.keyboard.down("Control");
+    for (let i = 0; i < 5; i++) await page.mouse.wheel(0, -120);
+    await page.keyboard.up("Control");
+    await page.waitForTimeout(200);
+    const zoomedW = await lanesW();
+    const tAfter = await page.evaluate((x) => {
+      const l = document.querySelector(".lanes-scroll");
+      return (l.scrollLeft + x - l.getBoundingClientRect().x) / document.querySelector(".lanes").getBoundingClientRect().width;
+    }, px);
+    check("ctrl + wheel zooms in round the pointer", zoomedW > fitW * 2 && Math.abs(tAfter - tBefore) < 0.01, `${Math.round(fitW)} → ${Math.round(zoomedW)} px, anchor ${tBefore.toFixed(3)} → ${tAfter.toFixed(3)}`);
+    // Wheel over the ruler scrolls sideways.
+    const r0 = await scrollX();
+    const ruler = await page.$eval(".ruler-scroll", (el) => {
+      const r = el.getBoundingClientRect();
+      return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+    });
+    await page.mouse.move(ruler.x, ruler.y);
+    await page.mouse.wheel(0, 300);
+    await page.waitForTimeout(200);
+    check("wheel over the ruler scrolls the song", (await scrollX()) > r0 + 100, `${r0} → ${await scrollX()}`);
+    // Ruler drag down = zoom in (Ableton); a plain click still seeks.
+    const w2 = await lanesW();
+    await page.mouse.move(ruler.x, ruler.y);
+    await page.mouse.down();
+    for (let i = 1; i <= 6; i++) await page.mouse.move(ruler.x, ruler.y + i * 10);
+    await page.mouse.up();
+    await page.waitForTimeout(150);
+    check("dragging down on the ruler zooms in", (await lanesW()) > w2 * 1.5, `${Math.round(w2)} → ${Math.round(await lanesW())} px`);
+    const ph0 = await page.$eval(".playhead", (el) => el.style.left);
+    await page.mouse.click(ruler.x - 100, ruler.y);
+    await page.waitForTimeout(150);
+    check("clicking the ruler still moves the playhead", (await page.$eval(".playhead", (el) => el.style.left)) !== ph0);
+    // Keys: → scrolls, ↓ zooms out.
+    await page.evaluate(() => document.activeElement?.blur?.());
+    const k0 = await scrollX();
+    await page.keyboard.press("ArrowRight");
+    await page.waitForTimeout(100);
+    check("→ scrolls the song", (await scrollX()) > k0, `${k0} → ${await scrollX()}`);
+    const kw = await lanesW();
+    await page.keyboard.press("ArrowDown");
+    await page.waitForTimeout(100);
+    check("↓ zooms out", (await lanesW()) < kw);
+    // Touch: two fingers spreading apart zoom in.
+    const pw = await lanesW();
+    await page.evaluate(() => {
+      const el = document.querySelector(".lanes");
+      const r = document.querySelector(".lanes-scroll").getBoundingClientRect();
+      const y = r.y + 50, cx = r.x + r.width / 2;
+      const ev = (type, id, x) => el.dispatchEvent(new PointerEvent(type, { pointerId: id, pointerType: "touch", bubbles: true, clientX: x, clientY: y }));
+      ev("pointerdown", 21, cx - 40);
+      ev("pointerdown", 22, cx + 40);
+      for (let i = 1; i <= 8; i++) {
+        ev("pointermove", 21, cx - 40 - i * 15);
+        ev("pointermove", 22, cx + 40 + i * 15);
+      }
+      ev("pointerup", 21, cx - 160);
+      ev("pointerup", 22, cx + 160);
+    });
+    await page.waitForTimeout(150);
+    check("two-finger pinch zooms the timeline", (await lanesW()) > pw * 2, `${Math.round(pw)} → ${Math.round(await lanesW())} px`);
+    // One finger on empty lane space pans (content follows the finger).
+    await page.evaluate(() => (document.querySelector(".lanes-scroll").scrollLeft = 400));
+    await page.evaluate(() => {
+      const el = document.querySelector(".lanes");
+      const r = document.querySelector(".lanes-scroll").getBoundingClientRect();
+      const y = r.y + r.height - 10 > r.y + 96 ? r.y + 96 + 20 : r.y + 50; // below the only layer if there's room
+      const ev = (type, x) => el.dispatchEvent(new PointerEvent(type, { pointerId: 31, pointerType: "touch", bubbles: true, clientX: x, clientY: y }));
+      ev("pointerdown", r.x + 600);
+      for (let i = 1; i <= 10; i++) ev("pointermove", r.x + 600 - i * 20);
+      ev("pointerup", r.x + 400);
+    });
+    await page.waitForTimeout(100);
+    check("one finger drags the timeline along", (await scrollX()) > 500, `${await scrollX()}`);
+    await page.keyboard.press("z");
+    await page.waitForTimeout(150);
+    check("Z fits the whole song again", (await scrollX()) === 0 && Math.abs((await lanesW()) - fitW) < 2);
+  }
+
   await browser.close();
   server.close();
 

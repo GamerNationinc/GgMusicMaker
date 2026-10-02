@@ -11,7 +11,9 @@
   import EngineSwitch from "./EngineSwitch.svelte";
   import ModeSwitch from "./ModeSwitch.svelte";
   import InstrumentView from "./InstrumentView.svelte";
-  import { mode, startController, deckPerforming } from "../input/controller";
+  import { mode, startController, deckPerforming, arrowGuard } from "../input/controller";
+  import { nav } from "./timelineNav";
+  import { clipEnd } from "../audio/edits";
   import {
     togglePlay,
     splitAtPlayhead,
@@ -23,6 +25,8 @@
     duplicateSelectedTrack,
     status,
     transport,
+    project,
+    selectedClipId,
     saveSession,
     openSession,
     confirmDiscardForOpen,
@@ -44,7 +48,7 @@
     status.set(`Theme: ${t.label} (T to cycle).`);
   }
 
-  const STUDIO_KEYS = [["space", "play"], ["s", "split"], ["r", "rec"], ["del", "delete"], ["t", "theme"], ["^z", "undo"], ["^d", "dup layer"], ["^s", "save"]];
+  const STUDIO_KEYS = [["space", "play"], ["s", "split"], ["r", "rec"], ["del", "delete"], ["^z", "undo"], ["^s", "save"], ["←→ / L-stick", "scroll"], ["↑↓ / ruler drag", "zoom"], ["L-pad", "swipe · press+drag zoom"], ["z", "fit"], ["f", "follow"], ["t", "theme"]];
   const INSTRUMENT_KEYS = [["R-pad", "notes"], ["L-pad", "cutoff/reverb"], ["ABXY", "drums"], ["L1/R1+ABXY", "chords"], ["R2", "swell"], ["L5", "sustain"], ["R5", "tilt bend"], ["View+Menu", "studio"]];
 
   const sessionName = $derived(sessionDisplayName($sessionPath));
@@ -81,7 +85,7 @@
       return;
     }
     const tag = (e.target as HTMLElement)?.tagName;
-    if (tag === "INPUT" || tag === "TEXTAREA") return;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
     if (e.ctrlKey || e.metaKey) {
       const k = e.key.toLowerCase();
       if (k === "s") {
@@ -113,6 +117,40 @@
       case " ":
         e.preventDefault();
         togglePlay();
+        break;
+      // Timeline navigation. The Deck's left stick also arrives here as
+      // arrow keys (Steam's desktop layout); while the raw stick is driving
+      // the timeline smoothly those are dropped.
+      case "ArrowLeft":
+      case "ArrowRight":
+      case "ArrowUp":
+      case "ArrowDown": {
+        e.preventDefault();
+        if (arrowGuard()) break;
+        const w = document.querySelector(".lanes-scroll")?.clientWidth ?? 800;
+        if (e.key === "ArrowLeft") nav.scrollBy(-w * 0.2);
+        else if (e.key === "ArrowRight") nav.scrollBy(w * 0.2);
+        else nav.zoomBy(e.key === "ArrowUp" ? 1.25 : 1 / 1.25);
+        break;
+      }
+      case "+":
+      case "=":
+        nav.zoomBy(1.5);
+        break;
+      case "-":
+      case "_":
+        nav.zoomBy(1 / 1.5);
+        break;
+      case "z":
+      case "Z": {
+        // Ableton's Z: zoom to the selection — here the selected clip, or the whole song.
+        const clip = $project.tracks.flatMap((t) => t.clips).find((c) => c.id === $selectedClipId);
+        nav.fit(clip ? [clip.startTime, clipEnd(clip)] : undefined);
+        break;
+      }
+      case "f":
+      case "F":
+        status.set(nav.toggleFollow() ? "Follow on: the view turns the page with the playhead." : "Follow off.");
         break;
       case "s":
       case "S":

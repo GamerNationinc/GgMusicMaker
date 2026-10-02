@@ -2,9 +2,10 @@
 // deckpad.rs) reads the controller's state reports on its own thread; this
 // polls the newest one every 4 ms (the controller sends at 250 Hz) and
 // forwards it to the page that asked, which parses and maps it
-// (src/input/deckpad.ts). Studio mode asks for "buttons" detail — a report
-// only when a button changes — so the View + Menu mode combo works without
-// 250 messages a second; Instrument mode takes every report.
+// (src/input/deckpad.ts). Every mode takes every report now (Studio drives
+// the timeline from the left pad and stick); "buttons" detail — a report
+// only when a button changes — is still here for a page that only needs
+// the mode combo.
 //
 // GGMM_DECKPAD=off never opens the device; GGMM_DECKPAD=fake reports it as
 // present without opening it, so tests can inject reports of their own
