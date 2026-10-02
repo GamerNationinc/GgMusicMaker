@@ -133,9 +133,21 @@ impl PunchParams {
 
 /// The JS core's cookbook biquad (0 dB-peak RBJ LP/HP with a linear Q).
 #[derive(Clone, Copy, Default)]
-struct CoreBiquad(Biquad);
+pub(crate) struct CoreBiquad(Biquad);
 impl CoreBiquad {
-    fn set(&mut self, lp: bool, freq: f64, q: f64, sr: f64) {
+    /// (b0, b1, b2, a1, a2)
+    pub(crate) fn coeffs(&self) -> (f64, f64, f64, f64, f64) {
+        let b = &self.0;
+        (b.b0, b.b1, b.b2, b.a1, b.a2)
+    }
+    #[inline]
+    pub(crate) fn process(&mut self, x: f64) -> f64 {
+        self.0.process(x)
+    }
+    pub(crate) fn reset(&mut self) {
+        self.0.reset();
+    }
+    pub(crate) fn set(&mut self, lp: bool, freq: f64, q: f64, sr: f64) {
         let w0 = 2.0 * PI * freq.clamp(10.0, sr * 0.45) / sr;
         let cw = w0.cos();
         let alpha = w0.sin() / (2.0 * q);
@@ -155,23 +167,23 @@ impl CoreBiquad {
 }
 
 #[inline]
-fn cascade(f: &mut [CoreBiquad; 2], x: f64) -> f64 {
+pub(crate) fn cascade(f: &mut [CoreBiquad; 2], x: f64) -> f64 {
     let y = f[0].0.process(x);
     f[1].0.process(y)
 }
 
 #[derive(Clone, Copy)]
-struct Env {
+pub(crate) struct Env {
     a: f64,
     r: f64,
-    v: f64,
+    pub(crate) v: f64,
 }
 impl Env {
-    fn new(att: f64, rel: f64, sr: f64) -> Self {
+    pub(crate) fn new(att: f64, rel: f64, sr: f64) -> Self {
         Env { a: (-1.0 / (sr * att)).exp(), r: (-1.0 / (sr * rel)).exp(), v: 0.0 }
     }
     #[inline]
-    fn step(&mut self, x: f64) -> f64 {
+    pub(crate) fn step(&mut self, x: f64) -> f64 {
         let ax = x.abs();
         self.v = if ax > self.v { ax + (self.v - ax) * self.a } else { self.v * self.r };
         self.v
@@ -205,7 +217,7 @@ pub struct Punch {
     safe: bool,
 }
 
-fn clamp_n(v: f64, lo: f64, hi: f64) -> f64 {
+pub(crate) fn clamp_n(v: f64, lo: f64, hi: f64) -> f64 {
     if v < lo {
         lo
     } else if v > hi {
@@ -215,7 +227,7 @@ fn clamp_n(v: f64, lo: f64, hi: f64) -> f64 {
     }
 }
 
-fn ceiling(y: f64) -> f64 {
+pub(crate) fn ceiling(y: f64) -> f64 {
     let a = y.abs();
     if a <= 0.8 {
         return y;

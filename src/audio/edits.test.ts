@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { DEFAULT_MORPH } from "../fx/morph";
 import { DEFAULT_PUNCH } from "../fx/punch";
+import { DEFAULT_BASS } from "../fx/bass";
 import { DEFAULT_SYNTH } from "../fx/voice-synth";
 import {
   splitClip,
@@ -142,8 +143,8 @@ describe("solo / mute audibility", () => {
     eq: { low: 0, mid: 0, high: 0, lowCut: 20, highCut: 20000 },
     synth: { ...DEFAULT_SYNTH },
     morph: { ...DEFAULT_MORPH },
-    punch: { ...DEFAULT_PUNCH },
-    fx: { place: true, eq: true, punch: true, morph: true, synth: true, reverb: true },
+    punch: { ...DEFAULT_PUNCH }, bass: { ...DEFAULT_BASS },
+    fx: { place: true, eq: true, punch: true, bass: true, morph: true, synth: true, reverb: true },
     stackId: null,
     linked: false,
     role: "",
@@ -204,8 +205,8 @@ describe("duplicate track", () => {
     eq: { low: 2, mid: -1, high: 3, lowCut: 20, highCut: 20000 },
     synth: { ...DEFAULT_SYNTH, mix: 1, pitch: 7 },
     morph: { ...DEFAULT_MORPH },
-    punch: { ...DEFAULT_PUNCH },
-    fx: { place: true, eq: true, punch: true, morph: true, synth: false, reverb: true },
+    punch: { ...DEFAULT_PUNCH }, bass: { ...DEFAULT_BASS },
+    fx: { place: true, eq: true, punch: true, bass: true, morph: true, synth: false, reverb: true },
     stackId: null,
     linked: false,
     role: "",

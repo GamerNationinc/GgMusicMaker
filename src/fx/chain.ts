@@ -2,7 +2,7 @@
 // with a power switch, a lamp and a one-line summary. Pure functions over
 // the Track model so the strip's readouts are unit-tested.
 //
-//   LAYER (pan/width) ▸ EQ ▸ PUNCH ▸ MORPH ▸ VOICE SYNTH ▸ REVERB (send + pan/width)
+//   LAYER (pan/width) ▸ EQ ▸ PUNCH ▸ BASS MOD ▸ MORPH ▸ VOICE SYNTH ▸ REVERB (send + pan/width)
 //
 // The order is the audio graph's order (see audio/channel.ts) and cannot be
 // changed here; "remove" is the power switch (a bypassed module is still in
@@ -13,25 +13,28 @@ import type { ReverbSpace } from "../audio/reverb";
 import { matchingPreset, synthIsActive } from "./voice-synth";
 import { MORPH_ALGOS, matchingMorphPreset, morphIsActive } from "./morph";
 import { matchingPunchPreset, punchIsActive } from "./punch";
+import { BASS_RATES, bassIsActive, matchingBassPreset } from "./bass";
 
-export type FxSlot = "place" | "eq" | "punch" | "morph" | "synth" | "reverb";
+export type FxSlot = "place" | "eq" | "punch" | "bass" | "morph" | "synth" | "reverb";
 
 /** Per-module power switches. All on by default. */
 export interface FxEnabled {
   place: boolean;
   eq: boolean;
   punch: boolean;
+  bass: boolean;
   morph: boolean;
   synth: boolean;
   reverb: boolean;
 }
 
-export const FX_ALL_ON: FxEnabled = { place: true, eq: true, punch: true, morph: true, synth: true, reverb: true };
+export const FX_ALL_ON: FxEnabled = { place: true, eq: true, punch: true, bass: true, morph: true, synth: true, reverb: true };
 
 export const FX_SLOTS: { key: FxSlot; label: string }[] = [
   { key: "place", label: "LAYER" },
   { key: "eq", label: "EQ" },
   { key: "punch", label: "PUNCH" },
+  { key: "bass", label: "BASS MOD" },
   { key: "morph", label: "MORPH" },
   { key: "synth", label: "VOICE SYNTH" },
   { key: "reverb", label: "REVERB" },
@@ -62,6 +65,8 @@ export function slotEngaged(track: Track, slot: FxSlot): boolean {
       );
     case "punch":
       return punchIsActive(track.punch);
+    case "bass":
+      return bassIsActive(track.bass);
     case "morph":
       return morphIsActive(track.morph);
     case "synth":
@@ -85,6 +90,8 @@ export function slotSummary(track: Track, slot: FxSlot, space: ReverbSpace): str
       return `${track.eq.lowCut > 20 ? `HP${hz(track.eq.lowCut)} · ` : ""}${db(track.eq.low)} / ${db(track.eq.mid)} / ${db(track.eq.high)} dB${track.eq.highCut < 20000 ? ` · LP${hz(track.eq.highCut)}` : ""}`;
     case "punch":
       return punchIsActive(track.punch) ? (matchingPunchPreset(track.punch) ?? "custom") : "off";
+    case "bass":
+      return bassIsActive(track.bass) ? `${matchingBassPreset(track.bass) ?? "custom"} · ${BASS_RATES[track.bass.rate]} @ ${track.bass.bpm}` : "off";
     case "morph": {
       if (!morphIsActive(track.morph)) return "off";
       const name = matchingMorphPreset(track.morph) ?? MORPH_ALGOS[track.morph.algo]?.name ?? "custom";
@@ -124,6 +131,7 @@ export const SLOT_SHORT: Record<FxSlot, string> = {
   place: "PAN",
   eq: "EQ",
   punch: "PUNCH",
+  bass: "BASS",
   morph: "MORPH",
   synth: "SYNTH",
   reverb: "VERB",
@@ -133,5 +141,5 @@ export const SLOT_SHORT: Record<FxSlot, string> = {
 export function normalizeFx(fx: unknown): FxEnabled {
   const src = (fx ?? {}) as Partial<Record<FxSlot, unknown>>;
   const on = (k: FxSlot) => (typeof src[k] === "boolean" ? (src[k] as boolean) : true);
-  return { place: on("place"), eq: on("eq"), punch: on("punch"), morph: on("morph"), synth: on("synth"), reverb: on("reverb") };
+  return { place: on("place"), eq: on("eq"), punch: on("punch"), bass: on("bass"), morph: on("morph"), synth: on("synth"), reverb: on("reverb") };
 }

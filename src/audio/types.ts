@@ -8,6 +8,7 @@ import type { VoiceSynthParams, SurroundLayout } from "../fx/voice-synth";
 import type { FxEnabled } from "../fx/chain";
 import type { MorphParams } from "../fx/morph";
 import type { PunchParams } from "../fx/punch";
+import type { BassParams } from "../fx/bass";
 
 /** A region of a source buffer placed on the timeline. Non-destructive:
  *  split/trim only adjust offset/duration/startTime — the buffer is untouched. */
@@ -65,6 +66,8 @@ export interface Track {
   synth: VoiceSynthParams;
   /** PUNCH: drums + bass enhancer (boom, sub, kick punch, drive, blowout). */
   punch: PunchParams;
+  /** BASS MOD: tempo-locked wobble, talk, vibrato, deepen, grit, widen, pump. */
+  bass: BassParams;
   /** MORPH: one of eight sound engines, spread round the listener. */
   morph: MorphParams;
   /** Power switch per FX module (bypass keeps the settings). */

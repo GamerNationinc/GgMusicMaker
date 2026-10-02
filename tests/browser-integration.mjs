@@ -241,7 +241,7 @@ async function main() {
   const lit = await page.$$eval(".head:nth-child(1) .badge.active", (els) => els.map((e) => e.textContent.trim()));
   check("the head counts its active effects and badges them", fxCount === String(lit.length) && lit.includes("SYNTH"), `FX ${fxCount} · ${lit.join(" ")}`);
   check("the open layer's head is highlighted", (await page.$(".head:nth-child(1).selected")) !== null);
-  check("the rack title says how many are active", /^\d+ of 6 active$/.test((await page.textContent(".active-count")).trim()));
+  check("the rack title says how many are active", /^\d+ of 7 active$/.test((await page.textContent(".active-count")).trim()));
   const wet = await exportBytes();
   let diff = 0;
   const n = Math.min(dry.length, wet.length);
@@ -596,6 +596,26 @@ async function main() {
   let pd = 0;
   for (let i = 44; i < Math.min(quiet.length, punched.length); i++) if (quiet[i] !== punched[i]) pd++;
   check("PUNCH changes the exported render", pd > 10000, `${pd} bytes differ`);
+  await page.waitForTimeout(300);
+  await page.click(".dialog button");
+
+  // --- BASS MOD: tempo-locked wobble etc. -----------------------------------
+  await page.click(".punch-presets button:has-text('Off')");
+  await page.click(".slot.bass .pick");
+  await page.click(".bass-presets button:has-text('Festival')");
+  await page.fill(".bpm-num", "100");
+  await page.press(".bpm-num", "Enter");
+  await page.click(".bass-tempo button[role=radio]:has-text('1/4T')");
+  await page.waitForTimeout(200);
+  const bassSlot = (await page.textContent(".slot.bass")).replace(/\s+/g, " ");
+  check("BASS MOD slot sums up the preset, rate and tempo", /custom · 1\/4T @ 100/.test(bassSlot), bassSlot);
+  check("BASS MOD draws its LFO", (await page.getAttribute(".lfo-scope .wave", "points"))?.split(" ").length > 50);
+  await page.click(".editor.bass .tab:has-text('THICKEN')");
+  check("THICKEN tab shows DEEPEN / GRIT / WIDEN", (await page.$$("input[data-bass=deepen], input[data-bass=grit], input[data-bass=widen]")).length === 3);
+  const wobbled = await exportBytes();
+  let bd = 0;
+  for (let i = 44; i < Math.min(quiet.length, wobbled.length); i++) if (quiet[i] !== wobbled[i]) bd++;
+  check("BASS MOD changes the exported render", bd > 10000, `${bd} bytes differ`);
   await page.waitForTimeout(300);
   await page.click(".dialog button");
 

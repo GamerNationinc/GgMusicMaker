@@ -11,6 +11,7 @@
 //! Recording (src/record.rs) opens a cpal input stream beside the output;
 //! both read one process clock so a take is placed where the music was.
 
+pub mod bass;
 pub mod binaural;
 pub mod deckpad;
 pub mod dsp;
@@ -485,7 +486,8 @@ pub fn render_offline(project_json: String, buffer_ids: Vec<String>, buffer_rate
 
 /// Test hook: run one ported module over `inputs` in 128-frame quanta, the
 /// way the worklet host runs the JS original. kind: "synth" | "morph" |
-/// "placer" (params {pan, width}) | "binaural" | "reverb" (params {space}).
+/// "placer" (params {pan, width}) | "binaural" | "reverb" (params {space}) |
+/// "bass" (BASS MOD params + optional t0, the song time of the first frame).
 #[napi]
 pub fn process_module(kind: String, params_json: String, inputs: Vec<Float32Array>, out_channels: u32, sample_rate: f64) -> Result<Vec<Float32Array>> {
     let bad = |e: serde_json::Error| Error::from_reason(format!("params: {e}"));
@@ -500,6 +502,7 @@ pub fn process_module(kind: String, params_json: String, inputs: Vec<Float32Arra
         B(binaural::Binaural),
         R(Box<Reverb>),
         L(Box<live::Live>, Vec<(usize, live::LiveEvent)>),
+        Ba(Box<bass::Bass>, bass::BassParams, f64),
     }
     #[derive(serde::Deserialize)]
     struct Pw {
@@ -539,6 +542,17 @@ pub fn process_module(kind: String, params_json: String, inputs: Vec<Float32Arra
             let p: Ls = serde_json::from_str(&params_json).map_err(bad)?;
             M::L(Box::new(live::Live::new(sample_rate)), p.events)
         }
+        "bass" => {
+            #[derive(serde::Deserialize)]
+            struct T0 {
+                #[serde(default)]
+                t0: f64,
+            }
+            let mut p: bass::BassParams = serde_json::from_str(&params_json).map_err(bad)?;
+            p.quantize();
+            let t: T0 = serde_json::from_str(&params_json).map_err(bad)?;
+            M::Ba(Box::new(bass::Bass::new(sample_rate)), p, t.t0)
+        }
         _ => return Err(Error::from_reason("unknown module")),
     };
     let mut i = 0;
@@ -574,6 +588,13 @@ pub fn process_module(kind: String, params_json: String, inputs: Vec<Float32Arra
                         ch[n] = b[c][n] as f32;
                     }
                 }
+            }
+            M::Ba(b, p, t0) => {
+                let mut l: Vec<f32> = inp[0].to_vec();
+                let mut r: Vec<f32> = inp.get(1).unwrap_or(&inp[0]).to_vec();
+                b.process(*p, *t0 + i as f64 / sample_rate, &mut l, &mut r);
+                o[0].copy_from_slice(&l);
+                o[1].copy_from_slice(&r);
             }
             M::R(r) => {
                 for n in 0..q {

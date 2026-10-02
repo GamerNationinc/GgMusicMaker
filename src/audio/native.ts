@@ -24,6 +24,7 @@ import type { ReverbSpace } from "./reverb";
 import type { SurroundLayout } from "../fx/voice-synth";
 import { anySoloed, isTrackAudible } from "./edits";
 import { punchIsActive } from "../fx/punch";
+import { bassIsActive } from "../fx/bass";
 import { synthIsActive, surroundChannels } from "../fx/voice-synth";
 import { morphIsActive } from "../fx/morph";
 import { analyserBytes, logBands } from "./spectrum";
@@ -98,6 +99,7 @@ export function nativeProjectSpec(project: Project, opts: { masterGain: number; 
         gain: audible ? t.gain : 0,
         eq: t.fx.eq ? { ...t.eq } : null,
         punch: t.fx.punch && punchIsActive(t.punch) ? { ...t.punch } : null,
+        bass: t.fx.bass && bassIsActive(t.bass) ? { ...t.bass } : null,
         morph: t.fx.morph && morphIsActive(t.morph) ? { ...t.morph } : null,
         synth: t.fx.synth && synthIsActive(t.synth) ? { ...t.synth } : null,
         pan: t.fx.place ? t.pan : 0,
@@ -465,7 +467,7 @@ export class NativeBackend implements AudioBackend {
         reverb: this.reverb,
         binaural: false,
         tracks: [
-          { id, gain: 1, eq: null, punch: null, morph: null, synth: null, pan: 0, width: 1, send: 0, sendPan: 0, sendWidth: 1, clips: [{ buffer: id, start: 0, offset: 0, duration: seconds }] },
+          { id, gain: 1, eq: null, punch: null, bass: null, morph: null, synth: null, pan: 0, width: 1, send: 0, sendPan: 0, sendWidth: 1, clips: [{ buffer: id, start: 0, offset: 0, duration: seconds }] },
         ],
       }),
     );

@@ -5,6 +5,8 @@ import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import coreSource from "../../public/punch-core.js?raw";
 import { PUNCH_PRESETS, punchPresetParams, type PunchCoreCtor, type PunchParams } from "../fx/punch";
+import bassSource from "../../public/bass-core.js?raw";
+import { BASS_PRESETS, bassPresetParams, type BassCoreCtor, type BassParams } from "../fx/bass";
 
 const ADDON = new URL("../../native/ggmm-engine.node", import.meta.url).pathname;
 const has = existsSync(ADDON);
@@ -18,6 +20,7 @@ const MAKEUP = Math.pow(1 / Math.pow(10, (-3 + 3 / 20) / 20), 0.6);
 const AHEAD = Math.round(48000 * 0.006);
 const SR = 48000;
 const Core = new Function("sampleRate", `${coreSource.replace(/^export /m, "")}\nreturn PunchCore;`)(SR) as PunchCoreCtor;
+const BassCore = new Function("sampleRate", `${bassSource.replace(/^export /gm, "")}\nreturn BassCore;`)(SR) as BassCoreCtor;
 
 function beat(seconds: number): [Float32Array, Float32Array] {
   const n = Math.floor(SR * seconds);
@@ -34,7 +37,7 @@ function beat(seconds: number): [Float32Array, Float32Array] {
 }
 
 const track = (over: object) => ({
-  id: "t1", gain: 1, pan: 0, width: 1, eq: null, punch: null, morph: null, synth: null, send: 0, sendPan: 0, sendWidth: 1,
+  id: "t1", gain: 1, pan: 0, width: 1, eq: null, punch: null, bass: null, morph: null, synth: null, send: 0, sendPan: 0, sendWidth: 1,
   clips: [{ buffer: "b", start: 0, offset: 0, duration: 2 }], ...over,
 });
 const render = (tracks: object[], master: number, input: [Float32Array, Float32Array]) =>
@@ -69,6 +72,22 @@ describe.skipIf(!has)("native engine (Rust)", () => {
       expect(maxErr).toBeLessThan(2e-4);
     });
   }
+
+  it("BASS MOD in the mixer matches the JS core, its LFO locked to song time", async () => {
+    const p0 = bassPresetParams(BASS_PRESETS.find((x) => x.name === "Festival")!);
+    const p = Object.fromEntries(Object.entries(p0).map(([k, v]) => [k, Math.fround(v)])) as unknown as BassParams;
+    const m = Math.fround(0.05) * MAKEUP;
+    const [l, r] = await render([track({ bass: p })], 0.05, input);
+    const core = new BassCore(SR);
+    core.set(p);
+    let maxErr = 0;
+    for (let i = 0; i + AHEAD < input[0].length; i++) {
+      if (i % 128 === 0) core.block(i / SR);
+      core.step(input[0][i], input[1][i]);
+      maxErr = Math.max(maxErr, Math.abs(l[i + AHEAD] / m - core.l), Math.abs(r[i + AHEAD] / m - core.r));
+    }
+    expect(maxErr).toBeLessThan(2e-4);
+  });
 
   it("mute (gain 0) is silent; pan hard left empties the right channel", async () => {
     const [, r0] = await render([track({ gain: 0 })], 0.5, input);

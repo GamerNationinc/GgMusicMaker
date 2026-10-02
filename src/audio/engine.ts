@@ -20,11 +20,14 @@ import { assembleTake, type Chunk } from "./recording";
 import { buildMasterBus, deviceChannelsFor, type MasterBus } from "./master";
 import { surroundChannels, type SurroundLayout } from "../fx/voice-synth";
 import { punchIsActive } from "../fx/punch";
+import { bassIsActive } from "../fx/bass";
 
 const SYNTH_WORKLET_URL = `${import.meta.env.BASE_URL}voice-synth-processor.js`;
 const PLACER_WORKLET_URL = `${import.meta.env.BASE_URL}placer-processor.js`;
 const PUNCH_CORE_URL = `${import.meta.env.BASE_URL}punch-core.js`;
 const PUNCH_WORKLET_URL = `${import.meta.env.BASE_URL}punch-processor.js`;
+const BASS_CORE_URL = `${import.meta.env.BASE_URL}bass-core.js`;
+const BASS_WORKLET_URL = `${import.meta.env.BASE_URL}bass-processor.js`;
 const MORPH_WORKLET_URL = `${import.meta.env.BASE_URL}morph-processor.js`;
 const BINAURAL_WORKLET_URL = `${import.meta.env.BASE_URL}binaural-processor.js`;
 const LIVE_WORKLET_URL = `${import.meta.env.BASE_URL}live-processor.js`;
@@ -124,6 +127,8 @@ export class AudioEngine implements AudioBackend {
       // The core first: punch-processor finds PunchCore on the shared global.
       (await this.loadWorklet(ctx, PUNCH_CORE_URL)) &&
       (await this.loadWorklet(ctx, PUNCH_WORKLET_URL)) &&
+      (await this.loadWorklet(ctx, BASS_CORE_URL)) &&
+      (await this.loadWorklet(ctx, BASS_WORKLET_URL)) &&
       (await this.loadWorklet(ctx, PLACER_WORKLET_URL));
     if (ctx === this.ctx) {
       if (ok) this.synthAvailable = true;
@@ -133,6 +138,8 @@ export class AudioEngine implements AudioBackend {
     return ok;
   }
 
+  /** Context time at which song time 0 plays (BASS MOD's LFO lock). */
+  private songOrigin = 0;
   private binauralAvailable = false;
   private liveAvailable = false;
   /** The live instrument (public/live-processor.js): output 0 dry → master,
@@ -278,6 +285,7 @@ export class AudioEngine implements AudioBackend {
   private createChannel(trackId: string): TrackChannel {
     const ch = new TrackChannel(this.ctx, this.synthAvailable, this.master.channels);
     ch.connect(this.master.input, this.convolver);
+    ch.setSongOrigin(this.songOrigin);
     this.channels.set(trackId, ch);
     return ch;
   }
@@ -288,7 +296,7 @@ export class AudioEngine implements AudioBackend {
     // Self-heal: if the worklets finished loading after this channel was
     // built and the track now needs them, rebuild it with the worklet nodes.
     const needsWorklets =
-      track.synth.mix > 0 || track.morph.mix > 0 || punchIsActive(track.punch) || track.pan !== 0 || track.width !== 1 || track.reverbPan !== 0 || track.reverbWidth !== 1;
+      track.synth.mix > 0 || track.morph.mix > 0 || punchIsActive(track.punch) || bassIsActive(track.bass) || track.pan !== 0 || track.width !== 1 || track.reverbPan !== 0 || track.reverbWidth !== 1;
     if (needsWorklets && !ch.hasSynth && this.synthAvailable) {
       ch.dispose();
       this.channels.delete(track.id);
@@ -321,10 +329,12 @@ export class AudioEngine implements AudioBackend {
     const startAt = this.ctx.currentTime + 0.05;
     this.playStartCtxTime = startAt;
     this.playStartOffset = fromTime;
+    this.songOrigin = startAt - fromTime;
 
     for (const track of project.tracks) {
       const channel = this.ensureChannel(track);
       channel.applyTrack(track, hasSolo);
+      channel.setSongOrigin(this.songOrigin);
       // Schedule every track, audible or not: mute/solo are just the channel
       // gain, so toggling them mid-playback must find sources already running.
       // Skipping inaudible tracks here left them silent until the next play.

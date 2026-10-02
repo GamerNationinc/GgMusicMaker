@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { DEFAULT_MORPH } from "./morph";
 import { DEFAULT_PUNCH } from "./punch";
+import { DEFAULT_BASS } from "./bass";
 import type { Track } from "../audio/types";
 import { DEFAULT_SYNTH, SYNTH_PRESETS, presetParams } from "./voice-synth";
 import { FX_ALL_ON, activeSlots, anyFxLit, normalizeFx, panText, slotEngaged, slotLit, slotState, slotSummary, widthText } from "./chain";
@@ -20,7 +21,7 @@ const base = (over: Partial<Track> = {}): Track => ({
   eq: { low: 0, mid: 0, high: 0, lowCut: 20, highCut: 20000 },
   synth: { ...DEFAULT_SYNTH },
   morph: { ...DEFAULT_MORPH },
-  punch: { ...DEFAULT_PUNCH },
+  punch: { ...DEFAULT_PUNCH }, bass: { ...DEFAULT_BASS },
   fx: { ...FX_ALL_ON },
   stackId: null,
   linked: false,
@@ -77,7 +78,7 @@ describe("fx chain strip", () => {
 
   it("normalizeFx defaults missing switches to on and ignores junk", () => {
     expect(normalizeFx(undefined)).toEqual(FX_ALL_ON);
-    expect(normalizeFx({ eq: false, synth: "yes" })).toEqual({ place: true, eq: false, punch: true, morph: true, synth: true, reverb: true });
+    expect(normalizeFx({ eq: false, synth: "yes" })).toEqual({ place: true, eq: false, punch: true, bass: true, morph: true, synth: true, reverb: true });
   });
 });
 

@@ -55,6 +55,7 @@ import {
   punchPresetParams,
   type PunchKey,
 } from "../fx/punch";
+import { DEFAULT_BASS, BASS_PRESETS, clampBassValue, bassPresetParams, type BassKey } from "../fx/bass";
 import {
   packSessionParts,
   planSession,
@@ -445,6 +446,7 @@ function makeTrack(name: string): Track {
     synth: { ...DEFAULT_SYNTH },
     morph: { ...DEFAULT_MORPH },
     punch: { ...DEFAULT_PUNCH },
+    bass: { ...DEFAULT_BASS },
     fx: { ...FX_ALL_ON },
     stackId: null,
     linked: false,
@@ -644,6 +646,23 @@ export async function applyPunchPreset(trackId: string, name: string): Promise<v
   await engine.ensureRunning();
   updateTrack(trackId, (t) => ({ ...t, punch: punchPresetParams(preset) }));
   status.set(`PUNCH: ${preset.name} on the selected layer.`);
+}
+
+/** Turn one BASS MOD knob. Drags coalesce into a single undo step. */
+export function setBassParam(trackId: string, key: BassKey, value: number): void {
+  const v = clampBassValue(key, value);
+  updateTrack(trackId, (t) => (t.bass[key] === v ? t : { ...t, bass: { ...t.bass, [key]: v } }), {
+    history: `bass:${key}:${trackId}`,
+  });
+}
+
+/** Load a BASS MOD preset; the layer keeps its tempo. */
+export async function applyBassPreset(trackId: string, name: string): Promise<void> {
+  const preset = BASS_PRESETS.find((p) => p.name === name);
+  if (!preset) return;
+  await engine.ensureRunning();
+  updateTrack(trackId, (t) => ({ ...t, bass: bassPresetParams(preset, { bpm: t.bass.bpm }) }));
+  status.set(`BASS MOD: ${preset.name} on the selected layer.`);
 }
 
 /** Turn one MORPH knob. Drags coalesce into a single undo step. */

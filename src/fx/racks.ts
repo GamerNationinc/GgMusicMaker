@@ -16,6 +16,7 @@ import { EQ_CUT_OFF } from "../audio/types";
 import { DEFAULT_SYNTH, SYNTH_PRESETS, presetParams, type VoiceSynthParams } from "./voice-synth";
 import { DEFAULT_MORPH, MORPH_PRESETS, morphPresetParams, type MorphParams } from "./morph";
 import { DEFAULT_PUNCH, PUNCH_PRESETS, punchPresetParams, type PunchParams } from "./punch";
+import { DEFAULT_BASS, BASS_PRESETS, bassPresetParams, type BassParams } from "./bass";
 import { FX_ALL_ON } from "./chain";
 
 export const CATEGORIES = ["VOCALS", "DRUMS", "PERCUSSION", "BASS", "SYNTH", "KEYS & GUITAR", "AMBIENT"] as const;
@@ -37,6 +38,7 @@ export interface Rack {
   reverbSend?: number;
   eq?: Partial<EqParams>;
   punch?: ModuleSpec<PunchParams>;
+  bass?: ModuleSpec<BassParams>;
   morph?: ModuleSpec<MorphParams>;
   synth?: ModuleSpec<VoiceSynthParams>;
 }
@@ -83,6 +85,9 @@ export const RACKS: Rack[] = [
   { name: "Grit Top", category: "BASS", blurb: "folded mids so it cuts through", gain: 0.45, eq: { lowCut: 400 }, morph: { preset: "Buchla Fold" } },
   { name: "808 Glide", category: "BASS", blurb: "big 808 boom", punch: { preset: "808 Boom" } },
   { name: "Wobble", category: "BASS", blurb: "talking vowel filter", gain: 0.6, eq: { lowCut: 150 }, morph: { preset: "Talking Tract", set: { b: 0.5 } } },
+  { name: "808 Wobble", category: "BASS", blurb: "tempo-locked wub + deep sine", bass: { preset: "Wobble 1/8", set: { deepen: 0.35 } } },
+  { name: "808 Talk", category: "BASS", blurb: "each hit opens the filter", punch: { preset: "808 Boom" }, bass: { preset: "Talking 808" } },
+  { name: "808 Wide", category: "BASS", blurb: "deep mono sub, wide grit on top", bass: { preset: "Phone Killer", set: { widen: 0.7, deepen: 0.45 } } },
   // ---- SYNTH -------------------------------------------------------------------
   { name: "Synth Wide", category: "SYNTH", blurb: "wide, cleaned-up lows", eq: { lowCut: 120 }, width: 1.8 },
   { name: "Supersaw", category: "SYNTH", blurb: "8-voice detuned unison", gain: 0.7, synth: { set: { mix: 1, shift: 1, unison: 8, detune: 30, drift: 10, width: 1, ensemble: 0.4 } } },
@@ -114,6 +119,7 @@ export const STACK_RECIPES: StackRecipe[] = [
   { name: "Tuned Hits", category: "PERCUSSION", blurb: "clean + strings + orbit", layers: ["Perc Clean", "Tuned Perc", "Perc Orbit"] },
   { name: "Stack Bass", category: "BASS", blurb: "DI + sub + grit", layers: ["Bass DI", "Sub Only", "Grit Top"] },
   { name: "Wobble Bass", category: "BASS", blurb: "sub + wobble", layers: ["Sub Only", "Wobble"] },
+  { name: "808 Monster", category: "BASS", blurb: "talking 808 + sub + wide grit", layers: ["808 Talk", "Sub Only", "808 Wide"] },
   { name: "Huge Lead", category: "SYNTH", blurb: "wide + supersaw + sparkle", layers: ["Synth Wide", "Supersaw", "Octave Sparkle"] },
   { name: "Evolving Pad", category: "SYNTH", blurb: "wide + freeze + chaos", layers: ["Synth Wide", "Frozen Pad", "Chaos Pad"] },
   { name: "Double Tracked", category: "KEYS & GUITAR", blurb: "L/R doubles + crunch", layers: ["Guitar L", "Guitar R", "Amp Crunch"] },
@@ -145,6 +151,13 @@ export function rackTrack(track: Track, rack: Rack): Track {
     reverbWidth: 1,
     eq: { low: 0, mid: 0, high: 0, ...EQ_CUT_OFF, ...rack.eq },
     punch: module(DEFAULT_PUNCH, PUNCH_PRESETS, punchPresetParams as (p: never) => PunchParams, rack.punch),
+    // BASS MOD keeps the layer's tempo: it is the song's, not the rack's.
+    bass: module(
+      { ...DEFAULT_BASS, bpm: track.bass?.bpm ?? DEFAULT_BASS.bpm },
+      BASS_PRESETS,
+      ((p: never) => bassPresetParams(p, { bpm: track.bass?.bpm ?? DEFAULT_BASS.bpm })) as (p: never) => BassParams,
+      rack.bass,
+    ),
     morph: module(DEFAULT_MORPH, MORPH_PRESETS, morphPresetParams as (p: never) => MorphParams, rack.morph),
     synth: module(DEFAULT_SYNTH, SYNTH_PRESETS, presetParams as (p: never) => VoiceSynthParams, rack.synth),
     fx: { ...FX_ALL_ON },
@@ -152,9 +165,10 @@ export function rackTrack(track: Track, rack: Rack): Track {
 }
 
 /** Every preset name a rack refers to, for the consistency test. */
-export function rackReferences(r: Rack): { kind: "punch" | "morph" | "synth"; name: string }[] {
-  const out: { kind: "punch" | "morph" | "synth"; name: string }[] = [];
+export function rackReferences(r: Rack): { kind: "punch" | "bass" | "morph" | "synth"; name: string }[] {
+  const out: { kind: "punch" | "bass" | "morph" | "synth"; name: string }[] = [];
   if (r.punch?.preset) out.push({ kind: "punch", name: r.punch.preset });
+  if (r.bass?.preset) out.push({ kind: "bass", name: r.bass.preset });
   if (r.morph?.preset) out.push({ kind: "morph", name: r.morph.preset });
   if (r.synth?.preset) out.push({ kind: "synth", name: r.synth.preset });
   return out;

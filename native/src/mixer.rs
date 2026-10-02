@@ -1,7 +1,7 @@
 //! The mixer — the whole web graph (audio/channel.ts + audio/master.ts) in
 //! one place, rendered in 128-frame quanta like Web Audio:
 //!
-//!   clips → level → cuts → EQ → [PUNCH] → [MORPH] → [VOICE SYNTH] → [placer]
+//!   clips → level → cuts → EQ → [PUNCH] → [BASS MOD] → [MORPH] → [VOICE SYNTH] → [placer]
 //!         → bus (dry)  +  [send placer] → send → REVERB (stereo) → bus L/R
 //!   bus ×master → meters → compressor(s) → [binaural] → device
 //!
@@ -9,6 +9,7 @@
 //! engine's `route`). The bus is 2, 6 or 8 channels. One Mixer serves both the
 //! live stream and offline export. Nothing allocates while rendering.
 
+use crate::bass::{Bass, BassParams};
 use crate::binaural::Binaural;
 use crate::dsp::{Biquad, Compressor, Kind, Punch, PunchParams};
 use crate::morph::{Morph, MorphParams};
@@ -69,6 +70,8 @@ pub struct TrackSpec {
     pub gain: f64,
     pub eq: Option<EqSpec>,
     pub punch: Option<PunchParams>,
+    #[serde(default)]
+    pub bass: Option<BassParams>,
     pub morph: Option<MorphParams>,
     pub synth: Option<SynthParams>,
     pub pan: f64,
@@ -92,6 +95,9 @@ impl ProjectSpec {
                 e.quantize();
             }
             if let Some(p) = &mut t.punch {
+                p.quantize();
+            }
+            if let Some(p) = &mut t.bass {
                 p.quantize();
             }
             if let Some(p) = &mut t.morph {
@@ -143,6 +149,7 @@ pub struct TrackDsp {
     hi: [Biquad; 2],
     eq: Option<EqSpec>,
     punch: Punch,
+    bass: Box<Bass>,
     morph: Box<Morph>,
     synth: Box<VoiceSynth>,
     place: Placer,
@@ -161,6 +168,7 @@ impl TrackDsp {
             hi: [Biquad::identity(); 2],
             eq: None,
             punch: Punch::new(sr),
+            bass: Box::new(Bass::new(sr)),
             morph: Box::new(Morph::new(sr)),
             synth: Box::new(VoiceSynth::new(sr)),
             place: Placer::default(),
@@ -452,6 +460,11 @@ impl Mixer {
                         self.s[0][i] = a as f32;
                         self.s[1][i] = b as f32;
                     }
+                }
+                // --- BASS MOD (stereo), LFO locked to the song ---
+                if let Some(bp) = t.bass {
+                    let (sl, sr_) = self.s.split_at_mut(1);
+                    d.bass.process(bp, t0, &mut sl[0][..q], &mut sr_[0][..q]);
                 }
                 // --- MORPH → SYNTH → placer: each stage reads the current
                 // buffer and writes the other of a/b ---

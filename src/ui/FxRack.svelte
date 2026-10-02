@@ -32,6 +32,9 @@
     toggleHeadphones3d,
     setPunchParam,
     applyPunchPreset,
+    setBassParam,
+    applyBassPreset,
+    transport,
     applyRack,
     addStackLayer,
     buildStack,
@@ -42,6 +45,19 @@
   import { hz } from "../fx/chain";
   import { PUNCH_SPECS, PUNCH_PRESETS, matchingPunchPreset, punchText, type PunchKey } from "../fx/punch";
   import { punchPreviewFor, previewTick } from "./punchPreviewStore";
+  import {
+    BASS_GROUPS,
+    BASS_PRESETS,
+    BASS_RATES,
+    BASS_SHAPES,
+    bassFromSlider,
+    bassText,
+    bassToSlider,
+    matchingBassPreset,
+    BASS_RATE_BEATS,
+    type BassSpec,
+  } from "../fx/bass";
+  import { lfoPath, tapTempo } from "./bassScope";
   import {
     MORPH_ALGOS,
     MORPH_PRESETS,
@@ -121,6 +137,23 @@
   });
   function onPunch(key: PunchKey, e: Event) {
     if (track) setPunchParam(track.id, key, Number((e.target as HTMLInputElement).value));
+  }
+
+  // BASS MOD
+  let bassTab = $state(0);
+  const bassPreset = $derived(track ? matchingBassPreset(track.bass) : null);
+  const bassHz = $derived(track ? track.bass.bpm / 60 / BASS_RATE_BEATS[track.bass.rate] : 1);
+  /** Where the LFO is now (follows the playhead): drawn as the dot on the scope. */
+  const bassPhase = $derived(((($transport.playhead * bassHz) % 1) + 1) % 1);
+  let taps: number[] = [];
+  function onBass(spec: BassSpec, e: Event) {
+    if (track) setBassParam(track.id, spec.key, bassFromSlider(spec, Number((e.target as HTMLInputElement).value)));
+  }
+  function onTap() {
+    if (!track) return;
+    const r = tapTempo(taps, performance.now());
+    taps = r.taps;
+    if (r.bpm) setBassParam(track.id, "bpm", r.bpm);
   }
 
   // MORPH
@@ -429,6 +462,79 @@
             {/if}
           </div>
         </div>
+
+      {:else if slot === "bass"}
+        <div class="choices bass-presets">
+          {#each BASS_PRESETS as p (p.name)}
+            <button class="btn small" class:accent={bassPreset === p.name} onclick={() => void applyBassPreset(track!.id, p.name)}>{p.name}</button>
+          {/each}
+        </div>
+        <div class="bass-tempo">
+          <div class="bpm" title="The tempo the LFO locks to — set it to the song's">
+            <span class="tiny">BPM</span>
+            <button class="btn small" aria-label="Slower" onclick={() => setBassParam(track!.id, "bpm", track!.bass.bpm - 1)}>−</button>
+            <input
+              class="bpm-num"
+              type="number"
+              min="40"
+              max="240"
+              value={track.bass.bpm}
+              aria-label="Tempo"
+              onchange={(e) => setBassParam(track!.id, "bpm", Number((e.target as HTMLInputElement).value))}
+            />
+            <button class="btn small" aria-label="Faster" onclick={() => setBassParam(track!.id, "bpm", track!.bass.bpm + 1)}>+</button>
+            <button class="btn small tap" onclick={onTap} title="Tap along with the beat">TAP</button>
+          </div>
+          <div class="choices" role="radiogroup" aria-label="LFO rate">
+            {#each BASS_RATES as r, i (r)}
+              <button class="btn small" class:accent={track.bass.rate === i} role="radio" aria-checked={track.bass.rate === i} onclick={() => setBassParam(track!.id, "rate", i)}>{r}</button>
+            {/each}
+          </div>
+          <div class="choices" role="radiogroup" aria-label="LFO shape">
+            {#each BASS_SHAPES as s, i (s)}
+              <button class="btn small" class:accent={track.bass.shape === i} role="radio" aria-checked={track.bass.shape === i} onclick={() => setBassParam(track!.id, "shape", i)}>{s}</button>
+            {/each}
+          </div>
+          <svg class="lfo-scope" viewBox="0 0 120 32" preserveAspectRatio="none" aria-label="LFO shape and position">
+            <line class="axis" x1="0" y1="16" x2="120" y2="16" />
+            <polyline class="wave" points={lfoPath(track.bass.shape, 120, 32)} />
+            <circle class="dot" cx={bassPhase * 60} cy="16" r="2.5" />
+          </svg>
+        </div>
+        <div class="tabs">
+          {#each BASS_GROUPS as g, i (g.title)}
+            <button class="tab" class:on={bassTab === i} onclick={() => (bassTab = i)}>{g.title}</button>
+          {/each}
+        </div>
+        <div class="params two">
+          {#each BASS_GROUPS[bassTab].specs as spec (spec.key)}
+            <label class="param" title={spec.hint}>
+              <span class="tiny">{spec.label}</span>
+              <input
+                type="range"
+                data-bass={spec.key}
+                min={spec.log ? 0 : spec.min}
+                max={spec.log ? 1000 : spec.max}
+                step={spec.log ? 1 : spec.step}
+                value={bassToSlider(spec, track.bass[spec.key])}
+                oninput={(e) => onBass(spec, e)}
+              />
+              <span class="readout">{bassText(spec.key, track.bass[spec.key])}</span>
+            </label>
+          {/each}
+          {#if bassTab === 1}
+            <div class="param">
+              <span class="tiny">DEEPEN AT</span>
+              <div class="choices">
+                <button class="btn small" class:accent={track.bass.octave === 0} onclick={() => setBassParam(track!.id, "octave", 0)}>UNISON</button>
+                <button class="btn small" class:accent={track.bass.octave === 1} onclick={() => setBassParam(track!.id, "octave", 1)}>−1 OCTAVE</button>
+              </div>
+            </div>
+          {/if}
+        </div>
+        <span class="tiny hint">
+          {BASS_RATES[track.bass.rate]} at {track.bass.bpm} BPM = {bassHz >= 1 ? `${bassHz.toFixed(2)} Hz` : `${(1 / bassHz).toFixed(2)} s per sweep`} · locked to the song: the sweep restarts with the bar, not when you press play
+        </span>
 
       {:else if slot === "morph"}
         <div class="engines" role="tablist" aria-label="MORPH engine">
@@ -1224,6 +1330,53 @@
   }
   .punch-meter .big.bass {
     color: var(--magenta);
+  }
+
+  /* BASS MOD */
+  .bass-tempo {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 12px;
+  }
+  .bpm {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .bpm-num {
+    width: 52px;
+    font-family: var(--font);
+    font-size: 13px;
+    font-weight: bold;
+    color: var(--green);
+    background: var(--panel);
+    border: 1px solid var(--box, var(--bevel-dark));
+    text-align: center;
+    min-height: 26px;
+  }
+  .tap {
+    color: var(--magenta);
+  }
+  .lfo-scope {
+    width: 120px;
+    height: 32px;
+    flex: 0 0 auto;
+    background: var(--panel);
+    border: 1px solid var(--box, var(--bevel-dark));
+  }
+  .lfo-scope .axis {
+    stroke: var(--grid, var(--ink-dim));
+    stroke-width: 0.5;
+  }
+  .lfo-scope .wave {
+    fill: none;
+    stroke: var(--cyan);
+    stroke-width: 1.5;
+    vector-effect: non-scaling-stroke;
+  }
+  .lfo-scope .dot {
+    fill: var(--magenta);
   }
 
   /* MORPH */

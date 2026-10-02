@@ -101,8 +101,8 @@ check("builds a Wall of Vox stack", true);
 const worklets = await page.evaluate(async () => {
   // Every module the app registers must construct in this shell.
   const ctx = new AudioContext();
-  const names = ["voice-synth-processor", "morph-processor", "punch-processor", "placer-processor", "binaural-processor"];
-  for (const f of ["voice-synth-processor.js", "morph-processor.js", "punch-core.js", "punch-processor.js", "placer-processor.js", "binaural-processor.js"])
+  const names = ["voice-synth-processor", "morph-processor", "punch-processor", "bass-processor", "placer-processor", "binaural-processor"];
+  for (const f of ["voice-synth-processor.js", "morph-processor.js", "punch-core.js", "punch-processor.js", "bass-core.js", "bass-processor.js", "placer-processor.js", "binaural-processor.js"])
     await ctx.audioWorklet.addModule(`/${f}`);
   const ok = names.filter((n) => {
     try {
@@ -115,7 +115,7 @@ const worklets = await page.evaluate(async () => {
   await ctx.close();
   return ok;
 });
-check("all five FX worklets run in the shell", worklets.length === 5, worklets.join(", "));
+check("all six FX worklets run in the shell", worklets.length === 6, worklets.join(", "));
 
 // Export through the native save path (dialog bypassed by GGMM_TEST_SAVE_DIR).
 // Keep it short: drop all but the stack first.
