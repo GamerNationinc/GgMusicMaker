@@ -176,6 +176,9 @@ async function main() {
     /Recorded \d+\.\d+s/.test(status),
     status.trim(),
   );
+  // The song here is ~1 s long: Record started the transport, and the take
+  // kept rolling past the song's end instead of stopping there.
+  check("Record plays the song and keeps rolling past its end", Number(/Recorded (\d+\.\d+)s/.exec(status)?.[1]) > 1.5, status.trim());
   check(
     "recording used the AudioWorklet path (not the fallback)",
     !status.includes("fallback capture"),

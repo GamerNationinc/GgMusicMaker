@@ -230,10 +230,12 @@ async function waitStatus(page, re, ms = 20000) {
   await page.keyboard.press("r");
   const s = await waitStatus(page, /Recording onto|Mic unavailable/);
   check("falls back to web recording and says why", /native capture unavailable: no input device named no-such-input — recorded through the web engine/.test(s), s);
+  check("Record starts the transport, like Ableton", (await page.textContent("button[aria-label='Play or pause']")).trim() === "❚❚");
   await sleep(800);
-  await page.keyboard.press("r");
+  await page.click("button[aria-label='Stop']");
   const done = await waitStatus(page, /^Recorded /);
-  check("… and the fallback take is recorded", /^Recorded /.test(done), done);
+  check("… and Stop ends the take (the fallback take is recorded)", /^Recorded /.test(done), done);
+  check("…and the transport stops", (await page.textContent("button[aria-label='Play or pause']")).trim() === "▶");
   await app.evaluate(({ app }) => app.exit(0));
 }
 

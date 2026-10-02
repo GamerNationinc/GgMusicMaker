@@ -980,7 +980,8 @@ function tick(now: number): void {
   if (t.isPlaying) {
     const now = engine.currentTime();
     const end = projectDuration(get(project));
-    if (end > 0 && now >= end) {
+    // While recording the song keeps rolling past its end, like Ableton.
+    if (end > 0 && now >= end && !t.isRecording) {
       stop();
       seek(0);
     } else {
@@ -1008,6 +1009,10 @@ export async function play(): Promise<void> {
 }
 
 export function stop(): void {
+  // Like Ableton: stopping the transport ends a take too. (stopRecording
+  // reads the playhead before its first await, so a seek after this — the
+  // Stop button rewinds — can't move the take.)
+  if (get(transport).isRecording) void stopRecording();
   engine.stop();
   transport.update((s) => ({ ...s, isPlaying: false }));
 }
@@ -1059,6 +1064,10 @@ export async function startRecording(): Promise<void> {
     armed = get(project).tracks.find((t) => t.id === id)!;
   }
   try {
+    // Like Ableton: Record starts the song playing (you hear what you're
+    // playing along to). Stop — or Space — ends the take; R again ends it
+    // and keeps playing.
+    if (!get(transport).isPlaying) await play();
     await engine.startRecording();
     transport.update((s) => ({ ...s, isRecording: true }));
     startLiveView(armed.id, get(transport).playhead);
@@ -1160,7 +1169,12 @@ const SESSION_FILTERS = [{ name: "GgMusicMaker session", extensions: [SESSION_EX
 
 /** Tear down the current project: stop, drop every channel, clear history. */
 function resetWorkspace(next: Project): void {
-  if (get(transport).isRecording) void engine.stopRecording().catch(() => undefined);
+  if (get(transport).isRecording) {
+    // The take is thrown away with the project (and stop() mustn't keep it).
+    void engine.stopRecording().catch(() => undefined);
+    stopLiveView();
+    transport.update((s) => ({ ...s, isRecording: false }));
+  }
   stop();
   for (const t of get(project).tracks) engine.removeTrack(t.id);
   project.set(next);

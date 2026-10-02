@@ -254,6 +254,12 @@ Asked for: an Ableton-like, Deck-friendly way to move round the timeline; an FX 
 |---|---|
 | **Live recording view (Ableton-style)**: while recording, the armed layer shows the take as a red clip growing from where recording began, header `● REC 12.3s`, waveform filled in as audio arrives (~15 redraws/s); when you stop, the real clip replaces it. Both engines feed a compact summary — (min, max) over all channels per 128 frames: the web engine from the captured blocks (`src/audio/liveTake.ts` `LivePeaks`), the native engine in its drain thread (`record.rs` `PeakAcc`, polled every 50 ms through `recPeaks(from)` / IPC `engine-rec-peaks`, a few KB per poll). The timeline widens if the take runs past the song. Also fixed: a **web-path** take recorded during playback was placed at the playhead at *stop*; it now starts where recording began (native already placed takes from the device clocks). | Rust `live_peaks_are_min_max_per_bucket_over_channels`; `liveTake.test.ts` (2). `test:record` (native, loopback sink): red take on the lane 988 → 3022 px between 1 s and 2.5 s, 0 red px after stop — 15/15. `test:browser` (web capture, fake mic): 831 → 2395 px — 93/93. Screenshot mid-take reviewed |
 
+### 2026-10-02 — Record works like Ableton's
+
+| Change | Verified how |
+|---|---|
+| **Record starts the transport** when it's stopped (you hear what you play along to); **R** again ends the take and keeps playing; **Stop / Space** ends the take and stops. While recording the song **keeps rolling past its end** (it used to auto-stop and rewind at the last clip). Starting a New / Open while recording drops the take as before. | `test:record`: R from stopped → ❚❚; Stop ends the take and stops (17/17; overdub still 0.04 ms off). `test:browser`: a 1.9 s take on a ~1 s song (94/94). `test:recovery` 14/14 |
+
 ### Native Steam Deck build
 
 | Step | Verified how |
