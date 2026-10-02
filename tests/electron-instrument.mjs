@@ -79,6 +79,17 @@ try {
 
   const avail = await page.evaluate(() => window.ggmmNative.engine.available());
   check("native engine running", avail.ok === true, avail.ok ? `${avail.device} @ ${avail.sampleRate} Hz` : avail.error);
+  // The output device has to be pulling audio before a note can be heard. On
+  // a CI VM's virtual sound device that can take a moment after launch (the
+  // first note there once measured silent while every later one played).
+  const clock = () => page.evaluate(() => window.ggmmNative.engine.status().then((s) => s?.clock ?? 0));
+  const c0 = await clock();
+  let c1 = c0;
+  for (let i = 0; i < 100 && c1 - c0 < 0.1; i++) {
+    await sleep(50);
+    c1 = await clock();
+  }
+  check("the audio device is running", c1 - c0 >= 0.1, `${(c1 - c0).toFixed(2)} s rendered while waiting`);
   check("header has the mode switch", (await page.$$("[data-role^=mode-]")).length === 3);
 
   // --- View + Menu: into Instrument mode ---
