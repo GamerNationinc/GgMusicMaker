@@ -825,6 +825,100 @@ async function main() {
     check("Z fits the whole song again", (await scrollX()) === 0 && Math.abs((await lanesW()) - fitW) < 2);
   }
 
+  // --- sampler pads + chop lab (web engine) ------------------------------
+  {
+    // A 2 s "loop": four decaying noise hits at 0.05, 0.55, 1.05, 1.55 s.
+    const SR = 48000, n = SR * 2, pcm = new Int16Array(n);
+    let seed = 1;
+    const rnd = () => ((seed = (seed * 1103515245 + 12345) >>> 0) / 2 ** 32) * 2 - 1;
+    for (const t of [0.05, 0.55, 1.05, 1.55]) {
+      const s0 = Math.round(t * SR);
+      for (let i = 0; i < 0.2 * SR; i++) pcm[s0 + i] += Math.round(20000 * rnd() * Math.exp(-i / (0.04 * SR)));
+    }
+    const wav = Buffer.alloc(44 + n * 2);
+    wav.write("RIFF", 0); wav.writeUInt32LE(36 + n * 2, 4); wav.write("WAVEfmt ", 8); wav.writeUInt32LE(16, 16);
+    wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22); wav.writeUInt32LE(SR, 24); wav.writeUInt32LE(SR * 2, 28);
+    wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34); wav.write("data", 36); wav.writeUInt32LE(n * 2, 40);
+    Buffer.from(pcm.buffer).copy(wav, 44);
+    const loopFile = join(await mkdtemp(join(tmpdir(), "ggmm-pads-")), "loop.wav");
+    await writeFile(loopFile, wav);
+    const leds = () => page.$$eval(".meter .seg", (els) => els.filter((e) => !e.style.background.includes("panel")).length);
+    /** Most LEDs lit over `ms`. */
+    const ledsOver = async (ms) => {
+      let most = 0;
+      for (const end = Date.now() + ms; Date.now() < end; await page.waitForTimeout(25)) most = Math.max(most, await leds());
+      return most;
+    };
+    const touchPad = (label, type) =>
+      page.$eval(`[data-role=pad-${label}]`, (el, type) => {
+        const r = el.getBoundingClientRect();
+        el.dispatchEvent(new PointerEvent(type, { pointerId: 41, pointerType: "touch", bubbles: true, clientX: r.x + 20, clientY: r.y + 20 }));
+      }, type);
+    const statusNow = async () => (await page.textContent(".statusbar")).trim();
+
+    await page.click("button[aria-label='Stop']");
+    await page.click("[data-role=mode-instrument]");
+    await page.click("[data-role=inst-kit-pads]");
+    await page.waitForTimeout(150);
+    check("PADS kit shows a 4×4 bank", (await page.$$("[data-role=pad-grid] .pad")).length === 16);
+    await page.setInputFiles("[data-role=pad-file]", [loopFile]);
+    await page.waitForTimeout(600);
+    check("a file loads onto the selected pad", /Loaded loop\.wav onto pad A1/.test(await statusNow()), await statusNow());
+    await page.waitForTimeout(800);
+    const quiet = await ledsOver(200);
+    await touchPad("A1", "pointerdown");
+    const hit = await ledsOver(300);
+    await touchPad("A1", "pointerup");
+    check("touching a pad plays its sample (web sampler)", quiet === 0 && hit > 3, `${quiet} → ${hit} LEDs`);
+
+    // Chop at the transients: four hits → four pads, silence before the first trimmed off.
+    await page.waitForTimeout(2200);
+    await page.click("[data-role=pad-chop]");
+    await page.waitForSelector("[data-role=chop-lab]");
+    await page.click("[data-role=chop-transients]");
+    await page.waitForTimeout(150);
+    const applyText = await page.textContent("[data-role=chop-apply]");
+    check("transients find the four hits", /4 PADS/.test(applyText), applyText.trim());
+    // Tapping the waveform auditions a slice.
+    const wave = await page.$("[data-role=chop-wave]");
+    const wb = await wave.boundingBox();
+    await page.waitForTimeout(300);
+    await page.mouse.click(wb.x + wb.width * 0.6, wb.y + wb.height / 2);
+    check("tapping a slice plays it", (await ledsOver(300)) > 3);
+    await page.click("[data-role=chop-apply]");
+    await page.waitForTimeout(200);
+    check("slices land on consecutive pads", /Chopped loop into 4 pads: A1–A4/.test(await statusNow()), await statusNow());
+    const names = await page.$$eval("[data-role=pad-grid] .pad .name", (els) => els.slice(0, 5).map((e) => e.textContent));
+    check("the pads are named for their slices", names.join(",") === "loop 1,loop 2,loop 3,loop 4,empty", names.join(","));
+
+    // LOOP latches: still sounding long after the touch, until hit again.
+    await page.waitForTimeout(600);
+    await touchPad("A2", "pointerdown");
+    await touchPad("A2", "pointerup");
+    await page.click("[data-role=pad-mode-loop]");
+    await page.waitForTimeout(400);
+    await touchPad("A2", "pointerdown");
+    await touchPad("A2", "pointerup");
+    await page.waitForTimeout(1200);
+    const looping = await ledsOver(600);
+    await touchPad("A2", "pointerdown");
+    await touchPad("A2", "pointerup");
+    await page.waitForTimeout(500);
+    const stopped = await ledsOver(300);
+    check("a LOOP pad latches and a second hit lets go", looping > 3 && stopped === 0, `${looping} → ${stopped} LEDs`);
+
+    // Undo (from Studio) takes back the mode change, then the chop.
+    await page.click("[data-role=mode-studio]");
+    await page.keyboard.press("Control+z");
+    await page.keyboard.press("Control+z");
+    await page.click("[data-role=mode-instrument]");
+    await page.waitForTimeout(150);
+    const after = await page.$$eval("[data-role=pad-grid] .pad .name", (els) => els.slice(0, 2).map((e) => e.textContent));
+    check("undo takes the chop back to one pad", after.join(",") === "loop,empty", after.join(","));
+    await page.click("[data-role=inst-kit-synth]");
+    await page.click("[data-role=mode-studio]");
+  }
+
   await browser.close();
   server.close();
 

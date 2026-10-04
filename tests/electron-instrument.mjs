@@ -186,6 +186,45 @@ try {
   const bounced = Number(/Resampled (\d+\.\d+) s/.exec(rs)?.[1]);
   check("R1 + R3 lands the resample", bounced > 0.8 && bounced < 3, rs);
 
+  // --- Menu tap: the PADS kit, played on the native sampler (pads.rs) ---
+  await send({ buttons: { menu: true } });
+  await send();
+  await page.waitForSelector("[data-role=pad-grid]", { timeout: 3000 }).catch(() => {});
+  check("a Menu tap switches to the PADS kit", !!(await page.$("[data-role=pad-grid]")));
+  await page.setInputFiles("[data-role=pad-file]", [join(ROOT, "tests", "fixtures", "tone-4s.wav")]);
+  await page.waitForFunction(() => /onto pad A1/.test(document.querySelector(".statusbar")?.textContent ?? ""), null, { timeout: 5000 }).catch(() => {});
+  check("a file loads onto pad A1", /onto pad A1/.test(await statusText()), await statusText());
+  await sleep(1500);
+  check("quiet before hitting a pad", (await peakOver(200)) < 1e-3);
+  await send({ buttons: { left: true } });
+  const padPeak = await peakOver(300);
+  check("D-pad ← hits pad 1 on the native engine", padPeak > 0.05, `peak ${padPeak.toFixed(3)}`);
+  check("the pad lights while held", await page.$eval("[data-role=pad-A1]", (el) => el.classList.contains("hit")));
+  await send();
+  await page.click("[data-role=pad-mode-gate]");
+  await sleep(300);
+  await send({ rpad: { x: -0.9, y: 0.9, touch: true } });
+  const gatePeak = await peakOver(300);
+  await send();
+  await sleep(400);
+  const gateTail = await peakOver(200);
+  check("right-pad top-left = pad 1; a GATE pad stops on lift", gatePeak > 0.05 && gateTail < gatePeak * 0.05, `${gatePeak.toFixed(3)} → ${gateTail.toFixed(4)}`);
+  await send({ buttons: { r3: true } });
+  await send();
+  await page.waitForFunction(() => /onto pad A2/.test(document.querySelector(".statusbar")?.textContent ?? ""), null, { timeout: 5000 }).catch(() => {});
+  check("R3 in the PADS kit skips back onto the next empty pad", /Skip-back: rescued .* onto pad A2/.test(await statusText()), await statusText());
+  check("…and selects it", (await page.$eval("[data-role=pad-editor] .pad-name", (el) => el.value).catch(() => "")) === "Skip-back 1");
+  await send({ buttons: { r4: true } });
+  await send();
+  await sleep(100);
+  check("R4 moves to bank B", (await page.textContent("[data-role=inst-bank]")).trim() === "B");
+  await send({ buttons: { l4: true } });
+  await send();
+  await send({ buttons: { menu: true } });
+  await send();
+  await sleep(100);
+  check("another Menu tap goes back to SYNTH", !(await page.$("[data-role=pad-grid]")) && !!(await page.$("[data-role=inst-grid]")));
+
   await page.screenshot({ path: join(userData, "..", `ggmm-instrument-${process.pid}.png`) }).catch(() => {});
 
   // --- back out ---
@@ -199,8 +238,8 @@ try {
 
   const names = await page.$$eval(".head input", (i) => i.map((x) => x.value));
   check("the captures are layers in Studio", names.includes("Skip-back 1") && names.includes("Resample 1"), names.join(", "));
-  await page.keyboard.press("Control+z");
-  await page.keyboard.press("Control+z");
+  // Five undos: the three pad edits (load, GATE, skip-back onto A2), then both layers.
+  for (let i = 0; i < 5; i++) await page.keyboard.press("Control+z");
   await sleep(200);
   check("undo removes them", (await page.$$(".head")).length === 0);
 

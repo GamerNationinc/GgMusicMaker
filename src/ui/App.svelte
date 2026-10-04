@@ -6,6 +6,7 @@
   import AnalogMeter from "./AnalogMeter.svelte";
   import ExportDialog from "./ExportDialog.svelte";
   import StemsDialog from "./StemsDialog.svelte";
+  import ChopLab from "./ChopLab.svelte";
   import MatrixRain from "./MatrixRain.svelte";
   import LoadMeter from "./LoadMeter.svelte";
   import EngineSwitch from "./EngineSwitch.svelte";
@@ -13,7 +14,7 @@
   import InstrumentView from "./InstrumentView.svelte";
   import AsciiLoader from "./AsciiLoader.svelte";
   import { withBoot } from "../state/loading";
-  import { mode, startController, deckPerforming, arrowGuard } from "../input/controller";
+  import { mode, startController, deckPerforming, arrowGuard, instrumentView } from "../input/controller";
   import { nav } from "./timelineNav";
   import { clipEnd } from "../audio/edits";
   import {
@@ -23,6 +24,7 @@
     startRecording,
     skipBack,
     toggleResample,
+    chopLab,
     stopRecording,
     undo,
     redo,
@@ -53,7 +55,8 @@
   }
 
   const STUDIO_KEYS = [["space", "play"], ["s", "split"], ["r", "rec"], ["del", "delete"], ["^z", "undo"], ["^s", "save"], ["←→↑↓", "scroll/zoom"], ["L-pad", "swipe · click+drag zoom"], ["z", "fit"], ["f", "follow"], ["t", "theme"]];
-  const INSTRUMENT_KEYS = [["R-pad", "notes"], ["L-pad", "cutoff/reverb"], ["ABXY", "drums"], ["L1/R1+ABXY", "chords"], ["R2", "swell"], ["L5", "sustain"], ["R5", "tilt bend"], ["View+Menu", "studio"]];
+  const PADS_KEYS = [["R-pad", "4×4 pads"], ["D-pad+XYAB", "pads 1–8"], ["L1+", "9–16"], ["L4/R4", "bank"], ["R3", "skip back"], ["Menu", "kit"], ["View+Menu", "studio"]];
+  const INSTRUMENT_KEYS = [["R-pad", "notes"], ["L-pad", "cutoff/reverb"], ["ABXY", "drums"], ["L1/R1+ABXY", "chords"], ["R2", "swell"], ["L5", "sustain"], ["R5", "tilt bend"], ["Menu", "pads"], ["View+Menu", "studio"]];
 
   const sessionName = $derived(sessionDisplayName($sessionPath));
 
@@ -90,6 +93,8 @@
   });
 
   function onKey(e: KeyboardEvent) {
+    // The chop lab handles its own keys (Escape); nothing may edit behind it.
+    if ($chopLab) return;
     // Performing on the Deck: Steam's desktop layout also types keys for the
     // face buttons (A = Enter, B = Escape…) — none of them may edit.
     if ($mode !== "studio") {
@@ -230,7 +235,7 @@
   </div>
   <div class="box status-box" data-title="status">
     <div class="keys" aria-label={$mode === "instrument" ? "Controller" : "Keyboard shortcuts"}>
-      {#each $mode === "instrument" ? INSTRUMENT_KEYS : STUDIO_KEYS as [k, what] (k)}
+      {#each $mode === "instrument" ? ($instrumentView.kit === "pads" ? PADS_KEYS : INSTRUMENT_KEYS) : STUDIO_KEYS as [k, what] (k)}
         <span class="key"><b>{k}</b> {what}</span>
       {/each}
     </div>
@@ -240,6 +245,7 @@
 
 <ExportDialog />
 <StemsDialog />
+{#if $chopLab}<ChopLab src={$chopLab} />{/if}
 <AsciiLoader />
 
 <style>

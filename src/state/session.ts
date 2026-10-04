@@ -26,6 +26,7 @@ import { normalizeFx } from "../fx/chain";
 import { normalizeMorph } from "../fx/morph";
 import { normalizePunch } from "../fx/punch";
 import { normalizeBass } from "../fx/bass";
+import { normalizePads } from "../pads/pads";
 
 export const SESSION_EXTENSION = "ggmm";
 // v1: tracks had `voice: { preset, mix }`; v2: `synth` (Voice Synth) + project.surround;
@@ -69,6 +70,7 @@ export interface UnpackedSession {
 export function referencedBufferIds(project: Project): string[] {
   const ids = new Set<string>();
   for (const t of project.tracks) for (const c of t.clips) ids.add(c.bufferId);
+  for (const p of project.pads ?? []) ids.add(p.bufferId);
   return [...ids];
 }
 
@@ -315,7 +317,11 @@ export function migrateProject(project: Project): Project {
     } as Track;
   });
   const surround: SurroundLayout = SURROUND_ORDER.includes(project.surround) ? project.surround : "stereo";
-  return { ...project, tracks, surround };
+  const out: Project = { ...project, tracks, surround };
+  const pads = normalizePads(project.pads);
+  if (pads.length) out.pads = pads;
+  else delete out.pads;
+  return out;
 }
 
 /** Strip the path and extension from a session path for display. */

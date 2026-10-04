@@ -40,6 +40,9 @@ pub enum LiveEvent {
     },
     /// Everything silent at once.
     Panic,
+    /// A sampler pad pressed / let go (played by pads.rs, not here).
+    Pad { slot: u32, vel: f64 },
+    Padoff { slot: u32 },
 }
 
 /// attack, decay, sustain, release (s), saw/square mix, detune (cents),
@@ -296,6 +299,7 @@ impl Live {
                 self.voices = [Voice::IDLE; VOICES];
                 self.drums = [Drum::IDLE; DRUMS];
             }
+            LiveEvent::Pad { .. } | LiveEvent::Padoff { .. } => {}
         }
     }
 

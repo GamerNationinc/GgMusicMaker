@@ -25,6 +25,7 @@ import type { ReverbSpace } from "./reverb";
 import type { SurroundLayout } from "../fx/voice-synth";
 import { anySoloed, isTrackAudible } from "./edits";
 import { punchIsActive } from "../fx/punch";
+import { padSpecs } from "../pads/pads";
 import { bassIsActive } from "../fx/bass";
 import { LivePeaks } from "./liveTake";
 import { synthIsActive, surroundChannels } from "../fx/voice-synth";
@@ -99,6 +100,7 @@ export function nativeProjectSpec(project: Project, opts: { masterGain: number; 
     surround: surroundChannels(project.surround),
     reverb: opts.reverb,
     binaural: opts.binaural,
+    pads: padSpecs(project.pads),
     tracks: project.tracks.map((t) => {
       const audible = isTrackAudible(t, solo);
       return {
@@ -131,6 +133,7 @@ export class NativeBackend implements AudioBackend {
   private lastProject: Project | null = null;
   private loaded = new Set<string>();
   private pendingLoads: Promise<unknown>[] = [];
+  private liveQueue: Promise<void> | null = null;
   private wantPlaying = false;
   private scope: Float32Array | null = null;
   private scopeState = new Float32Array(512);
@@ -200,7 +203,9 @@ export class NativeBackend implements AudioBackend {
   private mirror(id: string, buffer: AudioBuffer): void {
     if (this.loaded.has(id)) return;
     this.loaded.add(id);
-    this.pendingLoads.push(this.loadChannels(id, buffer).catch(() => this.loaded.delete(id)));
+    const p = this.loadChannels(id, buffer).catch(() => this.loaded.delete(id));
+    this.pendingLoads.push(p);
+    void p.finally(() => (this.pendingLoads = this.pendingLoads.filter((x) => x !== p)));
   }
 
   /** Hand a buffer to the engine. Big ones (a long song is over a GB) go
@@ -260,11 +265,10 @@ export class NativeBackend implements AudioBackend {
       this.web.syncAll(project);
       return;
     }
-    for (const t of project.tracks)
-      for (const c of t.clips) {
-        const b = this.web.getBuffer(c.bufferId);
-        if (b) this.mirror(c.bufferId, b);
-      }
+    for (const id of [...project.tracks.flatMap((t) => t.clips.map((c) => c.bufferId)), ...(project.pads ?? []).map((p) => p.bufferId)]) {
+      const b = this.web.getBuffer(id);
+      if (b) this.mirror(id, b);
+    }
     this.native.setProject(this.spec(project));
   }
   applyTrackParams(track: Track, _solo: boolean): void {
@@ -325,7 +329,19 @@ export class NativeBackend implements AudioBackend {
 
   live(e: LiveEvent): void {
     if (this.fallback || !this.native.live) return this.web.live(e);
-    this.native.live(JSON.stringify(e));
+    const send = () => this.native.live!(JSON.stringify(e));
+    // A pad's sample may still be on its way to the engine: events wait,
+    // in order, until it's there.
+    if (this.pendingLoads.length || this.liveQueue) {
+      const wait = Promise.all(this.pendingLoads);
+      const q: Promise<void> = (this.liveQueue ?? Promise.resolve()).then(() => wait).then(send, send);
+      this.liveQueue = q;
+      void q.then(() => {
+        if (this.liveQueue === q) this.liveQueue = null;
+      });
+      return;
+    }
+    send();
   }
 
   // ---- skip-back ---------------------------------------------------------------

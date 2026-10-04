@@ -30,4 +30,7 @@ export type LiveEvent =
   | { t: "glide"; id: number; note: number }
   | { t: "drum"; kind: number; vel: number }
   | ({ t: "ctl" } & LiveControls)
-  | { t: "panic" };
+  | { t: "panic" }
+  /** A sampler pad (src/pads/pads.ts) pressed / let go. */
+  | { t: "pad"; slot: number; vel: number }
+  | { t: "padoff"; slot: number };

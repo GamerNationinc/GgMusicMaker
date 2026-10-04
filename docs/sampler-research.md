@@ -4,12 +4,23 @@
 
 _Research, 2026-10-04. Nothing in here is built yet unless the note below says so._
 
-**Built:** skip-back (§3.1) and resample (§3.3), 2026-10-04 — a 120 s ring of
-the output in both engines (`native/src/skipback.rs`,
-`public/skipback-processor.js`, `src/audio/skipback.ts`). With no pads yet,
-both land on a new timeline layer. Controls: ⟲ / ◉ in the transport, B /
-Shift+B, Instrument mode R3 / L1·R1+R3. Not yet: multiple named "ghost"
-snapshots, the chop lab hand-off, ghost tape (§6.2).
+**Built (2026-10-04):**
+- Skip-back (§3.1) and resample (§3.3): a 120 s ring of the output in both
+  engines (`native/src/skipback.rs`, `public/skipback-processor.js`,
+  `src/audio/skipback.ts`). In Studio / SYNTH they land on a new layer; in
+  the PADS kit, on a pad. Controls: ⟲ / ◉ in the transport, B / Shift+B,
+  Instrument mode R3 / L1·R1+R3.
+- Pad engine (§2.1–2.3): 10 × 16 pads in the project, one-shot / gate /
+  latching loop, reverse, gain, pan, repitch, attack/release, choke groups,
+  mono/poly — `src/pads/pads.ts`, `native/src/pads.rs`, `src/audio/sampler.ts`.
+  Instrument mode → PADS kit (Menu tap); loading from a clip, files,
+  skip-back or resample.
+- Chop lab (§2.4): waveform, tap-to-audition, draggable cuts, transient /
+  equal auto-chop, slices → pads (`src/pads/chop.ts`, `ChopLab.svelte`).
+
+Not yet: time-stretch, polyphony limit setting, drunk chop, zero-crossing
+snap, BPM-grid chop, pinch zoom in the chop lab, named "ghost" snapshots,
+ghost tape (§6.2).
 
 ## How this relates to what exists (read first)
 

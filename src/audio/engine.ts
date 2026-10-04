@@ -18,6 +18,7 @@ import type { AudioBackend, DecodedAudio, MasterMeter } from "./backend";
 import { blockLevels, logBands } from "./spectrum";
 import { assembleTake, type Chunk } from "./recording";
 import { LivePeaks } from "./liveTake";
+import { WebSampler } from "./sampler";
 import { RING_SECONDS, songTimeAt, type PlaySpan, type SkipGrab } from "./skipback";
 import { buildMasterBus, deviceChannelsFor, type MasterBus } from "./master";
 import { surroundChannels, type SurroundLayout } from "../fx/voice-synth";
@@ -152,7 +153,23 @@ export class AudioEngine implements AudioBackend {
    *  output 1 → the reverb. Built on the first event. */
   private liveNode: AudioWorkletNode | null = null;
 
+  /** The sampler pads (sampler.ts): plain Web Audio nodes, no worklet. */
+  private sampler: WebSampler | null = null;
+
+  private pads(): WebSampler {
+    if (!this.sampler) this.sampler = new WebSampler(this.ctx, this.master.input, (id) => this.buffers.get(id));
+    return this.sampler;
+  }
+
+  /** Sampler voices sounding for a pad (tests). */
+  padVoices(slot: number): number {
+    return this.sampler?.voicesOf(slot) ?? 0;
+  }
+
   live(e: LiveEvent): void {
+    if (e.t === "pad") return this.pads().trigger(e.slot, e.vel);
+    if (e.t === "padoff") return this.pads().release(e.slot);
+    if (e.t === "panic") this.sampler?.panic();
     if (!this.liveAvailable) return;
     if (!this.liveNode) {
       this.liveNode = new AudioWorkletNode(this.ctx, "live-processor", {
@@ -330,6 +347,7 @@ export class AudioEngine implements AudioBackend {
     this.preTimeBuf = new Float32Array(new ArrayBuffer(4 * this.master.preTap.fftSize));
     this.preFreqBuf = new Uint8Array(new ArrayBuffer(this.master.preTap.frequencyBinCount));
     this.reverbReturn.connect(this.master.input);
+    this.sampler?.setOutput(this.master.input);
     if (this.skipNode) this.master.output.connect(this.skipNode);
     if (this.liveNode) {
       this.liveNode.disconnect();
@@ -413,6 +431,7 @@ export class AudioEngine implements AudioBackend {
   }
 
   syncAll(project: Project): void {
+    this.pads().setPads(project.pads);
     const hasSolo = anySoloed(project);
     for (const track of project.tracks) this.applyTrackParams(track, hasSolo);
   }

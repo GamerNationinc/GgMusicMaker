@@ -16,12 +16,21 @@
 //   R3          SKIP BACK: the last minute that played → a new layer.
 //               Hold L1 or R1 + R3: RESAMPLE start/stop (the output, FX
 //               and all, from now until pressed again).
+//   Menu (tap)  switch kit: SYNTH (all of the above) ⇄ PADS.
+//
+// PADS kit — the sampler pads (src/pads/pads.ts), bank of 16:
+//   D-pad ← ↑ ↓ →, X Y A B   pads 1–8; hold L1 or R1 for pads 9–16.
+//   right pad   the 4×4 grid: touch hits a pad, slide hits the next, lift
+//               lets go (gate pads stop).
+//   L2          velocity.     L4 / R4  bank down / up (A–J).
+//   R3 / L1·R1 + R3   skip back / resample — onto a pad.
 //
 // Pure: `update(state)` → the engine events and haptic pulses that state
 // change causes. No timers, no audio, no DOM.
 
 import type { ControllerState, HapticSide } from "./deckpad";
 import { LIVE_PATCHES, type LiveControls, type LiveEvent } from "../audio/live";
+import { BANKS, slotOf } from "../pads/pads";
 
 export const SCALES = [
   { name: "major", steps: [0, 2, 4, 5, 7, 9, 11] },
@@ -39,6 +48,15 @@ export const DRUM_NAMES = ["Kick", "Snare", "Hat", "Clap"];
 export const PAD_BUTTONS = ["a", "b", "x", "y"] as const;
 /** Chord degrees on bank B: I IV V vi. */
 const CHORD_DEGREES = [0, 3, 4, 5];
+/** PADS kit: the buttons for pads 1–8 (L1/R1 held: 9–16), and their glyphs. */
+export const PAD_KEYS = ["left", "up", "down", "right", "x", "y", "a", "b"] as const;
+export const PAD_KEY_LABELS = ["←", "↑", "↓", "→", "X", "Y", "A", "B"];
+/** The right pad as a 4×4 grid: pad index under a position (top-left = 1). */
+export function padCellAt(x: number, y: number): number {
+  const col = Math.min(3, Math.max(0, Math.floor(((x + 1) / 2) * 4)));
+  const row = Math.min(3, Math.max(0, Math.floor((1 - (y + 1) / 2) * 4)));
+  return row * 4 + col;
+}
 const BEND_RANGE = 2;
 const STICK_DEAD = 0.12;
 /** Tilt (radians) for a full bend. */
@@ -50,9 +68,14 @@ export interface InstrumentSettings {
   /** Octave of the grid's bottom row (C3 = 3). */
   octave: number;
   patch: number;
+  /** SYNTH (notes + drums) or PADS (the sampler). */
+  kit: "synth" | "pads";
+  /** PADS: bank shown (0..9 = A..J) and the selected pad's slot. */
+  padBank: number;
+  pad: number;
 }
 
-export const DEFAULT_SETTINGS: InstrumentSettings = { key: 0, scale: 0, octave: 3, patch: 0 };
+export const DEFAULT_SETTINGS: InstrumentSettings = { key: 0, scale: 0, octave: 3, patch: 0, kit: "synth", padBank: 0, pad: 0 };
 
 /** What the UI shows. */
 export interface InstrumentView extends InstrumentSettings {
@@ -65,6 +88,8 @@ export interface InstrumentView extends InstrumentSettings {
   pads: boolean[];
   controls: LiveControls;
   tiltArmed: boolean;
+  /** PADS: slots held right now. */
+  padsHeld: number[];
 }
 
 export interface Haptic {
@@ -84,18 +109,21 @@ export interface Output {
 const deadzone = (v: number) => (Math.abs(v) < STICK_DEAD ? 0 : (v - Math.sign(v) * STICK_DEAD) / (1 - STICK_DEAD));
 const edge = (prev: ControllerState, s: ControllerState, b: keyof ControllerState["buttons"]) => s.buttons[b] && !prev.buttons[b];
 
-export function scaleOf(settings: InstrumentSettings): readonly number[] {
+/** What the note helpers need. */
+type Tuning = Pick<InstrumentSettings, "key" | "scale" | "octave">;
+
+export function scaleOf(settings: Pick<InstrumentSettings, "scale">): readonly number[] {
   return SCALES[settings.scale % SCALES.length].steps;
 }
 
 /** MIDI note of a grid cell. */
-export function cellNote(settings: InstrumentSettings, col: number, row: number): number {
+export function cellNote(settings: Tuning, col: number, row: number): number {
   const steps = scaleOf(settings);
   return 12 * (settings.octave + 1 + row) + settings.key + steps[col % steps.length];
 }
 
 /** Grid cell under a pad position. */
-export function cellAt(settings: InstrumentSettings, x: number, y: number): { col: number; row: number } {
+export function cellAt(settings: Tuning, x: number, y: number): { col: number; row: number } {
   const cols = scaleOf(settings).length;
   const col = Math.min(cols - 1, Math.max(0, Math.floor(((x + 1) / 2) * cols)));
   const row = Math.min(GRID_ROWS - 1, Math.max(0, Math.floor(((y + 1) / 2) * GRID_ROWS)));
@@ -104,7 +132,7 @@ export function cellAt(settings: InstrumentSettings, x: number, y: number): { co
 
 /** Triad on scale degree `deg` of the key (7-note parent scale for the
  *  pentatonic/blues ones: major for major pent., natural minor otherwise). */
-export function chordNotes(settings: InstrumentSettings, deg: number): number[] {
+export function chordNotes(settings: Tuning, deg: number): number[] {
   let steps = scaleOf(settings);
   if (steps.length !== 7) steps = settings.scale === 3 ? SCALES[0].steps : SCALES[1].steps;
   const root = 12 * (settings.octave + 1) + settings.key;
@@ -114,7 +142,7 @@ export function chordNotes(settings: InstrumentSettings, deg: number): number[] 
   });
 }
 
-export function chordName(settings: InstrumentSettings, deg: number): string {
+export function chordName(settings: Tuning, deg: number): string {
   const [a, b] = chordNotes(settings, deg);
   const name = NOTE_NAMES[((a % 12) + 12) % 12];
   return b - a === 3 ? `${name}m` : name;
@@ -136,9 +164,14 @@ export class Instrument {
   private sentControls: LiveControls | null = null;
   private tiltZero: number | null = null;
   private lpadXY = { x: 0.4, y: -0.6 };
+  /** PADS: button → slot it hit; the right-pad cell and its slot. */
+  private heldPads = new Map<string, number>();
+  private padCell: { cell: number; slot: number } | null = null;
+  /** Menu went down without View: a tap (not the mode combo) on release. */
+  private menuTap = false;
 
-  constructor(settings: InstrumentSettings = DEFAULT_SETTINGS) {
-    this.settings = { ...settings };
+  constructor(settings: Partial<InstrumentSettings> = {}) {
+    this.settings = { ...DEFAULT_SETTINGS, ...settings };
   }
 
   /** Feed the latest controller state. */
@@ -147,7 +180,30 @@ export class Instrument {
     this.prev = s;
     const events: LiveEvent[] = [];
     const haptics: Haptic[] = [];
+    const actions: InstrumentAction[] = [];
     const st = this.settings;
+
+    // --- Menu tap: switch kit ---
+    if (edge(prev, s, "menu")) this.menuTap = !s.buttons.view;
+    if (s.buttons.view) this.menuTap = false;
+    if (!s.buttons.menu && prev.buttons.menu && this.menuTap) {
+      this.menuTap = false;
+      events.push(...this.releaseHeld());
+      st.kit = st.kit === "synth" ? "pads" : "synth";
+      haptics.push({ side: "both", strength: "bump" });
+    }
+
+    // --- R3: skip-back, or resample with a bumper held ---
+    const bumper = s.buttons.l1 || s.buttons.r1;
+    if (edge(prev, s, "r3")) {
+      actions.push(bumper ? "resample" : "skipback");
+      haptics.push({ side: "right", strength: "bump" });
+    }
+
+    if (st.kit === "pads") {
+      this.updatePads(prev, s, events, haptics);
+      return { events, haptics, actions };
+    }
 
     // --- settings: octave, key, scale, sound ---
     let moved = false;
@@ -212,15 +268,8 @@ export class Instrument {
       this.cell = null;
     }
 
-    // --- R3: skip-back, or resample with a bumper held ---
-    const chords = s.buttons.l1 || s.buttons.r1;
-    const actions: InstrumentAction[] = [];
-    if (edge(prev, s, "r3")) {
-      actions.push(chords ? "resample" : "skipback");
-      haptics.push({ side: "right", strength: "bump" });
-    }
-
     // --- ABXY pads ---
+    const chords = bumper;
     const vel = 0.6 + 0.4 * s.l2;
     PAD_BUTTONS.forEach((b, i) => {
       if (edge(prev, s, b)) {
@@ -243,14 +292,62 @@ export class Instrument {
     return { events, haptics, actions };
   }
 
-  /** Release everything (leaving the mode, controller lost). */
-  release(): Output {
+  /** PADS kit: buttons and the right-pad grid hit the bank's pads. */
+  private updatePads(prev: ControllerState, s: ControllerState, events: LiveEvent[], haptics: Haptic[]): void {
+    const st = this.settings;
+    const banks = BANKS.length;
+    if (edge(prev, s, "l4")) (st.padBank = (st.padBank + banks - 1) % banks), haptics.push({ side: "both", strength: "bump" });
+    if (edge(prev, s, "r4")) (st.padBank = (st.padBank + 1) % banks), haptics.push({ side: "both", strength: "bump" });
+    const vel = 0.75 + 0.25 * s.l2;
+    const upper = s.buttons.l1 || s.buttons.r1 ? 8 : 0;
+    PAD_KEYS.forEach((b, i) => {
+      if (edge(prev, s, b)) {
+        const slot = slotOf(st.padBank, i + upper);
+        events.push({ t: "pad", slot, vel });
+        this.heldPads.set(b, slot);
+        st.pad = slot;
+      } else if (!s.buttons[b] && prev.buttons[b]) {
+        const slot = this.heldPads.get(b);
+        if (slot !== undefined) events.push({ t: "padoff", slot });
+        this.heldPads.delete(b);
+      }
+    });
+    if (s.rpad.touch) {
+      const cell = padCellAt(s.rpad.x, s.rpad.y);
+      if (!this.padCell || this.padCell.cell !== cell) {
+        if (this.padCell) {
+          events.push({ t: "padoff", slot: this.padCell.slot });
+          haptics.push({ side: "right", strength: "tick" });
+        }
+        const slot = slotOf(st.padBank, cell);
+        events.push({ t: "pad", slot, vel });
+        this.padCell = { cell, slot };
+        st.pad = slot;
+      }
+    } else if (this.padCell) {
+      events.push({ t: "padoff", slot: this.padCell.slot });
+      this.padCell = null;
+    }
+  }
+
+  /** Let go of whatever the current kit holds. */
+  private releaseHeld(): LiveEvent[] {
     const events: LiveEvent[] = [];
     if (this.gridVoice !== null) events.push({ t: "off", id: this.gridVoice });
     for (const ids of this.chordVoices.values()) for (const id of ids) events.push({ t: "off", id });
+    for (const slot of this.heldPads.values()) events.push({ t: "padoff", slot });
+    if (this.padCell) events.push({ t: "padoff", slot: this.padCell.slot });
     this.gridVoice = null;
     this.cell = null;
     this.chordVoices.clear();
+    this.heldPads.clear();
+    this.padCell = null;
+    return events;
+  }
+
+  /** Release everything (leaving the mode, controller lost). */
+  release(): Output {
+    const events: LiveEvent[] = this.releaseHeld();
     if (this.controls.sustain || this.controls.bend) {
       this.controls = { ...this.controls, sustain: false, bend: 0 };
       events.push({ t: "ctl", ...this.controls });
@@ -271,6 +368,7 @@ export class Instrument {
       pads: PAD_BUTTONS.map((b) => !!s?.buttons[b]),
       controls: { ...this.controls },
       tiltArmed: this.tiltZero !== null,
+      padsHeld: [...this.heldPads.values(), ...(this.padCell ? [this.padCell.slot] : [])],
     };
   }
 }

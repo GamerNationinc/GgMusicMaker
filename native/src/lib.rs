@@ -20,6 +20,7 @@ pub mod dsp;
 pub mod live;
 pub mod mixer;
 pub mod morph;
+pub mod pads;
 pub mod placer;
 pub mod record;
 pub mod reverb;
@@ -499,7 +500,7 @@ impl Task for RenderTask {
     type Output = Vec<Vec<f32>>;
     type JsValue = Vec<Float32Array>;
     fn compute(&mut self) -> Result<Self::Output> {
-        Ok(render(std::mem::replace(&mut self.project, ProjectSpec { tracks: vec![], master_gain: 0.0, surround: 2, reverb: Space::Hall, binaural: false }), &self.buffers, self.sr, self.tail))
+        Ok(render(std::mem::replace(&mut self.project, ProjectSpec { tracks: vec![], master_gain: 0.0, surround: 2, reverb: Space::Hall, binaural: false, pads: vec![] }), &self.buffers, self.sr, self.tail))
     }
     fn resolve(&mut self, _env: Env, out: Self::Output) -> Result<Self::JsValue> {
         Ok(out.into_iter().map(Float32Array::new).collect())

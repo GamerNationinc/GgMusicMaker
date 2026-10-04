@@ -15,6 +15,7 @@ use crate::dsp::{Biquad, Compressor, Kind, Punch, PunchParams};
 use crate::morph::{Morph, MorphParams};
 use crate::placer::Placer;
 use crate::live::{Live, LiveEvent};
+use crate::pads::{PadSpec, Sampler};
 use crate::reverb::{Reverb, Space};
 use crate::synth::{SynthParams, VoiceSynth};
 use crate::util::MAX_CH;
@@ -123,6 +124,9 @@ pub struct ProjectSpec {
     /// Render a wider-than-device bus for headphones.
     #[serde(default)]
     pub binaural: bool,
+    /// Sampler pads with a sample (Instrument mode).
+    #[serde(default)]
+    pub pads: Vec<PadSpec>,
 }
 fn two() -> usize {
     2
@@ -223,6 +227,8 @@ pub struct Mixer {
     reverb: Reverb,
     /// The instrument played live from the controller (Instrument mode).
     live: Live,
+    /// The sampler pads (Instrument mode, PADS).
+    sampler: Sampler,
     binaural: Option<(usize, Binaural)>,
     comps: Vec<Compressor>,
     /// The compressor's look-ahead line (Chromium's DynamicsCompressor
@@ -257,10 +263,11 @@ impl Mixer {
             sr,
             device_ch,
             buffers: HashMap::new(),
-            project: ProjectSpec { tracks: vec![], master_gain: 0.9, surround: 2, reverb: Space::Hall, binaural: false },
+            project: ProjectSpec { tracks: vec![], master_gain: 0.9, surround: 2, reverb: Space::Hall, binaural: false, pads: vec![] },
             dsp: HashMap::new(),
             reverb: Reverb::new(Space::Hall, sr),
             live: Live::new(sr),
+            sampler: Sampler::new(sr),
             binaural: None,
             comps: vec![],
             ahead: vec![[0.0; MAX_CH]; ((sr * 0.006).round() as usize).max(1)],
@@ -336,7 +343,28 @@ impl Mixer {
     }
 
     pub fn live_event(&mut self, e: LiveEvent) {
-        self.live.event(e);
+        match e {
+            LiveEvent::Pad { slot, vel } => {
+                if let Some(p) = self.project.pads.iter().find(|p| p.slot == slot) {
+                    let b = self.buffers.get(&p.buffer).cloned();
+                    self.sampler.trigger(p, b, vel);
+                }
+            }
+            LiveEvent::Padoff { slot } => {
+                let rel = self.project.pads.iter().find(|p| p.slot == slot).map_or(0.0, |p| p.release);
+                self.sampler.release(slot, rel);
+            }
+            LiveEvent::Panic => {
+                self.sampler.panic();
+                self.live.event(e);
+            }
+            _ => self.live.event(e),
+        }
+    }
+
+    /// Sampler voices sounding for a pad (tests).
+    pub fn pad_voices(&self, slot: u32) -> usize {
+        self.sampler.voices_of(slot)
     }
 
     pub fn reverb_space(&self) -> Space {
@@ -545,6 +573,12 @@ impl Mixer {
             self.live.render([&mut b0[0][..q], &mut b1[0][..q]], [&mut s0[0][..q], &mut s1[0][..q]]);
         }
 
+        // --- sampler pads (dry, stereo) ---
+        if self.sampler.active() {
+            let (b0, b1) = self.bus.split_at_mut(1);
+            self.sampler.render(&mut b0[0][..q], &mut b1[0][..q]);
+        }
+
         // --- reverb return → bus L/R (runs always so tails ring out) ---
         for i in 0..q {
             let (l, r) = self.reverb.step(self.send[0][i], self.send[1][i]);
@@ -617,5 +651,31 @@ impl Mixer {
 
     pub fn duration(&self) -> f64 {
         self.project.tracks.iter().flat_map(|t| t.clips.iter()).map(|c| c.start + c.duration).fold(0.0, f64::max)
+    }
+}
+
+#[cfg(test)]
+mod pad_tests {
+    use super::*;
+
+    #[test]
+    fn pads_play_through_the_bus_whether_or_not_the_transport_runs() {
+        let sr = 48000.0;
+        let mut m = Mixer::new(sr, 2);
+        m.add_buffer("b".into(), Arc::new(Buffer { rate: sr, channels: vec![vec![0.25; 48000]; 2] }));
+        let json = r#"{"tracks":[],"masterGain":1,"pads":[{"slot":5,"buffer":"b","start":0,"end":0.5,"mode":"gate"}]}"#;
+        let p: ProjectSpec = serde_json::from_str(json).unwrap();
+        m.set_project(p, vec![], None);
+        let ev: LiveEvent = serde_json::from_str(r#"{"t":"pad","slot":5,"vel":1}"#).unwrap();
+        m.live_event(ev);
+        assert_eq!(m.pad_voices(5), 1);
+        let (mut l, mut r) = (vec![0f32; 2048], vec![0f32; 2048]);
+        m.render(&mut [&mut l, &mut r]);
+        assert!(m.peak > 0.2, "{}", m.peak);
+        m.live_event(serde_json::from_str(r#"{"t":"padoff","slot":5}"#).unwrap());
+        assert_eq!(m.pad_voices(5), 0);
+        // An unknown pad does nothing.
+        m.live_event(serde_json::from_str(r#"{"t":"pad","slot":9,"vel":1}"#).unwrap());
+        assert_eq!(m.pad_voices(9), 0);
     }
 }

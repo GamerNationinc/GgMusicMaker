@@ -7,6 +7,7 @@ import { packSession, unpackSession, referencedBufferIds, sessionDisplayName, pl
 import type { Project, Track } from "../audio/types";
 import { nextId, reserveIds, __resetIds } from "../audio/types";
 import type { PcmSource } from "../audio/wav";
+import { newPad } from "../pads/pads";
 
 function pcm(samples: number[][], sampleRate = 48000): PcmSource {
   const chans = samples.map((s) => new Float32Array(s));
@@ -232,5 +233,23 @@ describe("streaming sessions (big files)", () => {
     for (const [id, pcm] of whole.audio) expect(streamed.audio.get(id)!.channels).toEqual(pcm.channels);
     // The head, then one read per WAV.
     expect(reads.length).toBe(1 + whole.header.audio.length);
+  });
+});
+
+describe("sampler pads in a session", () => {
+  it("saves a pad's audio (even one no clip uses) and restores the pads", () => {
+    const withPads: Project = {
+      ...project,
+      pads: [{ ...newPad(17, "buf_orphan", 0, 0.00005, "hit"), mode: "loop", choke: 2 }],
+    };
+    expect(referencedBufferIds(withPads)).toContain("buf_orphan");
+    const { header, audio } = unpackSession(packSession(withPads, { reverbSpace: "hall", pixelsPerSecond: 80, playhead: 0 }, (id) => buffers.get(id)));
+    expect(header.project.pads).toEqual(withPads.pads);
+    expect([...audio.get("buf_orphan")!.channels[0]]).toEqual([1, 1, 1]);
+  });
+
+  it("a session without pads opens with none", () => {
+    const { header } = unpackSession(packSession(project, { reverbSpace: "hall", pixelsPerSecond: 80, playhead: 0 }, (id) => buffers.get(id)));
+    expect(header.project.pads).toBeUndefined();
   });
 });

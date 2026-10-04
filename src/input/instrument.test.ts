@@ -78,7 +78,7 @@ describe("Instrument", () => {
     inst.update(st({ buttons: { up: true } }));
     inst.update(st());
     inst.update(st({ buttons: { l3: true } }));
-    expect(inst.settings).toEqual({ key: 1, scale: 1, octave: 4, patch: 1 });
+    expect(inst.settings).toMatchObject({ key: 1, scale: 1, octave: 4, patch: 1 });
   });
 
   it("controls: macro stays where the thumb left it; ctl only on change", () => {
@@ -126,5 +126,60 @@ describe("capture buttons", () => {
     const r = inst.update(st({ buttons: { r3: true, l1: true } }));
     expect(r.actions).toEqual(["resample"]);
     expect(r.events.some((e) => e.t === "on" || e.t === "drum")).toBe(false);
+  });
+});
+
+describe("PADS kit", () => {
+  const padsOf = (o: { events: LiveEvent[] }) => o.events.flatMap((e) => (e.t === "pad" ? [`+${e.slot}`] : e.t === "padoff" ? [`-${e.slot}`] : []));
+
+  it("a Menu tap switches kit; View + Menu (the mode combo) doesn't", () => {
+    const inst = new Instrument();
+    inst.update(st());
+    inst.update(st({ buttons: { menu: true } }));
+    inst.update(st());
+    expect(inst.settings.kit).toBe("pads");
+    inst.update(st({ buttons: { view: true } }));
+    inst.update(st({ buttons: { view: true, menu: true } }));
+    inst.update(st());
+    expect(inst.settings.kit).toBe("pads");
+  });
+
+  it("buttons hit pads 1–8, a bumper 9–16, banks on L4/R4, and let go", () => {
+    const inst = new Instrument({ kit: "pads" });
+    inst.update(st());
+    expect(padsOf(inst.update(st({ buttons: { left: true } })))).toEqual(["+0"]);
+    expect(padsOf(inst.update(st()))).toEqual(["-0"]);
+    expect(padsOf(inst.update(st({ buttons: { b: true, l1: true } })))).toEqual(["+15"]);
+    inst.update(st({ buttons: { l1: true } }));
+    inst.update(st({ buttons: { r4: true } }));
+    inst.update(st());
+    expect(inst.settings.padBank).toBe(1);
+    const hit = inst.update(st({ buttons: { x: true }, l2: 1 }));
+    expect(hit.events).toEqual([{ t: "pad", slot: 20, vel: 1 }]);
+    expect(inst.settings.pad).toBe(20);
+    // A bank change while held: the release still goes to the pad that was hit.
+    inst.update(st({ buttons: { x: true, l4: true } }));
+    expect(padsOf(inst.update(st()))).toEqual(["-20"]);
+    // No synth sounds in the PADS kit.
+    expect(inst.update(st({ buttons: { a: true } })).events.some((e) => e.t === "drum")).toBe(false);
+  });
+
+  it("the right pad is a 4×4 grid: touch, slide, lift", () => {
+    const inst = new Instrument({ kit: "pads" });
+    inst.update(st());
+    expect(padsOf(inst.update(st(touch(-0.9, 0.9))))).toEqual(["+0"]);
+    expect(padsOf(inst.update(st(touch(-0.85, 0.85))))).toEqual([]);
+    const slid = inst.update(st(touch(0.9, -0.9)));
+    expect(padsOf(slid)).toEqual(["-0", "+15"]);
+    expect(slid.haptics).toEqual([{ side: "right", strength: "tick" }]);
+    expect(inst.view().padsHeld).toEqual([15]);
+    expect(padsOf(inst.update(st()))).toEqual(["-15"]);
+  });
+
+  it("switching kit or leaving lets go of held pads", () => {
+    const inst = new Instrument({ kit: "pads" });
+    inst.update(st());
+    inst.update(st({ buttons: { up: true } }));
+    expect(padsOf(inst.release())).toEqual(["-1"]);
   });
 });

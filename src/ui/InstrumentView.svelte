@@ -11,10 +11,22 @@
     screenDrum,
     setInstrument,
     screenOnly,
+    setKit,
+    capturePadTarget,
   } from "../input/controller";
+  import PadsView from "./PadsView.svelte";
+  import { BANKS } from "../pads/pads";
   import { SCALES, NOTE_NAMES, GRID_ROWS, DRUM_NAMES, cellNote, chordNotes, chordName, scaleOf } from "../input/instrument";
   import { LIVE_PATCHES } from "../audio/live";
   import { skipBack, toggleResample, resampling } from "../state/store";
+
+  /** Skip-back / resample from the screen: onto a pad in the PADS kit. */
+  function capture(which: "skipback" | "resample") {
+    const target = capturePadTarget();
+    void (which === "skipback" ? skipBack(target) : toggleResample(target)).then((slot) => {
+      if (slot !== null) setInstrument({ pad: slot });
+    });
+  }
 
   const v = $derived($instrumentView);
   const cols = $derived(scaleOf(v).length);
@@ -63,6 +75,19 @@
 <section class="instrument" data-role="instrument">
   <div class="settings box" data-title="instrument" data-title-right={sourceLabel.toLowerCase()}>
     <div class="group">
+      <span class="lbl">KIT <small>menu</small></span>
+      <button class="btn patch" class:accent={v.kit === "synth"} data-role="inst-kit-synth" onclick={screenOnly(() => setKit("synth"))}>SYNTH</button>
+      <button class="btn patch" class:accent={v.kit === "pads"} data-role="inst-kit-pads" onclick={screenOnly(() => setKit("pads"))}>PADS</button>
+    </div>
+    {#if v.kit === "pads"}
+    <div class="group">
+      <span class="lbl">BANK <small>L4 / R4</small></span>
+      <button class="btn step" onclick={screenOnly(() => setInstrument({ padBank: (v.padBank + BANKS.length - 1) % BANKS.length }))}>◀</button>
+      <span class="val screen" data-role="inst-bank">{BANKS[v.padBank]}</span>
+      <button class="btn step" onclick={screenOnly(() => setInstrument({ padBank: (v.padBank + 1) % BANKS.length }))}>▶</button>
+    </div>
+    {:else}
+    <div class="group">
       <span class="lbl">KEY <small>d-pad ←→</small></span>
       <button class="btn step" onclick={screenOnly(() => setInstrument({ key: (v.key + 11) % 12 }))}>◀</button>
       <span class="val screen" data-role="inst-key">{NOTE_NAMES[v.key]}</span>
@@ -86,15 +111,19 @@
         <button class="btn patch" class:accent={v.patch === i} data-role="inst-patch-{p}" onclick={screenOnly(() => setInstrument({ patch: i }))}>{p}</button>
       {/each}
     </div>
+    {/if}
     <div class="group">
       <span class="lbl">CAPTURE <small>R3 · L1/R1+R3</small></span>
-      <button class="btn" data-role="inst-skip-back" onclick={screenOnly(() => void skipBack())} title="The last minute that played → a new layer">⟲ skip back</button>
-      <button class="btn danger" class:on={!!$resampling} data-role="inst-resample" onclick={screenOnly(() => void toggleResample())} title="Bounce the output onto a new layer — press again to stop">
+      <button class="btn" data-role="inst-skip-back" onclick={screenOnly(() => capture("skipback"))} title={v.kit === "pads" ? "The last minute that played → the selected pad (or the next empty one)" : "The last minute that played → a new layer"}>⟲ skip back</button>
+      <button class="btn danger" class:on={!!$resampling} data-role="inst-resample" onclick={screenOnly(() => capture("resample"))} title={v.kit === "pads" ? "Bounce the output onto a pad — press again to stop" : "Bounce the output onto a new layer — press again to stop"}>
         {$resampling ? "◉ resampling…" : "◉ resample"}
       </button>
     </div>
   </div>
 
+  {#if v.kit === "pads"}
+  <PadsView {v} />
+  {:else}
   <div class="stage">
     <div class="box left" data-title="left pad · macro">
       <div class="xy" class:live={v.lpad.touch}>
@@ -160,6 +189,7 @@
       </div>
     </div>
   </div>
+  {/if}
 </section>
 
 <style>

@@ -10,7 +10,7 @@
 // all 250 reports a second.
 
 import { get, writable } from "svelte/store";
-import { engine, status, skipBack, toggleResample } from "../state/store";
+import { engine, status, skipBack, toggleResample, type PadTarget } from "../state/store";
 import { emptyState, fromGamepad, hapticPulse, parseDeckReport, type ControllerState } from "./deckpad";
 import { Instrument, type Haptic, type InstrumentView, type Output } from "./instrument";
 import { StudioNav } from "./studioNav";
@@ -158,7 +158,12 @@ function handle(s: ControllerState): void {
 function send(out: Output): void {
   for (const e of out.events) engine.live(e);
   for (const h of out.haptics) haptic(h);
-  for (const a of out.actions ?? []) void (a === "skipback" ? skipBack() : toggleResample());
+  for (const a of out.actions ?? []) {
+    const target = capturePadTarget();
+    void (a === "skipback" ? skipBack(target) : toggleResample(target)).then((slot) => {
+      if (slot !== null) setInstrument({ pad: slot });
+    });
+  }
 }
 
 function haptic(h: Haptic): void {
@@ -231,10 +236,23 @@ export function screenDrum(kind: number): void {
   engine.live({ t: "drum", kind, vel: 0.85 });
 }
 
+/** Where skip-back / resample land: a pad in the PADS kit, else a layer. */
+export function capturePadTarget(): PadTarget | undefined {
+  const st = instrument.settings;
+  return get(mode) === "instrument" && st.kit === "pads" ? { bank: st.padBank, pad: st.pad } : undefined;
+}
+
 /** Change an instrument setting from the screen. */
 export function setInstrument(p: Partial<Instrument["settings"]>): void {
   Object.assign(instrument.settings, p);
   instrumentView.set(instrument.view());
+}
+
+/** SYNTH ⇄ PADS from the screen (lets go of what the other kit held). */
+export function setKit(kit: Instrument["settings"]["kit"]): void {
+  if (instrument.settings.kit === kit) return;
+  send(instrument.release());
+  setInstrument({ kit });
 }
 
 /** Test hook: the instrument's current settings. */

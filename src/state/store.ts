@@ -71,6 +71,24 @@ import { Autosaver, recoverAutosave as readAutosave, AUTOSAVE_MS } from "./autos
 import type { DecodedPcm } from "../audio/wav";
 import { withLoading } from "./loading";
 import { RESAMPLE_MAX_SECONDS, SKIPBACK_SECONDS, nextLayerName, trimGrab, type SkipGrab } from "../audio/skipback";
+import {
+  BANKS,
+  SLOTS,
+  bankOf,
+  clampPadValue,
+  clearPad,
+  firstEmpty,
+  indexInBank,
+  newPad,
+  padAt,
+  padLabel,
+  setPad,
+  slicesToPads,
+  type Pad,
+  type PadKnob,
+  type PadMode,
+} from "../pads/pads";
+import type { Slice } from "../pads/chop";
 import { INITIAL_LOAD, type LoadState, frameUtilisation, ema, audioDropout } from "./load";
 
 /** The audio runtime. Typed as the interface, not the class, so a future
@@ -1131,32 +1149,64 @@ function landGrab(g: SkipGrab, base: string): number {
   return duration;
 }
 
-/** Rescue the last minute of whatever played, trimmed to the sound. */
-export async function skipBack(): Promise<void> {
+/** Where a capture lands in the PADS kit: the selected pad if it's empty,
+ *  else the next empty one in the bank. */
+export interface PadTarget {
+  bank: number;
+  pad: number;
+}
+
+/** Put a grab on a pad. Returns the slot, or null when the bank is full. */
+function landGrabOnPad(g: SkipGrab, base: string, target: PadTarget): number | null {
+  const pads = get(project).pads;
+  const start = bankOf(target.pad) === target.bank ? target.pad : target.bank * 16;
+  const slot = padAt(pads, start) ? firstEmpty(pads, target.bank, indexInBank(start)) : start;
+  if (slot === null) {
+    status.set(`Bank ${BANKS[target.bank]} is full — clear a pad or pick another bank.`);
+    return null;
+  }
+  const bufferId = engine.registerPcm(g.sampleRate, g.channels);
+  const duration = g.channels[0].length / g.sampleRate;
+  const name = nextLayerName(base, (pads ?? []).map((p) => p.name));
+  updatePads((ps) => setPad(ps, newPad(slot, bufferId, 0, duration, name)));
+  return slot;
+}
+
+/** Rescue the last minute of whatever played, trimmed to the sound: onto
+ *  a new layer, or (PADS kit) a pad. Resolves to the pad's slot, if any. */
+export async function skipBack(target?: PadTarget): Promise<number | null> {
   const g = await engine.skipGrab(null, SKIPBACK_SECONDS);
   if (!g) {
     status.set("Skip-back isn't running on this audio engine.");
-    return;
+    return null;
   }
   const t = trimGrab(g);
   if (!t) {
     status.set(`Skip-back: nothing played in the last ${SKIPBACK_SECONDS} s.`);
-    return;
+    return null;
   }
-  const secs = landGrab(t, "Skip-back");
+  const secs = t.channels[0].length / t.sampleRate;
+  if (target) {
+    const slot = landGrabOnPad(t, "Skip-back", target);
+    if (slot !== null) status.set(`Skip-back: rescued ${secs.toFixed(1)} s onto pad ${padLabel(slot)}.`);
+    return slot;
+  }
+  landGrab(t, "Skip-back");
   status.set(`Skip-back: rescued ${secs.toFixed(1)} s onto a new layer.`);
+  return null;
 }
 
-/** Start a resample, or stop it and land the bounce. */
-export async function toggleResample(): Promise<void> {
+/** Start a resample, or stop it and land the bounce (on a layer, or a pad
+ *  in the PADS kit — the target given when it stops). */
+export async function toggleResample(target?: PadTarget): Promise<number | null> {
   const cur = get(resampling);
   if (!cur) {
     await engine.ensureRunning();
     const mark = await engine.skipMark();
     resampling.set({ mark, since: Date.now() });
-    resampleTimer = setTimeout(() => void toggleResample(), RESAMPLE_MAX_SECONDS * 1000);
+    resampleTimer = setTimeout(() => void toggleResample(target), RESAMPLE_MAX_SECONDS * 1000);
     status.set(`Resampling the output… press RESAMPLE again to stop (max ${RESAMPLE_MAX_SECONDS} s).`);
-    return;
+    return null;
   }
   if (resampleTimer) clearTimeout(resampleTimer);
   resampleTimer = null;
@@ -1164,10 +1214,148 @@ export async function toggleResample(): Promise<void> {
   const g = await engine.skipGrab(cur.mark, RESAMPLE_MAX_SECONDS);
   if (!g || g.channels[0].length === 0) {
     status.set("Resample: nothing was captured.");
+    return null;
+  }
+  const secs = g.channels[0].length / g.sampleRate;
+  if (target) {
+    const slot = landGrabOnPad(g, "Resample", target);
+    if (slot !== null) status.set(`Resampled ${secs.toFixed(1)} s onto pad ${padLabel(slot)}.`);
+    return slot;
+  }
+  landGrab(g, "Resample");
+  status.set(`Resampled ${secs.toFixed(1)} s onto a new layer.`);
+  return null;
+}
+
+// ---- sampler pads -----------------------------------------------------------
+//
+// The pads live in the project (src/pads/pads.ts): every edit is undoable
+// and saves with the session. Instrument mode → PADS plays them.
+
+function updatePads(fn: (pads: Pad[]) => Pad[], opts?: EditOptions): void {
+  updateProject((p) => {
+    const pads = fn(p.pads ?? []);
+    const next: Project = { ...p, pads };
+    if (!pads.length) delete next.pads;
+    return next;
+  }, opts);
+}
+
+function updatePad(slot: number, fn: (pad: Pad) => Pad, opts?: EditOptions): void {
+  const pad = padAt(get(project).pads, slot);
+  if (pad) updatePads((ps) => setPad(ps, fn(pad)), opts);
+}
+
+/** Hit / let go of a pad (screen, tests; the controller sends its own). */
+export function playPad(slot: number, vel = 0.9): void {
+  void engine.ensureRunning();
+  engine.live({ t: "pad", slot, vel });
+}
+export function releasePad(slot: number): void {
+  engine.live({ t: "padoff", slot });
+}
+
+export function setPadParam(slot: number, key: PadKnob, value: number): void {
+  updatePad(slot, (p) => ({ ...p, [key]: clampPadValue(key, value) }), { history: `pad:${slot}:${key}` });
+}
+export function setPadMode(slot: number, mode: PadMode): void {
+  updatePad(slot, (p) => ({ ...p, mode }));
+}
+export function togglePadFlag(slot: number, flag: "reverse" | "mono"): void {
+  updatePad(slot, (p) => ({ ...p, [flag]: !p[flag] }));
+}
+export function renamePad(slot: number, name: string): void {
+  updatePad(slot, (p) => ({ ...p, name: name.trim() || p.name }));
+}
+export function clearPadSlot(slot: number): void {
+  if (!padAt(get(project).pads, slot)) return;
+  updatePads((ps) => clearPad(ps, slot));
+  status.set(`Cleared pad ${padLabel(slot)}.`);
+}
+
+/** The selected clip (Studio) onto a pad: the same audio, its region. */
+export function loadPadFromClip(slot: number): boolean {
+  const clipId = get(selectedClipId);
+  const clip = get(project).tracks.flatMap((t) => t.clips).find((c) => c.id === clipId);
+  if (!clip) {
+    status.set("Select a clip in Studio first, then load it onto a pad.");
+    return false;
+  }
+  updatePads((ps) => setPad(ps, newPad(slot, clip.bufferId, clip.offset, clip.offset + clip.duration, clip.name)));
+  status.set(`Loaded ${clip.name} onto pad ${padLabel(slot)}.`);
+  return true;
+}
+
+/** Audio files onto pads: the first on `slot`, the rest on the next empty
+ *  pads of its bank. */
+export async function loadPadFiles(slot: number, files: FileList | File[]): Promise<void> {
+  const list = Array.from(files);
+  let at: number | null = slot;
+  for (const file of list) {
+    if (at === null) {
+      status.set(`Bank ${BANKS[bankOf(slot)]} is full — ${file.name} and after weren't loaded.`);
+      return;
+    }
+    try {
+      const { bufferId, buffer } = await engine.decodeBytes(await file.arrayBuffer());
+      const target: number = at;
+      updatePads((ps) => setPad(ps, newPad(target, bufferId, 0, buffer.duration, file.name.replace(/\.[^.]+$/, ""))));
+      status.set(`Loaded ${file.name} onto pad ${padLabel(target)}.`);
+    } catch (err) {
+      status.set(`Couldn't decode ${file.name}: ${(err as Error).message}`);
+    }
+    at = firstEmpty(get(project).pads, bankOf(slot), indexInBank(slot));
+  }
+}
+
+// ---- chop lab -------------------------------------------------------------
+
+/** What the chop lab is cutting: a region of a buffer, and the first pad the
+ *  slices go to. */
+export interface ChopSource {
+  bufferId: string;
+  start: number;
+  end: number;
+  name: string;
+  /** First pad the slices land on. */
+  slot: number;
+  /** Mode etc. the slices inherit (from the pad being chopped). */
+  template?: Partial<Pad>;
+}
+export const chopLab = writable<ChopSource | null>(null);
+
+/** Open the chop lab on a pad's sample (its whole buffer, the region marked). */
+export function openChopForPad(slot: number): void {
+  const pad = padAt(get(project).pads, slot);
+  if (!pad) {
+    status.set(`Pad ${padLabel(slot)} is empty — load a sample first.`);
     return;
   }
-  const secs = landGrab(g, "Resample");
-  status.set(`Resampled ${secs.toFixed(1)} s onto a new layer.`);
+  const { mode, reverse, gain, pan, pitch, attack, release, choke, mono } = pad;
+  chopLab.set({ bufferId: pad.bufferId, start: pad.start, end: pad.end, name: pad.name, slot, template: { mode, reverse, gain, pan, pitch, attack, release, choke, mono } });
+}
+
+export function closeChop(): void {
+  chopLab.set(null);
+}
+
+/** Slices onto pads from `firstSlot` on. One undo step. */
+export function applyChop(src: ChopSource, slices: readonly Slice[], firstSlot: number): void {
+  if (!slices.length) return;
+  const n = Math.min(slices.length, SLOTS - firstSlot);
+  updatePads((ps) => slicesToPads(ps, src.bufferId, slices, firstSlot, src.name, src.template));
+  status.set(`Chopped ${src.name} into ${n} pad${n === 1 ? "" : "s"}: ${padLabel(firstSlot)}–${padLabel(firstSlot + n - 1)}.`);
+  chopLab.set(null);
+}
+
+/** A slot outside the banks, for hearing a slice before it's on a pad. */
+const AUDITION_SLOT = SLOTS + 1;
+
+/** Play one region of a buffer (the chop lab's slices). */
+export function auditionSlice(bufferId: string, start: number, end: number): void {
+  const p = get(project);
+  engine.syncAll({ ...p, pads: setPad(p.pads, { ...newPad(AUDITION_SLOT, bufferId, start, end, "audition"), release: 0.01 }) });
+  playPad(AUDITION_SLOT, 0.9);
 }
 
 // ---- export ---------------------------------------------------------------
@@ -1344,6 +1532,7 @@ async function loadSession(header: SessionHeaderBase, audio: Map<string, Decoded
       ...t,
       clips: t.clips.map((c) => ({ ...c, bufferId: idMap.get(c.bufferId) ?? c.bufferId })),
     })),
+    ...(header.project.pads ? { pads: header.project.pads.map((p) => ({ ...p, bufferId: idMap.get(p.bufferId) ?? p.bufferId })) } : {}),
   };
   reserveIds(loaded.tracks.flatMap((t) => [t.id, ...t.clips.map((c) => c.id)]));
   colorIdx = loaded.tracks.length;
