@@ -24,6 +24,8 @@ export interface MasterBus {
   readonly preTap: AnalyserNode;
   /** Post-limiter analyser (for the LED meter). */
   readonly post: AnalyserNode;
+  /** The last node before the device: what the listener hears (skip-back taps it). */
+  readonly output: AudioNode;
   /** Deepest limiter gain reduction across channels, in dB (<= 0). */
   reduction(): number;
   dispose(): void;
@@ -87,6 +89,7 @@ export function buildMasterBus(ctx: BaseAudioContext, channels: number, gain = 0
     nodes.push(splitter, merger);
   }
   let virtual = false;
+  let output: AudioNode = post;
   if (binaural && channels > 2) {
     try {
       const node = new AudioWorkletNode(ctx as AudioContext, BINAURAL_PROCESSOR, {
@@ -100,6 +103,7 @@ export function buildMasterBus(ctx: BaseAudioContext, channels: number, gain = 0
       post.connect(node);
       node.connect(ctx.destination);
       nodes.push(node);
+      output = node;
       virtual = true;
     } catch {
       /* worklet missing: fall through to a plain connection (device downmix) */
@@ -113,6 +117,7 @@ export function buildMasterBus(ctx: BaseAudioContext, channels: number, gain = 0
     binaural: virtual,
     preTap,
     post,
+    output,
     reduction() {
       let r = 0;
       for (const l of limiters) if (l.reduction < r) r = l.reduction;

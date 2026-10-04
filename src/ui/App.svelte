@@ -21,6 +21,8 @@
     splitAtPlayhead,
     deleteSelectedClip,
     startRecording,
+    skipBack,
+    toggleResample,
     stopRecording,
     undo,
     redo,
@@ -178,6 +180,11 @@
       case "R":
         if ($transport.isRecording) void stopRecording();
         else void startRecording();
+        break;
+      case "b":
+      case "B":
+        if (e.shiftKey) void toggleResample();
+        else void skipBack();
         break;
     }
   }

@@ -98,6 +98,15 @@ function register() {
   });
   // Live waveform of the take while it records (small: a few KB per poll).
   ipcMain.handle("engine-rec-peaks", (_e, from) => getEngine()?.recPeaks(from >>> 0) ?? null);
+  // Skip-back (native/src/skipback.rs): a marker, and a grab from it (or
+  // the last `seconds`). Up to two minutes of audio: back in chunks.
+  ipcMain.handle("engine-skip-frames", () => getEngine()?.skipFrames() ?? null);
+  ipcMain.handle("engine-skip-grab", (_e, { from, seconds }) => {
+    const e = getEngine();
+    if (!e) throw new Error(loadError || "native engine unavailable");
+    const { channels, ...rest } = e.skipGrab(from ?? null, seconds);
+    return { ...rest, ...offerChannels(channels) };
+  });
   ipcMain.handle("engine-list-input-devices", () => {
     if (!getEngine()) throw new Error(loadError || "native engine unavailable");
     return getModule().listInputDevices();

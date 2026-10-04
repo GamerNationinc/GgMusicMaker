@@ -4,6 +4,13 @@
 
 _Research, 2026-10-04. Nothing in here is built yet unless the note below says so._
 
+**Built:** skip-back (§3.1) and resample (§3.3), 2026-10-04 — a 120 s ring of
+the output in both engines (`native/src/skipback.rs`,
+`public/skipback-processor.js`, `src/audio/skipback.ts`). With no pads yet,
+both land on a new timeline layer. Controls: ⟲ / ◉ in the transport, B /
+Shift+B, Instrument mode R3 / L1·R1+R3. Not yet: multiple named "ghost"
+snapshots, the chop lab hand-off, ghost tape (§6.2).
+
 ## How this relates to what exists (read first)
 
 - **Instrument mode today is not a sampler.** It is a scale-locked synth on the

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { transport, togglePlay, stop, seek, masterLevel, engine } from "../state/store";
+  import { transport, togglePlay, stop, seek, masterLevel, engine, skipBack, toggleResample, resampling } from "../state/store";
 
   function fmt(t: number): string {
     const m = Math.floor(t / 60);
@@ -29,6 +29,22 @@
     {$transport.isPlaying ? "❚❚" : "▶"}
   </button>
   <button class="btn" onclick={() => { stop(); seek(0); }} aria-label="Stop">■</button>
+  <!-- Skip-back + resample (audio/skipback.ts): glyphs like ▶ ■, the words are in the tooltips. -->
+  <button
+    class="btn cap"
+    data-role="skip-back"
+    onclick={() => void skipBack()}
+    aria-label="Skip back"
+    title="Skip back (B): the last minute of whatever played — even unrecorded — onto a new layer"
+  >⟲</button>
+  <button
+    class="btn danger cap"
+    class:on={!!$resampling}
+    data-role="resample"
+    onclick={() => void toggleResample()}
+    aria-label="Resample"
+    title={$resampling ? "Resampling — press again (Shift+B) to land it on a new layer" : "Resample (Shift+B): bounce the output, effects and all, onto a new layer — press again to stop"}
+  >◉</button>
 
   <div class="time screen">{fmt($transport.playhead)}</div>
 
@@ -57,6 +73,10 @@
   .btn {
     min-width: 54px;
     font-size: 18px;
+  }
+  /* Skip-back / resample: narrower, the header is full in the desktop app. */
+  .btn.cap {
+    min-width: 40px;
   }
   .time {
     font-size: 22px;

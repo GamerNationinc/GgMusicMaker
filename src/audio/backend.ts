@@ -17,6 +17,7 @@ import type { Project, Track } from "./types";
 import type { ReverbSpace } from "./reverb";
 import type { SurroundLayout } from "../fx/voice-synth";
 import type { LiveEvent } from "./live";
+import type { SkipGrab } from "./skipback";
 
 export interface DecodedAudio {
   bufferId: string;
@@ -79,6 +80,13 @@ export interface AudioBackend {
 
   // Live instrument (Instrument mode): plays whether or not the transport runs.
   live(e: LiveEvent): void;
+
+  // Skip-back: the always-on ring of what the device played (skipback.ts).
+  /** A marker for `skipGrab`: frames the ring has taken so far. */
+  skipMark(): Promise<number>;
+  /** Copy from a `skipMark` marker to now (`from` null: the last `seconds`),
+   *  at most `seconds`. null when the ring isn't running. */
+  skipGrab(from: number | null, seconds: number): Promise<SkipGrab | null>;
 
   // Transport
   play(project: Project, fromTime: number): void;

@@ -14,6 +14,7 @@
   } from "../input/controller";
   import { SCALES, NOTE_NAMES, GRID_ROWS, DRUM_NAMES, cellNote, chordNotes, chordName, scaleOf } from "../input/instrument";
   import { LIVE_PATCHES } from "../audio/live";
+  import { skipBack, toggleResample, resampling } from "../state/store";
 
   const v = $derived($instrumentView);
   const cols = $derived(scaleOf(v).length);
@@ -84,6 +85,13 @@
       {#each LIVE_PATCHES as p, i (p)}
         <button class="btn patch" class:accent={v.patch === i} data-role="inst-patch-{p}" onclick={screenOnly(() => setInstrument({ patch: i }))}>{p}</button>
       {/each}
+    </div>
+    <div class="group">
+      <span class="lbl">CAPTURE <small>R3 · L1/R1+R3</small></span>
+      <button class="btn" data-role="inst-skip-back" onclick={screenOnly(() => void skipBack())} title="The last minute that played → a new layer">⟲ skip back</button>
+      <button class="btn danger" class:on={!!$resampling} data-role="inst-resample" onclick={screenOnly(() => void toggleResample())} title="Bounce the output onto a new layer — press again to stop">
+        {$resampling ? "◉ resampling…" : "◉ resample"}
+      </button>
     </div>
   </div>
 

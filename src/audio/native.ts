@@ -17,6 +17,7 @@
 
 import { fileStreams } from "../state/platform";
 import type { LiveEvent } from "./live";
+import type { SkipGrab } from "./skipback";
 import type { AudioBackend, DecodedAudio, MasterMeter } from "./backend";
 import type { AudioEngine } from "./engine";
 import type { Project, Track } from "./types";
@@ -67,6 +68,9 @@ export interface NativeEngineBridge {
   recStop?(): Promise<NativeTake>;
   /** Live waveform of the running take from pair `from` on (older shells: absent). */
   recPeaks?(from: number): Promise<{ peaks: Float32Array; frames: number; sampleRate: number; bucket: number } | null>;
+  /** Skip-back ring (native/src/skipback.rs; older shells don't have it). */
+  skipFrames?(): Promise<number | null>;
+  skipGrab?(from: number | null, seconds: number): Promise<{ sampleRate: number; channels: Float32Array[]; startFrame: number; songTime: number | null | undefined }>;
   /** cpal input device names (older shells don't have it). */
   listInputDevices?(): Promise<string[]>;
 }
@@ -150,6 +154,7 @@ export class NativeBackend implements AudioBackend {
     private native: NativeEngineBridge,
   ) {
     this.reverb = web.currentReverbSpace;
+    web.setSkipBack(false); // the native engine keeps the ring
     const poll = async () => {
       if (this.polling) return;
       this.polling = true;
@@ -175,6 +180,7 @@ export class NativeBackend implements AudioBackend {
   private useFallback(why: string): void {
     this.fallback = true;
     this.failure = why;
+    this.web.setSkipBack(true);
     this.onFallback(why);
     if (this.lastProject) this.web.syncAll(this.lastProject);
   }
@@ -320,6 +326,19 @@ export class NativeBackend implements AudioBackend {
   live(e: LiveEvent): void {
     if (this.fallback || !this.native.live) return this.web.live(e);
     this.native.live(JSON.stringify(e));
+  }
+
+  // ---- skip-back ---------------------------------------------------------------
+
+  async skipMark(): Promise<number> {
+    if (this.fallback || !this.native.skipFrames) return this.web.skipMark();
+    return (await this.native.skipFrames()) ?? 0;
+  }
+
+  async skipGrab(from: number | null, seconds: number): Promise<SkipGrab | null> {
+    if (this.fallback || !this.native.skipGrab) return this.web.skipGrab(from, seconds);
+    const g = await this.native.skipGrab(from, seconds);
+    return { sampleRate: g.sampleRate, channels: g.channels, songTime: g.songTime ?? null };
   }
 
   // ---- transport -------------------------------------------------------------

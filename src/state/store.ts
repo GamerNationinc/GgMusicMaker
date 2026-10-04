@@ -70,6 +70,7 @@ import { STEM_RATE, audibleStems, rms, stemLayerName, stemSummary } from "../aud
 import { Autosaver, recoverAutosave as readAutosave, AUTOSAVE_MS } from "./autosave";
 import type { DecodedPcm } from "../audio/wav";
 import { withLoading } from "./loading";
+import { RESAMPLE_MAX_SECONDS, SKIPBACK_SECONDS, nextLayerName, trimGrab, type SkipGrab } from "../audio/skipback";
 import { INITIAL_LOAD, type LoadState, frameUtilisation, ema, audioDropout } from "./load";
 
 /** The audio runtime. Typed as the interface, not the class, so a future
@@ -1105,6 +1106,68 @@ export async function stopRecording(): Promise<void> {
   // Flag the degraded capture path so a glitchy take has a visible cause.
   const note = (usedWorklet ? "" : " (fallback capture — may drop samples)") + (engine.takeNote ?? "");
   status.set(`Recorded ${buffer.duration.toFixed(1)}s onto ${armed.name}.${note}`);
+}
+
+// ---- skip-back + resample ---------------------------------------------------
+//
+// Both engines keep the last two minutes of what the device played
+// (audio/skipback.ts). SKIP BACK rescues the last minute of it; RESAMPLE
+// marks the ring and, when pressed again, bounces everything since — the mix
+// with every effect baked in. Each lands on a new layer: where it played in
+// the song if the transport was running, else at the playhead.
+
+/** A resample in progress: the ring marker and when it began (ms). */
+export const resampling = writable<{ mark: number; since: number } | null>(null);
+let resampleTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Put a grab on a new layer. Returns its seconds. */
+function landGrab(g: SkipGrab, base: string): number {
+  const bufferId = engine.registerPcm(g.sampleRate, g.channels);
+  const duration = g.channels[0].length / g.sampleRate;
+  const track = makeTrack(nextLayerName(base, get(project).tracks.map((t) => t.name)));
+  const startTime = Math.max(0, g.songTime ?? get(transport).playhead);
+  track.clips = [{ id: nextId("clip"), bufferId, startTime, offset: 0, duration, name: track.name }];
+  updateProject((p) => ({ ...p, tracks: [...p.tracks, track] }));
+  return duration;
+}
+
+/** Rescue the last minute of whatever played, trimmed to the sound. */
+export async function skipBack(): Promise<void> {
+  const g = await engine.skipGrab(null, SKIPBACK_SECONDS);
+  if (!g) {
+    status.set("Skip-back isn't running on this audio engine.");
+    return;
+  }
+  const t = trimGrab(g);
+  if (!t) {
+    status.set(`Skip-back: nothing played in the last ${SKIPBACK_SECONDS} s.`);
+    return;
+  }
+  const secs = landGrab(t, "Skip-back");
+  status.set(`Skip-back: rescued ${secs.toFixed(1)} s onto a new layer.`);
+}
+
+/** Start a resample, or stop it and land the bounce. */
+export async function toggleResample(): Promise<void> {
+  const cur = get(resampling);
+  if (!cur) {
+    await engine.ensureRunning();
+    const mark = await engine.skipMark();
+    resampling.set({ mark, since: Date.now() });
+    resampleTimer = setTimeout(() => void toggleResample(), RESAMPLE_MAX_SECONDS * 1000);
+    status.set(`Resampling the output… press RESAMPLE again to stop (max ${RESAMPLE_MAX_SECONDS} s).`);
+    return;
+  }
+  if (resampleTimer) clearTimeout(resampleTimer);
+  resampleTimer = null;
+  resampling.set(null);
+  const g = await engine.skipGrab(cur.mark, RESAMPLE_MAX_SECONDS);
+  if (!g || g.channels[0].length === 0) {
+    status.set("Resample: nothing was captured.");
+    return;
+  }
+  const secs = landGrab(g, "Resample");
+  status.set(`Resampled ${secs.toFixed(1)} s onto a new layer.`);
 }
 
 // ---- export ---------------------------------------------------------------

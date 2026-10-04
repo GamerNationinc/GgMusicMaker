@@ -13,6 +13,9 @@
 //   R5          hold to arm tilt: rolling the Deck bends pitch.
 //   D-pad       ←/→ key down/up a semitone, ↑/↓ next/previous scale.
 //   L3          next sound (keys, pluck, pad, bass).
+//   R3          SKIP BACK: the last minute that played → a new layer.
+//               Hold L1 or R1 + R3: RESAMPLE start/stop (the output, FX
+//               and all, from now until pressed again).
 //
 // Pure: `update(state)` → the engine events and haptic pulses that state
 // change causes. No timers, no audio, no DOM.
@@ -69,9 +72,13 @@ export interface Haptic {
   strength: "tick" | "bump";
 }
 
+/** Things the app does (not the engine): skip-back / resample. */
+export type InstrumentAction = "skipback" | "resample";
+
 export interface Output {
   events: LiveEvent[];
   haptics: Haptic[];
+  actions?: InstrumentAction[];
 }
 
 const deadzone = (v: number) => (Math.abs(v) < STICK_DEAD ? 0 : (v - Math.sign(v) * STICK_DEAD) / (1 - STICK_DEAD));
@@ -205,8 +212,15 @@ export class Instrument {
       this.cell = null;
     }
 
-    // --- ABXY pads ---
+    // --- R3: skip-back, or resample with a bumper held ---
     const chords = s.buttons.l1 || s.buttons.r1;
+    const actions: InstrumentAction[] = [];
+    if (edge(prev, s, "r3")) {
+      actions.push(chords ? "resample" : "skipback");
+      haptics.push({ side: "right", strength: "bump" });
+    }
+
+    // --- ABXY pads ---
     const vel = 0.6 + 0.4 * s.l2;
     PAD_BUTTONS.forEach((b, i) => {
       if (edge(prev, s, b)) {
@@ -226,7 +240,7 @@ export class Instrument {
       }
     });
 
-    return { events, haptics };
+    return { events, haptics, actions };
   }
 
   /** Release everything (leaving the mode, controller lost). */

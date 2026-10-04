@@ -134,6 +134,12 @@ contextBridge.exposeInMainWorld("ggmmNative", {
       const { token, size, frames, channelCount, ...rest } = take;
       return { ...rest, channels: await downloadChannels({ token, size, frames, channelCount }) };
     },
+    skipFrames: () => invoke("engine-skip-frames"),
+    skipGrab: async (from, seconds) => {
+      const offer = await invoke("engine-skip-grab", { from, seconds });
+      const { token, size, frames, channelCount, ...rest } = offer;
+      return { ...rest, channels: await downloadChannels({ token, size, frames, channelCount }) };
+    },
     /** Export from the buffers the engine already holds. */
     renderLoaded: async (project, sampleRate, tail) => downloadChannels(await invoke("engine-render-loaded", { project, sampleRate, tail })),
     render: (project, ids, rates, data, sampleRate, tail) => invoke("engine-render", { project, ids, rates, data, sampleRate, tail }),

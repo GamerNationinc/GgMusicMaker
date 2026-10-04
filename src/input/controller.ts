@@ -10,7 +10,7 @@
 // all 250 reports a second.
 
 import { get, writable } from "svelte/store";
-import { engine, status } from "../state/store";
+import { engine, status, skipBack, toggleResample } from "../state/store";
 import { emptyState, fromGamepad, hapticPulse, parseDeckReport, type ControllerState } from "./deckpad";
 import { Instrument, type Haptic, type InstrumentView, type Output } from "./instrument";
 import { StudioNav } from "./studioNav";
@@ -158,6 +158,7 @@ function handle(s: ControllerState): void {
 function send(out: Output): void {
   for (const e of out.events) engine.live(e);
   for (const h of out.haptics) haptic(h);
+  for (const a of out.actions ?? []) void (a === "skipback" ? skipBack() : toggleResample());
 }
 
 function haptic(h: Haptic): void {

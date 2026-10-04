@@ -18,6 +18,7 @@ import type { AudioBackend, DecodedAudio, MasterMeter } from "./backend";
 import { blockLevels, logBands } from "./spectrum";
 import { assembleTake, type Chunk } from "./recording";
 import { LivePeaks } from "./liveTake";
+import { RING_SECONDS, songTimeAt, type PlaySpan, type SkipGrab } from "./skipback";
 import { buildMasterBus, deviceChannelsFor, type MasterBus } from "./master";
 import { surroundChannels, type SurroundLayout } from "../fx/voice-synth";
 import { punchIsActive } from "../fx/punch";
@@ -33,6 +34,7 @@ const MORPH_WORKLET_URL = `${import.meta.env.BASE_URL}morph-processor.js`;
 const BINAURAL_WORKLET_URL = `${import.meta.env.BASE_URL}binaural-processor.js`;
 const LIVE_WORKLET_URL = `${import.meta.env.BASE_URL}live-processor.js`;
 const RECORDER_WORKLET_URL = `${import.meta.env.BASE_URL}recorder-processor.js`;
+const SKIPBACK_WORKLET_URL = `${import.meta.env.BASE_URL}skipback-processor.js`;
 
 export class AudioEngine implements AudioBackend {
   readonly ctx: AudioContext;
@@ -136,6 +138,8 @@ export class AudioEngine implements AudioBackend {
       if (ok) this.synthAvailable = true;
       this.binauralAvailable = await this.loadWorklet(ctx, BINAURAL_WORKLET_URL);
       this.liveAvailable = await this.loadWorklet(ctx, LIVE_WORKLET_URL);
+      this.skipLoaded = await this.loadWorklet(ctx, SKIPBACK_WORKLET_URL);
+      if (this.skipWanted) this.startSkipBack();
     }
     return ok;
   }
@@ -160,6 +164,95 @@ export class AudioEngine implements AudioBackend {
       this.liveNode.connect(this.convolver, 1);
     }
     this.liveNode.port.postMessage(e);
+  }
+
+  // ---- Skip-back ------------------------------------------------------------
+
+  /** public/skipback-processor.js on the master output; pulled through a
+   *  silent gain so it runs without being heard twice. */
+  private skipNode: AudioWorkletNode | null = null;
+  private skipLoaded = false;
+  /** Off while the native engine plays (it keeps its own ring). */
+  private skipWanted = true;
+  private skipReplies = new Map<number, (data: unknown) => void>();
+  private skipIds = 1;
+  /** When the transport ran (context time), to place a grab in the song. */
+  private playLog: PlaySpan[] = [];
+
+  /** Run the ring or not (NativeBackend turns it off, and back on if it
+   *  falls back to this engine). */
+  setSkipBack(on: boolean): void {
+    this.skipWanted = on;
+    if (on) this.startSkipBack();
+    else if (this.skipNode) {
+      this.skipNode.disconnect();
+      try {
+        this.master.output.disconnect(this.skipNode);
+      } catch {
+        /* not connected */
+      }
+      this.skipNode = null;
+    }
+  }
+
+  private startSkipBack(): void {
+    if (this.skipNode || !this.skipLoaded) return;
+    try {
+      const node = new AudioWorkletNode(this.ctx, "skipback-processor", {
+        numberOfInputs: 1,
+        numberOfOutputs: 1,
+        outputChannelCount: [1],
+        channelCount: 2,
+        channelCountMode: "explicit",
+        // A 5.1/7.1 bus folds down to stereo the standard way.
+        channelInterpretation: "speakers",
+        processorOptions: { seconds: RING_SECONDS },
+      });
+      node.port.onmessage = (e: MessageEvent) => {
+        const d = e.data as { id: number };
+        this.skipReplies.get(d.id)?.(d);
+        this.skipReplies.delete(d.id);
+      };
+      const sink = this.ctx.createGain();
+      sink.gain.value = 0;
+      node.connect(sink);
+      sink.connect(this.ctx.destination);
+      this.master.output.connect(node);
+      this.skipNode = node;
+    } catch {
+      /* no worklet: skip-back is unavailable on this engine */
+    }
+  }
+
+  private askSkip<T>(msg: Record<string, unknown>): Promise<T | null> {
+    const node = this.skipNode;
+    if (!node) return Promise.resolve(null);
+    const id = this.skipIds++;
+    return new Promise((resolve) => {
+      this.skipReplies.set(id, (d) => resolve(d as T));
+      node.port.postMessage({ ...msg, id });
+    });
+  }
+
+  async skipMark(): Promise<number> {
+    await this.synthReady;
+    const r = await this.askSkip<{ frame: number }>({ type: "mark" });
+    return r?.frame ?? 0;
+  }
+
+  async skipGrab(from: number | null, seconds: number): Promise<SkipGrab | null> {
+    await this.synthReady;
+    const r = await this.askSkip<{ ctxTime: number | null; channels: Float32Array[] }>({
+      type: "grab",
+      from,
+      frames: Math.floor(seconds * this.ctx.sampleRate),
+    });
+    if (!r) return null;
+    return {
+      sampleRate: this.ctx.sampleRate,
+      channels: r.channels,
+      songTime: r.ctxTime == null ? null : songTimeAt(this.playLog, r.ctxTime),
+    };
   }
 
   /** Resume the context and make sure the synth worklet had a chance to load. */
@@ -237,6 +330,7 @@ export class AudioEngine implements AudioBackend {
     this.preTimeBuf = new Float32Array(new ArrayBuffer(4 * this.master.preTap.fftSize));
     this.preFreqBuf = new Uint8Array(new ArrayBuffer(this.master.preTap.frequencyBinCount));
     this.reverbReturn.connect(this.master.input);
+    if (this.skipNode) this.master.output.connect(this.skipNode);
     if (this.liveNode) {
       this.liveNode.disconnect();
       this.liveNode.connect(this.master.input, 0);
@@ -332,6 +426,9 @@ export class AudioEngine implements AudioBackend {
     this.playStartCtxTime = startAt;
     this.playStartOffset = fromTime;
     this.songOrigin = startAt - fromTime;
+    this.endPlaySpan(startAt);
+    this.playLog.push({ ctxStart: startAt, ctxEnd: Infinity, song: fromTime });
+    if (this.playLog.length > 64) this.playLog.shift();
 
     for (const track of project.tracks) {
       const channel = this.ensureChannel(track);
@@ -367,7 +464,13 @@ export class AudioEngine implements AudioBackend {
 
   stop(): void {
     this.stopSources();
+    this.endPlaySpan(this.ctx.currentTime);
     this._isPlaying = false;
+  }
+
+  private endPlaySpan(at: number): void {
+    const last = this.playLog[this.playLog.length - 1];
+    if (last && last.ctxEnd === Infinity) last.ctxEnd = Math.max(last.ctxStart, at);
   }
 
   private stopSources(): void {

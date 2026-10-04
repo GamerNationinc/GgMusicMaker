@@ -161,6 +161,33 @@ async function main() {
   });
   await page.waitForTimeout(200);
 
+  // --- skip-back + resample ---------------------------------------------
+  // The tone just played (unrecorded): SKIP BACK rescues it from the ring
+  // onto a new layer, trimmed to the sound and placed where it played.
+  await page.click("[data-role=skip-back]");
+  await page.waitForTimeout(400);
+  let sbStatus = await page.textContent(".statusbar");
+  const rescued = Number(/rescued (\d+\.\d+) s/.exec(sbStatus)?.[1]);
+  check("skip-back rescues what just played onto a new layer", (await page.$$(".head")).length === 2 && rescued > 0.4 && rescued < 2, sbStatus.trim());
+  check("the rescued layer is named Skip-back 1", await page.$$eval(".head input", (i) => i.some((x) => x.value === "Skip-back 1")));
+  await page.keyboard.press("Control+z");
+  await page.waitForTimeout(150);
+  // RESAMPLE: mark, play, stop, land the bounce.
+  await page.keyboard.press("Shift+B");
+  await page.waitForTimeout(100);
+  check("resample arms (button lit)", await page.$eval("[data-role=resample]", (b) => b.classList.contains("on")));
+  await page.click("button[aria-label='Play or pause']");
+  await page.waitForTimeout(800);
+  await page.click("button[aria-label='Stop']");
+  await page.click("[data-role=resample]");
+  await page.waitForTimeout(400);
+  sbStatus = await page.textContent(".statusbar");
+  const bounced = Number(/Resampled (\d+\.\d+) s/.exec(sbStatus)?.[1]);
+  check("resample bounces the output onto a new layer", (await page.$$(".head")).length === 2 && bounced > 0.6 && bounced < 2, sbStatus.trim());
+  await page.keyboard.press("Control+z");
+  await page.waitForTimeout(150);
+  check("undo removes the resampled layer", (await page.$$(".head")).length === 1);
+
   // --- recording (previously untested) ----------------------------------
   await page.click("button:has-text('Record')");
   await page.waitForTimeout(700);

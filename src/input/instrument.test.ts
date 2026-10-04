@@ -115,3 +115,16 @@ describe("Instrument", () => {
     expect(kinds(r.events)).toEqual(["off", "off", "off", "off", "ctl"]);
   });
 });
+
+describe("capture buttons", () => {
+  it("R3 is skip-back; with a bumper held it toggles resample", () => {
+    const inst = new Instrument();
+    inst.update(st());
+    expect(inst.update(st({ buttons: { r3: true } })).actions).toEqual(["skipback"]);
+    expect(inst.update(st({ buttons: { r3: true } })).actions).toEqual([]); // held: once
+    inst.update(st());
+    const r = inst.update(st({ buttons: { r3: true, l1: true } }));
+    expect(r.actions).toEqual(["resample"]);
+    expect(r.events.some((e) => e.t === "on" || e.t === "drum")).toBe(false);
+  });
+});

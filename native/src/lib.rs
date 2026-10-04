@@ -10,6 +10,8 @@
 //!
 //! Recording (src/record.rs) opens a cpal input stream beside the output;
 //! both read one process clock so a take is placed where the music was.
+//!
+//! Skip-back (src/skipback.rs) keeps the last two minutes of the output.
 
 pub mod bass;
 pub mod binaural;
@@ -21,6 +23,7 @@ pub mod morph;
 pub mod placer;
 pub mod record;
 pub mod reverb;
+pub mod skipback;
 pub mod synth;
 pub mod util;
 
@@ -76,6 +79,7 @@ struct Audio {
     scope: Arc<Mutex<Vec<f32>>>,
     chans: Vec<Vec<f32>>,
     clock: Arc<record::Clock>,
+    skip: Arc<skipback::SkipBack>,
 }
 
 impl Audio {
@@ -111,6 +115,7 @@ impl Audio {
         let ts = info.timestamp();
         let out_latency = ts.playback.duration_since(&ts.callback).unwrap_or_default();
         self.clock.publish(m.playing, m.time(), out_latency, m.output_delay());
+        let song = m.playing.then(|| m.time());
         let frames = data.len() / channels;
         for c in &mut self.chans {
             if c.len() < frames {
@@ -121,6 +126,9 @@ impl Audio {
             let mut outs: Vec<&mut [f32]> = self.chans.iter_mut().map(|c| &mut c[..frames]).collect();
             m.render(&mut outs);
         }
+        let left = &self.chans[0][..frames];
+        let right = self.chans.get(1).map_or(left, |c| &c[..frames]);
+        self.skip.push(left, right, song);
         for i in 0..frames {
             for c in 0..channels {
                 data[i * channels + c] = self.chans[c][i];
@@ -206,6 +214,17 @@ pub struct RecPeaks {
     pub bucket: u32,
 }
 
+/// Audio copied out of the skip-back ring.
+#[napi(object)]
+pub struct SkipGrab {
+    pub sample_rate: f64,
+    pub channels: Vec<Float32Array>,
+    /// Frames since the engine started, of the first sample.
+    pub start_frame: f64,
+    /// Where the first sample sat in the song; null = the transport was stopped.
+    pub song_time: Option<f64>,
+}
+
 /// A device name from the environment (tests, or picking a device by hand).
 fn env_device(var: &str) -> Option<String> {
     std::env::var(var).ok().filter(|s| !s.is_empty())
@@ -223,6 +242,7 @@ pub struct NativeEngine {
     known: Mutex<(std::collections::HashSet<String>, Option<Space>)>,
     clock: Arc<record::Clock>,
     rec: Mutex<Option<record::Recording>>,
+    skip: Arc<skipback::SkipBack>,
     /// Every loaded buffer (shared with the audio thread, not copied), so an
     /// export renders from what's already here instead of shipping the whole
     /// project's audio over IPC again — which crashes Chromium past ~256 MB.
@@ -269,6 +289,7 @@ impl NativeEngine {
         let status = Arc::new(Status::default());
         let scope = Arc::new(Mutex::new(vec![0f32; SCOPE]));
         let clock = Arc::new(record::Clock::default());
+        let skip = Arc::new(skipback::SkipBack::new(sr));
         let mut last_err = String::new();
         for fixed in [true, false] {
             let mut cfg: cpal::StreamConfig = def.config();
@@ -285,6 +306,7 @@ impl NativeEngine {
                 scope: scope.clone(),
                 chans: vec![vec![0f32; 8192]; channels],
                 clock: clock.clone(),
+                skip: skip.clone(),
             };
             match dev.build_output_stream(&cfg, move |data: &mut [f32], info: &cpal::OutputCallbackInfo| audio.tick(data, channels, info), |e| eprintln!("ggmm-engine: stream error: {e}"), None) {
                 Ok(stream) => {
@@ -300,6 +322,7 @@ impl NativeEngine {
                         known: Mutex::new((Default::default(), None)),
                         clock,
                         rec: Mutex::new(None),
+                        skip,
                         library: Mutex::new(Default::default()),
                         _stream: Some(stream),
                     });
@@ -431,6 +454,26 @@ impl NativeEngine {
         let r = slot.as_ref()?;
         let (peaks, frames) = r.peaks_since(from as usize);
         Some(RecPeaks { peaks: Float32Array::new(peaks), frames: frames as f64, sample_rate: r.rate, bucket: record::PEAK_BUCKET as u32 })
+    }
+
+    /// Frames the skip-back ring has seen so far: a marker for `skip_grab`.
+    #[napi]
+    pub fn skip_frames(&self) -> f64 {
+        self.skip.written() as f64
+    }
+
+    /// What the device played: from frame `from` (a `skip_frames` marker)
+    /// to now, or the last `seconds` when `from` is null; at most `seconds`.
+    #[napi]
+    pub fn skip_grab(&self, from: Option<f64>, seconds: f64) -> SkipGrab {
+        let max = (seconds.max(0.0) * self.sr) as usize;
+        let g = self.skip.grab(from.map(|f| f.max(0.0) as u64), max);
+        SkipGrab {
+            sample_rate: self.sr,
+            channels: vec![Float32Array::new(g.left), Float32Array::new(g.right)],
+            start_frame: g.start as f64,
+            song_time: g.song_time,
+        }
     }
 
     #[napi]

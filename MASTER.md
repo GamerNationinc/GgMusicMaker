@@ -3,7 +3,7 @@
 The single place that says **what this repo is, what is proven to work, where
 everything lives, and where it is going.** Keep it current when features land.
 
-_Last updated: 2026-09-26 (branch `morph-surround-themes`)._
+_Last updated: 2026-10-04 (branch `claude/sharp-cori-838bk6`)._
 
 ---
 
@@ -260,6 +260,19 @@ Asked for: an Ableton-like, Deck-friendly way to move round the timeline; an FX 
 |---|---|
 | **Record starts the transport** when it's stopped (you hear what you play along to); **R** again ends the take and keeps playing; **Stop / Space** ends the take and stops. While recording the song **keeps rolling past its end** (it used to auto-stop and rewind at the last clip). Starting a New / Open while recording drops the take as before. | `test:record`: R from stopped → ❚❚; Stop ends the take and stops (17/17; overdub still 0.04 ms off). `test:browser`: a 1.9 s take on a ~1 s song (94/94). `test:recovery` 14/14 |
 
+### 2026-10-04 — Skip-back + resample (sampler research §3.1, §3.3)
+
+Asked for: start building skip-back and resample (`docs/sampler-research.md`).
+
+| Change | Verified how |
+|---|---|
+| **An always-on ring of what the device played** — the master output after the limiter, as stereo (5.1/7.1 folded down), the last **120 s**. Native: `native/src/skipback.rs`, written in the cpal callback (~2 µs per 512-frame callback, no locks: f32 bits in atomics, a reader copies and drops anything the writer reached meanwhile); every 128 frames it notes the song time (NaN while stopped). Web: `public/skipback-processor.js` on `MasterBus.output` (new: the node before the device), with a context-time → song-time play log in `AudioEngine`. Off on the web engine while the native one plays (back on if it falls back). Backend: `skipMark()` / `skipGrab(from, seconds)`; IPC `engine-skip-frames` / `engine-skip-grab` (chunked like a take). | Rust (4): order, wrap + in-flight trim, grab from a marker, song time incl. stopped spans. Pure helpers `src/audio/skipback.ts` (`skipback.test.ts`, 8) |
+| **SKIP BACK** (⟲ in the transport, **B**, Instrument mode **R3**): the last 60 s, trimmed to where there was sound (−60 dB, 50 ms either side), on a new layer *Skip-back N* — where it played in the song if the transport ran, else at the playhead. | `test:browser`: the tone that just played (unrecorded) comes back as 0.8 s on *Skip-back 1*. `test:instrument` (native, injected Deck reports): R3 rescues the 10 s jam |
+| **RESAMPLE** (◉ in the transport, **Shift+B**, Instrument mode **L1/R1 + R3**): press = mark the ring, press again = everything since (max 115 s, auto-stops) on a new layer *Resample N*, effects and limiter baked in. Undoable like any edit. | `test:browser`: lit while armed, 1.0 s bounce, undo removes it. `test:instrument`: L1+R3 arms, kick, R1+R3 lands 1.2 s; both layers in Studio, Ctrl+Z ×2 removes them |
+| The two buttons sit in the transport (glyphs, words in tooltips) — the toolbar has no room at 1280 px (two labelled buttons there wrapped it and hid the 5th lane). | `test:browser` 99/99 incl. the 5-lane stack checks |
+
+`test:record`'s "overdub lands in time (within 1 ms)" is flaky on the cloud VM these were run on — it failed 2 of 5 runs **without** these changes too (−13.9 ms, +4.2 ms), so it's the VM's audio timing, not the ring.
+
 ### Native Steam Deck build
 
 | Step | Verified how |
@@ -368,7 +381,8 @@ GgMusicMaker/
 │   ├── morph-processor.js         MORPH DSP: the eight engines, per-voice ring placement, paths, diffusion
 │   ├── binaural-processor.js      Headphone 3D monitor: 5.1/7.1 bus → 2 ears (ITD, ILD, rear cue)
 │   ├── placer-processor.js        Pan + width for a whole signal, stereo (M/S + balance) or surround (VBAP rotate)
-│   └── recorder-processor.js      Audio-thread capture for recording
+│   ├── recorder-processor.js      Audio-thread capture for recording
+│   └── skipback-processor.js      Skip-back ring of the master output (web engine)
 │
 ├── src-tauri/                     NATIVE SHELL (Rust / Tauri v2)
 │   ├── Cargo.toml                 package ggmusicmaker, lib ggmusicmaker_lib; webkit2gtk pinned =2.0.2
@@ -466,7 +480,7 @@ git tag v0.1.0 && git push origin v0.1.0     # release.yml builds + attaches art
 ### Near term
 
 - **Deck dual mode, next milestones** (`docs/deck-dual-mode.md`): DJ mix table mode, library + bulk import with analysis, album view.
-- **Sampler instrument (SP-404-style)** — research and proposed build order in `docs/sampler-research.md`; skip-back + resample first, project tempo before the sequencer.
+- **Sampler instrument (SP-404-style)** — research and proposed build order in `docs/sampler-research.md`. Skip-back + resample are built (2026-10-04); next is the pad engine + chop lab, and a project tempo before the sequencer.
 - **A project tempo.** BASS MOD carries its own BPM per layer because the project has none; a song BPM (and a beat grid on the ruler) would let every tempo-locked thing share it.
 - **Feel-test on the Deck** (2026-10-02 work): left-pad gain / glide friction / haptic detents, stick speeds, and BASS MOD's presets by ear.
 - **Gamepad navigation** so the app is usable in Gaming Mode (Steam Input → keyboard is the cheap first step; a focus ring + D-pad model is the real one).

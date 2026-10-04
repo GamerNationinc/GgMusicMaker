@@ -160,6 +160,32 @@ try {
   check("a touch on the grid plays", touchPeak > 0.01, `peak ${touchPeak.toFixed(3)}`);
   await sleep(1200);
 
+  // --- R3: skip-back; L1/R1 + R3: resample (native ring, skipback.rs) ---
+  const statusText = () => page.textContent(".statusbar").then((t) => t.trim());
+  await send({ buttons: { r3: true } });
+  await send();
+  await page.waitForFunction(() => /Skip-back/.test(document.querySelector(".statusbar")?.textContent ?? ""), null, { timeout: 5000 }).catch(() => {});
+  const sb = await statusText();
+  const rescued = Number(/rescued (\d+\.\d+) s/.exec(sb)?.[1]);
+  // Everything played above, first note to last touch: several seconds.
+  check("R3 rescues the jam from the native ring", rescued > 3 && rescued < 60, sb);
+  await send({ buttons: { l1: true } });
+  await send({ buttons: { l1: true, r3: true } });
+  await send();
+  await sleep(100);
+  check("L1 + R3 starts a resample", await page.$eval("[data-role=inst-resample]", (b) => b.classList.contains("on")).catch(() => false));
+  await send({ buttons: { a: true } });
+  await sleep(150);
+  await send();
+  await sleep(900);
+  await send({ buttons: { r1: true } });
+  await send({ buttons: { r1: true, r3: true } });
+  await send();
+  await page.waitForFunction(() => /Resampled/.test(document.querySelector(".statusbar")?.textContent ?? ""), null, { timeout: 5000 }).catch(() => {});
+  const rs = await statusText();
+  const bounced = Number(/Resampled (\d+\.\d+) s/.exec(rs)?.[1]);
+  check("R1 + R3 lands the resample", bounced > 0.8 && bounced < 3, rs);
+
   await page.screenshot({ path: join(userData, "..", `ggmm-instrument-${process.pid}.png`) }).catch(() => {});
 
   // --- back out ---
@@ -170,6 +196,13 @@ try {
   await send({ buttons: { a: true } });
   check("in Studio the controller plays nothing", (await peakOver(250)) < 1e-3);
   await send();
+
+  const names = await page.$$eval(".head input", (i) => i.map((x) => x.value));
+  check("the captures are layers in Studio", names.includes("Skip-back 1") && names.includes("Resample 1"), names.join(", "));
+  await page.keyboard.press("Control+z");
+  await page.keyboard.press("Control+z");
+  await sleep(200);
+  check("undo removes them", (await page.$$(".head")).length === 0);
 
   // --- Studio: the left pad and stick drive the timeline ---
   await page.setInputFiles("input[type=file][accept='audio/*']", [join(ROOT, "tests", "fixtures", "tone-4s.wav")]);

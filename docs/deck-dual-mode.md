@@ -56,6 +56,7 @@ the emulation at the source (see "Open" below).
 | Back buttons | **L4 / R4** octave down / up. **L5** sustain (hold). **R5** hold = tilt bend (see gyro). | 4 hot cues |
 | D-pad | ←/→ key down/up a semitone, ↑/↓ next/previous scale *(the spec had scale/key on a back button; R5 went to the tilt arm instead)* | — |
 | L3 | Next sound: keys, pluck, pad, bass | — |
+| R3 | **Skip back**: the last minute that played → a new layer. **L1/R1 + R3**: resample start / stop (see `docs/sampler-research.md`). | — |
 | View + Menu | Mode switch (all modes) | Mode switch |
 | Gyro | Hold R5: rolling the Deck (steering-wheel tilt) bends pitch, ±2 st at 30°, relative to where it was when R5 went down (read from the accelerometer). | Off by default |
 | Touchscreen | The same instrument on screen: tap/hold grid cells and pads, key/scale/octave/sound buttons. | Waveforms, deck overview, effects rack |
