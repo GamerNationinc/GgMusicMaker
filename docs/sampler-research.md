@@ -21,8 +21,14 @@ _Research, 2026-10-04. Nothing in here is built yet unless the note below says s
   LOOPER on four buses (1–2 per pad, 3–4 master), latched or grabbed with R2,
   left pad = XY macros (`public/fxbus-core.js`, `native/src/fxbus.rs`,
   `src/fx/fxbus.ts`).
+- Project tempo + pad sequencer (§3.4, §4.2, §4.3, §6.5 designed in): BPM
+  with tap tempo and a bar grid on the ruler; 16 patterns of 16–64 steps
+  with swing, real-time recording (quantised), a step editor, chance,
+  conditions and parameter locks; hits time-stamped on the audio clock in
+  both engines (`src/seq/`, `StepGrid.svelte`, `StepEditor.svelte`).
 
-Not yet: resonator / isolator / reverb / ducker effects, FX automation,
+Not yet: note repeat, 16 Levels, song mode, polymeter UI, pattern →
+timeline clip, resonator / isolator / reverb / ducker effects, FX automation,
 time-stretch, polyphony limit setting, drunk chop, zero-crossing
 snap, BPM-grid chop, pinch zoom in the chop lab, named "ghost" snapshots,
 ghost tape (§6.2).

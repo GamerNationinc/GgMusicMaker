@@ -11,6 +11,8 @@ import type { PunchParams } from "../fx/punch";
 import type { BassParams } from "../fx/bass";
 import type { Pad } from "../pads/pads";
 import type { FxBusSettings } from "../fx/fxbus";
+import type { Tempo } from "../seq/tempo";
+import type { Pattern } from "../seq/pattern";
 
 /** A region of a source buffer placed on the timeline. Non-destructive:
  *  split/trim only adjust offset/duration/startTime — the buffer is untouched. */
@@ -96,6 +98,10 @@ export interface Project {
   pads?: Pad[];
   /** The four FX buses' effects + macros; absent = the defaults. */
   fxBuses?: FxBusSettings[];
+  /** The project tempo; absent = 120 BPM, 4/4 (src/seq/tempo.ts). */
+  tempo?: Tempo;
+  /** Pad sequencer patterns that have anything in them (src/seq/pattern.ts). */
+  patterns?: Pattern[];
 }
 
 /** Live transport state, kept separate from the (undoable) project model. */

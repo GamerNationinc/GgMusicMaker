@@ -25,6 +25,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 pub const Q: usize = 128;
+/// Timed events held at once (the sequencer looks ~120 ms ahead).
+const TIMED_MAX: usize = 4096;
 pub const SCOPE: usize = 2048;
 
 pub struct Buffer {
@@ -237,6 +239,10 @@ pub struct Mixer {
     fx: Vec<FxBus>,
     /// Pads on bus 1 / 2: L, R, L, R.
     padb: [[f64; Q]; 4],
+    /// Timed live events (sequencer): (frame, order, event), applied in the
+    /// block they fall in — pad hits on their exact frame.
+    timed: Vec<(u64, u64, LiveEvent)>,
+    timed_seq: u64,
     binaural: Option<(usize, Binaural)>,
     comps: Vec<Compressor>,
     /// The compressor's look-ahead line (Chromium's DynamicsCompressor
@@ -278,6 +284,8 @@ impl Mixer {
             sampler: Sampler::new(sr),
             fx: (0..4).map(|_| FxBus::new(sr)).collect(),
             padb: [[0.0; Q]; 4],
+            timed: Vec::with_capacity(TIMED_MAX),
+            timed_seq: 0,
             binaural: None,
             comps: vec![],
             ahead: vec![[0.0; MAX_CH]; ((sr * 0.006).round() as usize).max(1)],
@@ -356,14 +364,47 @@ impl Mixer {
     }
 
     pub fn live_event(&mut self, e: LiveEvent) {
-        match e {
-            LiveEvent::Pad { slot, vel } => {
-                if let Some(p) = self.project.pads.iter().find(|p| p.slot == slot) {
-                    let b = self.buffers.get(&p.buffer).cloned();
-                    self.sampler.trigger(p, b, vel);
+        // Timed for later: held until the block it falls in.
+        let at = match e {
+            LiveEvent::Pad { at, .. } | LiveEvent::Padoff { at, .. } => at,
+            _ => None,
+        };
+        if let Some(at) = at {
+            let frame = (at * self.sr).round().max(0.0) as u64;
+            if frame > self.clock && self.timed.len() < TIMED_MAX {
+                self.timed_seq += 1;
+                self.timed.push((frame, self.timed_seq, e));
+                return;
+            }
+        }
+        self.apply_event(e, 0);
+    }
+
+    /// Run the timed events due before `end`, in order; pad hits `wait`
+    /// frames into the block that starts at `start`.
+    fn run_timed(&mut self, start: u64, end: u64) {
+        loop {
+            let mut best: Option<usize> = None;
+            for (i, ev) in self.timed.iter().enumerate() {
+                if ev.0 < end && best.map_or(true, |b| (ev.0, ev.1) < (self.timed[b].0, self.timed[b].1)) {
+                    best = Some(i);
                 }
             }
-            LiveEvent::Padoff { slot } => {
+            let Some(i) = best else { break };
+            let (frame, _, e) = self.timed.swap_remove(i);
+            self.apply_event(e, frame.saturating_sub(start) as usize);
+        }
+    }
+
+    fn apply_event(&mut self, e: LiveEvent, wait: usize) {
+        match e {
+            LiveEvent::Pad { slot, vel, lock, .. } => {
+                if let Some(p) = self.project.pads.iter().find(|p| p.slot == slot) {
+                    let b = self.buffers.get(&p.buffer).cloned();
+                    self.sampler.trigger_at(p, b, vel, &lock.unwrap_or_default(), wait);
+                }
+            }
+            LiveEvent::Padoff { slot, .. } => {
                 let rel = self.project.pads.iter().find(|p| p.slot == slot).map_or(0.0, |p| p.release);
                 self.sampler.release(slot, rel);
             }
@@ -374,7 +415,12 @@ impl Mixer {
             }
             LiveEvent::Panic => {
                 self.sampler.panic();
+                self.timed.clear();
                 self.live.event(e);
+            }
+            LiveEvent::Cancel => {
+                self.timed.clear();
+                self.sampler.cancel_waiting();
             }
             _ => self.live.event(e),
         }
@@ -429,6 +475,10 @@ impl Mixer {
 
     fn render_quantum(&mut self, out: &mut [&mut [f32]], at: usize, q: usize) -> (f64, f64, f64) {
         let sr = self.sr;
+        if !self.timed.is_empty() {
+            let start = self.clock + at as u64;
+            self.run_timed(start, start + q as u64);
+        }
         let nb = self.bus_channels();
         for c in 0..nb {
             self.bus[c][..q].fill(0.0);
@@ -782,5 +832,34 @@ mod fx_tests {
         let (_, all) = peak(&mut m, 40);
         let late = all[12000..].iter().fold(0.0f64, |a, v| a.max(v.abs() as f64));
         assert!(late < open * 0.1, "low-pass far below 4 kHz: {late} vs {open}");
+    }
+}
+
+#[cfg(test)]
+mod timed_tests {
+    use super::*;
+
+    #[test]
+    fn a_time_stamped_hit_reaches_the_output_on_its_frame() {
+        let sr = 48000.0;
+        let mut m = Mixer::new(sr, 2);
+        m.add_buffer("b".into(), Arc::new(Buffer { rate: sr, channels: vec![vec![0.5; 4800]; 2] }));
+        m.set_project(serde_json::from_str(r#"{"tracks":[],"masterGain":1,"pads":[{"slot":1,"buffer":"b","start":0,"end":0.1,"mode":"oneshot"}]}"#).unwrap(), vec![], None);
+        // Two blocks in, so the hit is in the future of the engine clock.
+        for _ in 0..2 {
+            let (mut l, mut r) = (vec![0f32; 512], vec![0f32; 512]);
+            m.render(&mut [&mut l, &mut r]);
+        }
+        let at = (1024.0 + 300.0) / sr;
+        m.live_event(serde_json::from_str(&format!(r#"{{"t":"pad","slot":1,"vel":1,"at":{at}}}"#)).unwrap());
+        let mut out = vec![];
+        for _ in 0..2 {
+            let (mut l, mut r) = (vec![0f32; 512], vec![0f32; 512]);
+            m.render(&mut [&mut l, &mut r]);
+            out.extend_from_slice(&l);
+        }
+        // + the master's 6 ms look-ahead.
+        let first = out.iter().position(|v| v.abs() > 1e-6).unwrap();
+        assert_eq!(first, 300 + (sr * 0.006).round() as usize);
     }
 }

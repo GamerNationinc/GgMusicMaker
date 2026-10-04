@@ -24,6 +24,7 @@
 //               lets go (gate pads stop).
 //   L2          velocity.     L4 / R4  bank down / up (A–J).
 //   R3 / L1·R1 + R3   skip back / resample — onto a pad.
+//   R5 / L1·R1 + R5   sequencer: play / stop the pattern · record on / off.
 //   FX buses (src/fx/fxbus.ts): L3 picks the bus (1–4) · L5 latches it on /
 //   off · R2 grabs it (depth = how far it's pulled) · left pad = its XY
 //   macros (A across, B up; kept when you lift).
@@ -103,7 +104,7 @@ export interface Haptic {
 }
 
 /** Things the app does (not the engine): skip-back / resample. */
-export type InstrumentAction = "skipback" | "resample";
+export type InstrumentAction = "skipback" | "resample" | "seqplay" | "seqrec";
 
 /** FX bus moves (the store keeps the live state and the project). */
 export type FxAction =
@@ -223,6 +224,10 @@ export class Instrument {
     }
 
     if (st.kit === "pads") {
+      if (edge(prev, s, "r5")) {
+        actions.push(bumper ? "seqrec" : "seqplay");
+        haptics.push({ side: "right", strength: "bump" });
+      }
       const fx: FxAction[] = [];
       this.updatePads(prev, s, events, haptics);
       this.updateFx(prev, s, fx, haptics);

@@ -2,6 +2,8 @@
 // sends to the engine. Played by public/live-processor.js (web) and
 // native/src/live.rs (native); both apply an event at the next quantum.
 
+import type { StepLock } from "../seq/pattern";
+
 /** Voice patches, in the engines' PATCHES order. */
 export const LIVE_PATCHES = ["keys", "pluck", "pad", "bass"] as const;
 export type LivePatch = (typeof LIVE_PATCHES)[number];
@@ -31,8 +33,12 @@ export type LiveEvent =
   | { t: "drum"; kind: number; vel: number }
   | ({ t: "ctl" } & LiveControls)
   | { t: "panic" }
-  /** A sampler pad (src/pads/pads.ts) pressed / let go. */
-  | { t: "pad"; slot: number; vel: number }
-  | { t: "padoff"; slot: number }
+  /** A sampler pad (src/pads/pads.ts) pressed / let go — now, or `at` a
+   *  time on the engine clock (`audioClock()`; the sequencer), with `lock`
+   *  overriding pad settings for that hit. */
+  | { t: "pad"; slot: number; vel: number; at?: number; lock?: StepLock }
+  | { t: "padoff"; slot: number; at?: number }
+  /** Drop timed hits not yet played (the sequencer stopped). */
+  | { t: "cancel" }
   /** An FX bus (0..3) engaged by `depth` 0..1, macros live (src/fx/fxbus.ts). */
   | { t: "fx"; bus: number; depth: number; a?: number; b?: number };

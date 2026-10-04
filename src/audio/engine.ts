@@ -19,6 +19,7 @@ import { blockLevels, logBands } from "./spectrum";
 import { assembleTake, type Chunk } from "./recording";
 import { LivePeaks } from "./liveTake";
 import { WebSampler } from "./sampler";
+import type { Pad } from "../pads/pads";
 import { FX_BUS_COUNT, PAD_BUSES, fxBusesOf, fxSpec } from "../fx/fxbus";
 import { RING_SECONDS, songTimeAt, type PlaySpan, type SkipGrab } from "./skipback";
 import { buildMasterBus, deviceChannelsFor, type MasterBus } from "./master";
@@ -248,8 +249,9 @@ export class AudioEngine implements AudioBackend {
 
   live(e: LiveEvent): void {
     if (e.t === "fx") return this.setFx(e.bus, { depth: e.depth, a: e.a, b: e.b });
-    if (e.t === "pad") return this.pads().trigger(e.slot, e.vel);
-    if (e.t === "padoff") return this.pads().release(e.slot);
+    if (e.t === "pad") return this.pads().trigger(e.slot, e.vel, e.at, e.lock);
+    if (e.t === "padoff") return this.pads().release(e.slot, e.at);
+    if (e.t === "cancel") return this.sampler?.cancelFuture();
     if (e.t === "panic") this.sampler?.panic();
     if (!this.liveAvailable) return;
     if (!this.liveNode) {
@@ -517,8 +519,17 @@ export class AudioEngine implements AudioBackend {
     this.channels.delete(trackId);
   }
 
+  /** Pads the app plays itself (the metronome's clicks), beside the project's. */
+  private systemPads: Pad[] = [];
+  setSystemPads(pads: Pad[]): void {
+    this.systemPads = pads;
+    this.pads().setPads([...(this.lastPads ?? []), ...pads]);
+  }
+  private lastPads: Pad[] | undefined;
+
   syncAll(project: Project): void {
-    this.pads().setPads(project.pads);
+    this.lastPads = project.pads;
+    this.pads().setPads([...(project.pads ?? []), ...this.systemPads]);
     fxBusesOf(project).forEach((b, k) => this.setFx(k, fxSpec(b)));
     const hasSolo = anySoloed(project);
     for (const track of project.tracks) this.applyTrackParams(track, hasSolo);

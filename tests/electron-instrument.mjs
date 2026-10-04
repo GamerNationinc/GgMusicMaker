@@ -248,6 +248,57 @@ try {
   check("R4 moves to bank B", (await page.textContent("[data-role=inst-bank]")).trim() === "B");
   await send({ buttons: { l4: true } });
   await send();
+  // --- the sequencer on the native engine: steps → timed hits; the
+  // metronome's clicks land on the beat, measured in what the device played ---
+  // Steam turns R2 into a mouse click, so these ignore the mouse while the
+  // Deck plays: tap them as a touch.
+  const tapEl = (sel) => page.$eval(sel, (el) => el.dispatchEvent(new PointerEvent("click", { pointerType: "touch", bubbles: true })));
+  await tapEl("[data-role=view-steps]");
+  for (const st of [1, 5, 9, 13]) await tapEl(`[data-role=step-A1-${st}]`);
+  await tapEl("[data-role=seq-metro]");
+  await sleep(300);
+  await send({ buttons: { r5: true } });
+  await send();
+  await sleep(2600);
+  const seqPeak = await peakOver(300);
+  // Hit onsets in the last 2 s of output (pad A1 is a GATE tone, one step long,
+  // on every beat, with the click on top): rising edges after 60 ms of quiet.
+  const onsets = await page.evaluate(async () => {
+    const g = await window.ggmmNative.engine.skipGrab(null, 2);
+    const l = g.channels[0];
+    const out = [];
+    let quiet = 0;
+    for (let i = 0; i < l.length; i++) {
+      if (Math.abs(l[i]) > 0.02) {
+        if (quiet > 0.06 * g.sampleRate) out.push(i);
+        quiet = 0;
+      } else quiet++;
+    }
+    return { onsets: out, sr: g.sampleRate };
+  });
+  const gaps = onsets.onsets.slice(1).map((v, i) => (v - onsets.onsets[i]) / onsets.sr);
+  const worst = Math.max(...gaps.map((d) => Math.abs(d - 0.5)));
+  check("R5 plays the pattern on the native engine", seqPeak > 0.05, `peak ${seqPeak.toFixed(3)}`);
+  check("hits land on the beat at 120 BPM (0.5 s apart, within 1 ms)", gaps.length >= 2 && worst < 0.001, `${gaps.map((d) => d.toFixed(4)).join(" ")} s`);
+  check("the step grid's playhead moves", (await page.$$(".cell.now")).length > 0);
+  // Record: L1+R5 arms, ↓ (pad 3, empty: a long one-shot would ring past
+  // the stop check) is played live and lands in the pattern.
+  await tapEl("[data-role=seq-metro]");
+  await send({ buttons: { l1: true } });
+  await send({ buttons: { l1: true, r5: true } });
+  await send();
+  await sleep(400);
+  await send({ buttons: { down: true } });
+  await sleep(80);
+  await send();
+  await sleep(300);
+  check("a hit while recording lands in the pattern", (await page.$$("[data-role^=step-A3-].on")).length === 1);
+  await send({ buttons: { r5: true } });
+  await send();
+  await sleep(500);
+  check("R5 stops it (and nothing queued plays on)", (await peakOver(300)) < 1e-3);
+  await tapEl("[data-role=view-pads]");
+
   await send({ buttons: { menu: true } });
   await send();
   await sleep(100);
@@ -266,9 +317,9 @@ try {
 
   const names = await page.$$eval(".head input", (i) => i.map((x) => x.value));
   check("the captures are layers in Studio", names.includes("Skip-back 1") && names.includes("Resample 1"), names.join(", "));
-  // Six undos: the pad edits (load, GATE, skip-back onto A2), the FX macro
-  // move, then both layers.
-  for (let i = 0; i < 6; i++) await page.keyboard.press("Control+z");
+  // Eleven undos: the pad edits (load, GATE, skip-back onto A2), the FX macro
+  // move, four steps, the recorded take, then both layers.
+  for (let i = 0; i < 11; i++) await page.keyboard.press("Control+z");
   await sleep(200);
   check("undo removes them", (await page.$$(".head")).length === 0);
 

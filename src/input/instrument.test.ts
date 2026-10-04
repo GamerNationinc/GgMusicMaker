@@ -222,3 +222,18 @@ describe("PADS kit: FX buses", () => {
     expect(inst.release().fx).toEqual([{ t: "grab", bus: 2, depth: 1 - 1 }]);
   });
 });
+
+describe("PADS kit: sequencer", () => {
+  it("R5 plays / stops, a bumper + R5 records", () => {
+    const inst = new Instrument({ kit: "pads" });
+    inst.update(st());
+    expect(inst.update(st({ buttons: { r5: true } })).actions).toEqual(["seqplay"]);
+    inst.update(st());
+    inst.update(st({ buttons: { r1: true } }));
+    expect(inst.update(st({ buttons: { r1: true, r5: true } })).actions).toEqual(["seqrec"]);
+    // In the SYNTH kit R5 is still the tilt arm, not the sequencer.
+    const synth = new Instrument();
+    synth.update(st());
+    expect(synth.update(st({ buttons: { r5: true } })).actions).toEqual([]);
+  });
+});

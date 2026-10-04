@@ -57,7 +57,7 @@ the emulation at the source (see "Open" below).
 | D-pad | ←/→ key down/up a semitone, ↑/↓ next/previous scale *(the spec had scale/key on a back button; R5 went to the tilt arm instead)* | — |
 | L3 | Next sound: keys, pluck, pad, bass | — |
 | R3 | **Skip back**: the last minute that played → a new layer. **L1/R1 + R3**: resample start / stop (see `docs/sampler-research.md`). | — |
-| Menu (tap) | Kit: SYNTH ⇄ **PADS**. In PADS: D-pad ← ↑ ↓ → + X Y A B = pads 1–8 (hold L1/R1: 9–16), right pad = 4×4 pad grid, L4/R4 = bank A–J, L2 = velocity, R3 / L1·R1+R3 skip back / resample onto a pad; FX buses: L3 picks the bus, L5 latches it, R2 grabs it (depth = pull), left pad = its XY macros (`docs/sampler-research.md`). | — |
+| Menu (tap) | Kit: SYNTH ⇄ **PADS**. In PADS: D-pad ← ↑ ↓ → + X Y A B = pads 1–8 (hold L1/R1: 9–16), right pad = 4×4 pad grid, L4/R4 = bank A–J, L2 = velocity, R3 / L1·R1+R3 skip back / resample onto a pad; FX buses: L3 picks the bus, L5 latches it, R2 grabs it (depth = pull), left pad = its XY macros; sequencer: R5 play / stop, L1·R1+R5 record (`docs/sampler-research.md`). | — |
 | View + Menu | Mode switch (all modes) | Mode switch |
 | Gyro | Hold R5: rolling the Deck (steering-wheel tilt) bends pitch, ±2 st at 30°, relative to where it was when R5 went down (read from the accelerometer). | Off by default |
 | Touchscreen | The same instrument on screen: tap/hold grid cells and pads, key/scale/octave/sound buttons. | Waveforms, deck overview, effects rack |

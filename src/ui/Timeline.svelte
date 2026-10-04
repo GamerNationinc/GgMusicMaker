@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tempoOf, barSeconds, beatSeconds } from "../seq/tempo";
   import {
     project,
     transport,
@@ -383,6 +384,35 @@
     ctx.fillStyle = k["ink-dim"];
     ctx.strokeStyle = k.box;
     ctx.font = "10px 'DejaVu Sans Mono', monospace";
+    // Bars at the project tempo: a tick and the bar number, thinned out
+    // when they'd crowd (every 2nd, 4th… bar), beats when there's room.
+    const tempo = tempoOf($project);
+    const bar = barSeconds(tempo);
+    let every = 1;
+    while (bar * every * pps < 28) every *= 2;
+    const beatPx = beatSeconds(tempo) * pps;
+    ctx.save();
+    ctx.strokeStyle = k.amber ?? k.box;
+    ctx.fillStyle = k.amber ?? k["ink-dim"];
+    ctx.globalAlpha = 0.85;
+    ctx.beginPath();
+    for (let b = Math.max(0, Math.floor(vx / pps / bar)); b * bar * pps < vx + w; b++) {
+      const x = Math.round(b * bar * pps - vx) + 0.5;
+      if (b % every === 0) {
+        ctx.moveTo(x, RULER_HEIGHT - 14);
+        ctx.lineTo(x, RULER_HEIGHT);
+        ctx.fillText(String(b + 1), x + 3, RULER_HEIGHT - 4);
+      }
+      if (beatPx >= 10) {
+        for (let q = 1; q < tempo.beatsPerBar; q++) {
+          const bx = Math.round(x + q * beatPx);
+          ctx.moveTo(bx + 0.5, RULER_HEIGHT - 4);
+          ctx.lineTo(bx + 0.5, RULER_HEIGHT);
+        }
+      }
+    }
+    ctx.stroke();
+    ctx.restore();
     const step = gridStep(pps);
     ctx.beginPath();
     for (let t = Math.floor(vx / pps / step) * step; t * pps < vx + w; t += step) {

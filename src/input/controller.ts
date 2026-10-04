@@ -10,7 +10,7 @@
 // all 250 reports a second.
 
 import { get, writable } from "svelte/store";
-import { engine, status, skipBack, toggleResample, toggleFxOn, setFxGrab, moveFxMacros, commitFxMacros, type PadTarget } from "../state/store";
+import { engine, status, skipBack, toggleResample, toggleFxOn, setFxGrab, moveFxMacros, commitFxMacros, toggleSeq, toggleSeqRecord, seqHit, type PadTarget } from "../state/store";
 import { emptyState, fromGamepad, hapticPulse, parseDeckReport, type ControllerState } from "./deckpad";
 import { Instrument, type Haptic, type InstrumentView, type Output } from "./instrument";
 import { StudioNav } from "./studioNav";
@@ -156,7 +156,10 @@ function handle(s: ControllerState): void {
 }
 
 function send(out: Output): void {
-  for (const e of out.events) engine.live(e);
+  for (const e of out.events) {
+    engine.live(e);
+    if (e.t === "pad") seqHit(e.slot, e.vel);
+  }
   for (const h of out.haptics) haptic(h);
   for (const f of out.fx ?? []) {
     if (f.t === "toggle") toggleFxOn(f.bus);
@@ -165,6 +168,11 @@ function send(out: Output): void {
     else commitFxMacros(f.bus);
   }
   for (const a of out.actions ?? []) {
+    if (a === "seqplay" || a === "seqrec") {
+      if (a === "seqplay") toggleSeq();
+      else toggleSeqRecord();
+      continue;
+    }
     const target = capturePadTarget();
     void (a === "skipback" ? skipBack(target) : toggleResample(target)).then((slot) => {
       if (slot !== null) setInstrument({ pad: slot });

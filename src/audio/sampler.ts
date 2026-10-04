@@ -7,6 +7,7 @@
 // pads.rs documents.
 
 import type { Pad } from "../pads/pads";
+import type { StepLock } from "../seq/pattern";
 
 const MIN_ATTACK = 0.001;
 const MIN_RELEASE = 0.005;
@@ -21,6 +22,8 @@ interface Voice {
   env: GainNode;
   pan: StereoPannerNode;
   releasing: boolean;
+  /** Context time it starts. */
+  start: number;
 }
 
 export class WebSampler {
@@ -49,28 +52,32 @@ export class WebSampler {
     return this.voices.filter((v) => v.slot === slot && !v.releasing).length;
   }
 
-  trigger(slot: number, vel: number): void {
+  /** Hit a pad — now, or at context time `at` (a sequencer step), with
+   *  `lock`'s settings in place of the pad's for this hit. */
+  trigger(slot: number, vel: number, at?: number, lock?: StepLock): void {
+    const when = Math.max(this.ctx.currentTime, at ?? 0);
     const p = this.pads.get(slot);
     const buf = p && this.getBuffer(p.bufferId);
     if (!p || !buf) return;
     if (p.mode === "loop") {
       const latched = this.voices.filter((v) => v.slot === slot && v.mode === "loop" && !v.releasing);
       if (latched.length) {
-        for (const v of latched) this.releaseVoice(v, p.release);
+        for (const v of latched) this.releaseVoice(v, p.release, when);
         return;
       }
     }
     for (const v of this.voices) {
-      if ((v.slot === slot && p.mono) || (p.choke > 0 && v.choke === p.choke && v.slot !== slot)) this.releaseVoice(v, CUT);
+      if ((v.slot === slot && p.mono) || (p.choke > 0 && v.choke === p.choke && v.slot !== slot)) this.releaseVoice(v, CUT, when);
     }
     const n = buf.length;
     const lo = Math.min(n, Math.max(0, Math.floor(p.start * buf.sampleRate)));
     const hi = Math.min(n, Math.max(lo, Math.ceil(p.end * buf.sampleRate)));
     if (hi - lo < 1) return;
-    const data = p.reverse ? this.reverse(buf) : buf;
-    const from = (p.reverse ? n - hi : lo) / buf.sampleRate;
+    const reverse = lock?.reverse ?? p.reverse;
+    const data = reverse ? this.reverse(buf) : buf;
+    const from = (reverse ? n - hi : lo) / buf.sampleRate;
     const len = (hi - lo) / buf.sampleRate;
-    const rate = 2 ** (p.pitch / 12);
+    const rate = 2 ** ((lock?.pitch ?? p.pitch) / 12);
 
     const ctx = this.ctx;
     const src = ctx.createBufferSource();
@@ -81,11 +88,11 @@ export class WebSampler {
     env.channelCountMode = "explicit";
     env.channelInterpretation = "speakers";
     const pan = ctx.createStereoPanner();
-    pan.pan.value = Math.max(-1, Math.min(1, p.pan));
+    pan.pan.value = Math.max(-1, Math.min(1, lock?.pan ?? p.pan));
     src.connect(env).connect(pan).connect(this.outs[Math.min(p.bus ?? 0, this.outs.length - 1)]);
 
-    const t0 = ctx.currentTime;
-    const g = Math.max(0, Math.min(1, vel)) * Math.max(0, p.gain);
+    const t0 = when;
+    const g = Math.max(0, Math.min(1, vel)) * Math.max(0, lock?.gain ?? p.gain);
     const att = Math.max(MIN_ATTACK, p.attack);
     env.gain.setValueAtTime(0, t0);
     env.gain.linearRampToValueAtTime(g, t0 + att);
@@ -101,7 +108,7 @@ export class WebSampler {
       env.gain.linearRampToValueAtTime(0, end);
       src.start(t0, from, len);
     }
-    const v: Voice = { slot, mode: p.mode, choke: p.choke, src, env, pan, releasing: false };
+    const v: Voice = { slot, mode: p.mode, choke: p.choke, src, env, pan, releasing: false, start: t0 };
     src.onended = () => {
       this.voices = this.voices.filter((x) => x !== v);
       pan.disconnect();
@@ -110,9 +117,23 @@ export class WebSampler {
   }
 
   /** Let go: gate pads release; one-shots and latched loops don't. */
-  release(slot: number): void {
+  release(slot: number, at?: number): void {
     const rel = this.pads.get(slot)?.release ?? 0;
-    for (const v of this.voices) if (v.slot === slot && v.mode === "gate") this.releaseVoice(v, rel);
+    for (const v of this.voices) if (v.slot === slot && v.mode === "gate") this.releaseVoice(v, rel, at);
+  }
+
+  /** Drop hits scheduled but not started yet. */
+  cancelFuture(): void {
+    const now = this.ctx.currentTime;
+    for (const v of this.voices.filter((x) => x.start > now)) {
+      try {
+        v.src.stop();
+      } catch {
+        /* not started */
+      }
+      v.pan.disconnect();
+    }
+    this.voices = this.voices.filter((x) => x.start <= now);
   }
 
   panic(): void {
@@ -127,10 +148,10 @@ export class WebSampler {
     this.voices = [];
   }
 
-  private releaseVoice(v: Voice, seconds: number): void {
+  private releaseVoice(v: Voice, seconds: number, at?: number): void {
     if (v.releasing) return;
     v.releasing = true;
-    const now = this.ctx.currentTime;
+    const now = Math.max(this.ctx.currentTime, at ?? 0);
     const g = v.env.gain;
     const hold = (g as AudioParam & { cancelAndHoldAtTime?: (t: number) => AudioParam }).cancelAndHoldAtTime;
     if (hold) hold.call(g, now);

@@ -4,6 +4,7 @@
   // (outlined), L5 latches, R2 grabs, the left pad moves its macros.
   import { project, fxLive, fxMacros, toggleFxOn, setFxGrab, setFxEffect, moveFxMacros, commitFxMacros } from "../state/store";
   import { FX_EFFECTS, FX_INFO, busRole, fxBusesOf, fxDepth, type FxEffect } from "../fx/fxbus";
+  import { screenOnly } from "../input/controller";
 
   let { selected, onselect }: { selected: number; onselect: (bus: number) => void } = $props();
 
@@ -27,7 +28,7 @@
     {@const live = $fxLive[k]}
     {@const m = macros(k)}
     <div class="bus" class:sel={selected === k} class:live={fxDepth(live) > 0} data-role="fx-bus-{k + 1}">
-      <button class="name" onclick={() => onselect(k)} title={busRole(k) === "pads" ? "Pads set to this bus play through it" : "The whole mix goes through it"}>
+      <button class="name" onclick={screenOnly(() => onselect(k))} title={busRole(k) === "pads" ? "Pads set to this bus play through it" : "The whole mix goes through it"}>
         <b>{k + 1}</b>
         <small>{busRole(k)}</small>
       </button>
@@ -57,7 +58,7 @@
           />
         </label>
       {/each}
-      <button class="btn small" class:accent={live.on} data-role="fx-on-{k + 1}" onclick={() => toggleFxOn(k)} disabled={bus.effect === "off"}>ON</button>
+      <button class="btn small" class:accent={live.on} data-role="fx-on-{k + 1}" onclick={screenOnly(() => toggleFxOn(k))} disabled={bus.effect === "off"}>ON</button>
       <button
         class="btn small grab"
         class:accent={live.grab > 0}

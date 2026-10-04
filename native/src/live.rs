@@ -41,8 +41,12 @@ pub enum LiveEvent {
     /// Everything silent at once.
     Panic,
     /// A sampler pad pressed / let go (played by pads.rs, not here).
-    Pad { slot: u32, vel: f64 },
-    Padoff { slot: u32 },
+    /// `at`: when, on the engine clock (seconds; absent = now). `lock`: pad
+    /// settings for this hit only.
+    Pad { slot: u32, vel: f64, at: Option<f64>, lock: Option<crate::pads::PadLock> },
+    Padoff { slot: u32, at: Option<f64> },
+    /// Drop every timed event not yet played (the sequencer stopped).
+    Cancel,
     /// An FX bus (0..3) engaged by `depth` (0..1), macros live (fxbus.rs).
     Fx { bus: u32, depth: f64, a: Option<f64>, b: Option<f64> },
 }
@@ -301,7 +305,7 @@ impl Live {
                 self.voices = [Voice::IDLE; VOICES];
                 self.drums = [Drum::IDLE; DRUMS];
             }
-            LiveEvent::Pad { .. } | LiveEvent::Padoff { .. } | LiveEvent::Fx { .. } => {}
+            LiveEvent::Pad { .. } | LiveEvent::Padoff { .. } | LiveEvent::Fx { .. } | LiveEvent::Cancel => {}
         }
     }
 

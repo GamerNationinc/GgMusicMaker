@@ -89,6 +89,21 @@ import {
   type PadMode,
 } from "../pads/pads";
 import type { Slice } from "../pads/chop";
+import { TapTempo, clampBpm, stepSeconds, tempoOf } from "../seq/tempo";
+import {
+  PATTERNS,
+  patternAt,
+  recordHit,
+  setLock,
+  setPattern,
+  setSteps,
+  toggleStep,
+  updateNote,
+  type Pattern,
+  type SeqNote,
+  type StepLock,
+} from "../seq/pattern";
+import { clicksBetween, eventsBetween, reanchor, stepAt, stepsSince } from "../seq/schedule";
 import { FX_BUS_COUNT, FX_INFO, busLabel, fxBusesOf, fxDepth, type FxBusSettings, type FxEffect, type FxLive } from "../fx/fxbus";
 import { INITIAL_LOAD, type LoadState, frameUtilisation, ema, audioDropout } from "./load";
 
@@ -381,6 +396,8 @@ function setHistory(h: history.History<Project>): void {
 interface EditOptions {
   /** Coalesce key for continuous controls (see history.ts); `false` = not undoable. */
   history?: string | false;
+  /** How long same-key edits keep coalescing (default history.COALESCE_MS). */
+  coalesceMs?: number;
 }
 
 /** Apply an edit to the project, record it for undo, and sync the engine. */
@@ -391,7 +408,7 @@ function updateProject(fn: (p: Project) => Project, opts: EditOptions = {}): voi
     // Linked stack layers follow every clip edit made on any one of them.
     next = syncStacks(p, next);
     if (opts.history !== false) {
-      setHistory(history.push(hist, p, opts.history ?? null, performance.now()));
+      setHistory(history.push(hist, p, opts.history ?? null, performance.now(), opts.coalesceMs));
       dirty.set(true);
     }
     engine.syncAll(next);
@@ -1251,6 +1268,7 @@ function updatePad(slot: number, fn: (pad: Pad) => Pad, opts?: EditOptions): voi
 export function playPad(slot: number, vel = 0.9): void {
   void engine.ensureRunning();
   engine.live({ t: "pad", slot, vel });
+  seqHit(slot, vel);
 }
 export function releasePad(slot: number): void {
   engine.live({ t: "padoff", slot });
@@ -1380,6 +1398,195 @@ function resetFxLive(): void {
   for (let k = 0; k < FX_BUS_COUNT; k++) sendFx(k);
 }
 
+// ---- tempo + pad sequencer ----------------------------------------------------
+//
+// One project tempo (src/seq/tempo.ts). The sequencer (src/seq/) plays the
+// selected pattern on a loop: every 25 ms it hands the engine the next
+// ~150 ms of hits, each time-stamped on the engine's own clock, so timing is
+// the audio thread's, not the page's. Recording captures pad hits into the
+// pattern (quantised), one undo step per take.
+
+export function setBpm(bpm: number): void {
+  const t = tempoOf(get(project));
+  const next = clampBpm(bpm);
+  if (next === t.bpm) return;
+  const now = engine.audioClock();
+  if (seqRun) seqRun.anchor = reanchor(seqRun.anchor, now, stepSeconds(t), stepSeconds({ ...t, bpm: next }));
+  updateProject((p) => ({ ...p, tempo: { ...t, bpm: next } }), { history: "tempo" });
+}
+
+const tapper = new TapTempo();
+export function tapTempo(): void {
+  const bpm = tapper.tap(performance.now());
+  if (bpm !== null) {
+    setBpm(bpm);
+    status.set(`Tempo ${bpm} BPM (tap).`);
+  }
+}
+
+/** What the sequencer is doing (UI). */
+export interface SeqState {
+  pattern: number;
+  playing: boolean;
+  recording: boolean;
+  metronome: boolean;
+  /** Step playing now, -1 when stopped. */
+  step: number;
+}
+export const seq = writable<SeqState>({ pattern: 0, playing: false, recording: false, metronome: false, step: -1 });
+
+/** The selected pattern (empty ones aren't stored). */
+export const currentPattern = (): Pattern => patternAt(get(project).patterns, get(seq).pattern);
+
+const SEQ_TICK_MS = 25;
+const LOOKAHEAD = 0.15;
+/** Hidden pads for the metronome (outside the banks). */
+const CLICK_SLOT = SLOTS + 10;
+const CLICK_ACCENT_SLOT = SLOTS + 11;
+
+interface SeqRun {
+  anchor: number;
+  /** Everything before this is with the engine. */
+  scheduled: number;
+  timer: ReturnType<typeof setInterval>;
+  /** A just-recorded note's occurrence not to play (the hit was heard live). */
+  skip: Map<string, number>;
+  take: number;
+}
+let seqRun: SeqRun | null = null;
+let clicksReady = false;
+let takes = 0;
+
+/** The metronome's two clicks, as hidden pads (once). */
+function ensureClicks(): void {
+  if (clicksReady) return;
+  clicksReady = true;
+  const sr = engine.sampleRate;
+  const blip = (hz: number) => {
+    const n = Math.round(sr * 0.04);
+    const c = new Float32Array(n);
+    for (let i = 0; i < n; i++) c[i] = 0.45 * Math.sin((2 * Math.PI * hz * i) / sr) * Math.exp(-i / (sr * 0.008));
+    return engine.registerPcm(sr, [c, c]);
+  };
+  const pad = (slot: number, id: string): Pad => ({ ...newPad(slot, id, 0, 0.04, "click"), release: 0.005 });
+  engine.setSystemPads([pad(CLICK_SLOT, blip(1000)), pad(CLICK_ACCENT_SLOT, blip(1600))]);
+}
+
+function seqTick(): void {
+  const run = seqRun;
+  if (!run) return;
+  const now = engine.audioClock();
+  const to = now + LOOKAHEAD;
+  const from = Math.max(run.scheduled, now);
+  const t = tempoOf(get(project));
+  const p = currentPattern();
+  const st = get(seq);
+  if (to > from) {
+    for (const e of eventsBetween(p, t, run.anchor, from, to)) {
+      if (!e.off && run.skip.get(e.noteId) === e.loop) continue;
+      engine.live(e.off ? { t: "padoff", slot: e.slot, at: e.at } : { t: "pad", slot: e.slot, vel: e.vel, at: e.at, ...(e.lock ? { lock: e.lock } : {}) });
+    }
+    if (st.metronome || st.recording) {
+      for (const c of clicksBetween(t, run.anchor, from, to)) engine.live({ t: "pad", slot: c.accent ? CLICK_ACCENT_SLOT : CLICK_SLOT, vel: 1, at: c.at });
+    }
+    run.scheduled = to;
+  }
+  const step = stepAt(p, t, run.anchor, now);
+  if (step !== st.step) seq.update((s) => ({ ...s, step }));
+}
+
+/** Start the pattern looping (from its top, a beat from now). */
+export async function startSeq(): Promise<void> {
+  if (seqRun) return;
+  await engine.ensureRunning();
+  ensureClicks();
+  const anchor = engine.audioClock() + 0.1;
+  seqRun = { anchor, scheduled: anchor, timer: setInterval(seqTick, SEQ_TICK_MS), skip: new Map(), take: ++takes };
+  seq.update((s) => ({ ...s, playing: true }));
+  seqTick();
+}
+
+export function stopSeq(): void {
+  const run = seqRun;
+  if (!run) return;
+  clearInterval(run.timer);
+  seqRun = null;
+  engine.live({ t: "cancel" });
+  // Gate pads the pattern held: let go now (their releases were cancelled).
+  for (const slot of new Set(currentPattern().notes.map((n) => n.slot))) engine.live({ t: "padoff", slot });
+  seq.update((s) => ({ ...s, playing: false, recording: false, step: -1 }));
+}
+
+export function toggleSeq(): void {
+  if (seqRun) stopSeq();
+  else void startSeq();
+}
+
+/** Arm / disarm recording; arming a stopped sequencer starts it. */
+export function toggleSeqRecord(): void {
+  const rec = !get(seq).recording;
+  seq.update((s) => ({ ...s, recording: rec }));
+  if (rec) {
+    if (seqRun) seqRun.take = ++takes;
+    else void startSeq();
+    status.set(`Recording pattern ${get(seq).pattern + 1} — play the pads; R5 stops.`);
+  }
+}
+
+export function toggleMetronome(): void {
+  ensureClicks();
+  seq.update((s) => ({ ...s, metronome: !s.metronome }));
+}
+
+/** A pad was hit live: while recording, it goes into the pattern. */
+export function seqHit(slot: number, vel: number): void {
+  const run = seqRun;
+  if (!run || !get(seq).recording || slot < 0 || slot >= SLOTS) return;
+  const t = tempoOf(get(project));
+  const p = currentPattern();
+  const total = stepsSince(t, run.anchor, engine.audioClock());
+  if (total < -0.5) return;
+  const pos = total - Math.floor(total / p.steps) * p.steps;
+  const { pattern, note } = recordHit(p, slot, pos, vel);
+  // The quantised note may still be ahead in this loop (or the next one's
+  // first step): that occurrence was just heard live, so it's skipped.
+  run.skip.set(note.id, Math.floor(Math.round(total) / p.steps));
+  updatePattern(() => pattern, { history: `seqrec:${run.take}`, coalesceMs: Infinity });
+}
+
+function updatePattern(fn: (p: Pattern) => Pattern, opts?: EditOptions): void {
+  const index = get(seq).pattern;
+  updateProject((proj) => {
+    const patterns = setPattern(proj.patterns, fn(patternAt(proj.patterns, index)));
+    const next: Project = { ...proj, patterns };
+    if (!patterns.length) delete next.patterns;
+    return next;
+  }, opts);
+}
+
+export function selectPattern(index: number): void {
+  seq.update((s) => ({ ...s, pattern: ((index % PATTERNS) + PATTERNS) % PATTERNS }));
+}
+export function toggleSeqStep(slot: number, step: number): void {
+  updatePattern((p) => toggleStep(p, slot, step));
+}
+export function updateSeqNote(id: string, patch: Partial<Omit<SeqNote, "id">>, key?: string): void {
+  updatePattern((p) => updateNote(p, id, patch), key ? { history: key } : {});
+}
+export function lockSeqNote<K extends keyof StepLock>(id: string, key: K, value: StepLock[K] | undefined): void {
+  updatePattern((p) => setLock(p, id, key, value), { history: `lock:${id}:${key}` });
+}
+export function setPatternSteps(steps: number): void {
+  updatePattern((p) => setSteps(p, steps));
+}
+export function setSwing(swing: number): void {
+  updatePattern((p) => ({ ...p, swing: Math.min(0.5, Math.max(0, swing)) }), { history: "swing" });
+}
+export function clearPattern(): void {
+  updatePattern((p) => ({ ...p, notes: [] }));
+  status.set(`Cleared pattern ${get(seq).pattern + 1}.`);
+}
+
 // ---- chop lab -------------------------------------------------------------
 
 /** What the chop lab is cutting: a region of a buffer, and the first pad the
@@ -1504,6 +1711,7 @@ function resetWorkspace(next: Project): void {
   engine.setSurround(next.surround);
   liveChannels.set(engine.liveChannels);
   binauralLive.set(engine.binauralMonitor);
+  stopSeq();
   engine.syncAll(next);
   resetFxLive();
   setHistory(history.createHistory<Project>());

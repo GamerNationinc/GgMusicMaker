@@ -268,3 +268,23 @@ describe("FX buses in a session", () => {
     expect(unpackSession(packSession(project, extras, (id) => buffers.get(id))).header.project.fxBuses).toBeUndefined();
   });
 });
+
+describe("tempo + patterns in a session", () => {
+  it("round-trip, notes, locks and all", () => {
+    const patterns = [
+      {
+        index: 2,
+        steps: 32,
+        swing: 0.2,
+        notes: [{ id: "n1", slot: 4, step: 30, vel: 0.6, micro: -0.1, len: 2, prob: 0.5, cond: "1:2" as const, lock: { pitch: 7, reverse: true } }],
+      },
+    ];
+    const extras = { reverbSpace: "hall" as const, pixelsPerSecond: 80, playhead: 0 };
+    const { header } = unpackSession(packSession({ ...project, tempo: { bpm: 93.5, beatsPerBar: 4 }, patterns }, extras, (id) => buffers.get(id)));
+    expect(header.project.tempo).toEqual({ bpm: 93.5, beatsPerBar: 4 });
+    expect(header.project.patterns).toEqual(patterns);
+    const plain = unpackSession(packSession(project, extras, (id) => buffers.get(id))).header.project;
+    expect(plain.tempo).toBeUndefined();
+    expect(plain.patterns).toBeUndefined();
+  });
+});

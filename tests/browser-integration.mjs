@@ -962,6 +962,55 @@ async function main() {
     const released = await ledsOver(400);
     check("GRAB engages the bus only while held", grabbed <= open - 4 && released >= open - 1, `${grabbed} held → ${released} let go (open ${open})`);
 
+    // --- tempo + sequencer (web engine) -----------------------------------
+    await page.fill("[data-role=inst-bpm]", "90");
+    await page.press("[data-role=inst-bpm]", "Enter");
+    await page.waitForTimeout(100);
+    check("typing a tempo sets the project BPM", (await page.textContent("[data-role=bar-beat]")).includes("90 BPM"), await page.textContent("[data-role=bar-beat]"));
+    for (let i = 0; i < 4; i++) {
+      await page.dispatchEvent("[data-role=inst-tap]", "pointerdown", { pointerType: "touch" });
+      if (i < 3) await page.waitForTimeout(500);
+    }
+    const tapped = await page.textContent("[data-role=bar-beat]");
+    const tappedBpm = Number(/([\d.]+) BPM/.exec(tapped)?.[1]);
+    check("tap tempo: four taps 0.5 s apart ≈ 120 BPM", tappedBpm > 115 && tappedBpm < 125, tapped);
+    await page.click("[data-role=pad-A1]");
+    await page.click("[data-role=pad-mode-gate]");
+    await page.click("[data-role=view-steps]");
+    for (const st of [1, 5, 9, 13]) await page.click(`[data-role=step-A1-${st}]`);
+    check("tapping steps puts notes in the pattern", (await page.$$("[data-role^=step-A1-].on")).length === 4);
+    await page.waitForTimeout(1500);
+    await page.click("[data-role=seq-play]");
+    const seqLeds = await ledsOver(1200);
+    const moving = (await page.$$(".cell.now")).length;
+    await page.click("[data-role=seq-play]");
+    await page.waitForTimeout(500);
+    const afterStop = await ledsOver(400);
+    check("▶ plays the pattern through the web sampler, ■ stops it", seqLeds > 0 && moving > 0 && afterStop === 0, `${seqLeds} LEDs playing, ${afterStop} after stop`);
+    // Record: arm, play pad 2 live from the pad grid, it lands on A2's row.
+    await page.click("[data-role=view-pads]");
+    await page.click("[data-role=pad-A2]");
+    await page.setInputFiles("[data-role=pad-file]", [loopFile]);
+    await page.waitForTimeout(500);
+    await page.click("[data-role=seq-rec]");
+    await page.waitForTimeout(300);
+    await touchPad("A2", "pointerdown");
+    await touchPad("A2", "pointerup");
+    await page.waitForTimeout(150);
+    await touchPad("A2", "pointerdown");
+    await touchPad("A2", "pointerup");
+    await page.click("[data-role=seq-play]");
+    await page.click("[data-role=view-steps]");
+    const rec = (await page.$$("[data-role^=step-A2-].on")).length;
+    check("hits while recording land in the pattern", rec >= 1 && rec <= 2, `${rec} on A2`);
+    // One take = one undo step.
+    await page.click("[data-role=mode-studio]");
+    await page.keyboard.press("Control+z");
+    await page.click("[data-role=mode-instrument]");
+    await page.waitForTimeout(100);
+    check("undo takes the whole take back", (await page.$$("[data-role^=step-A2-].on")).length === 0 && (await page.$$("[data-role^=step-A1-].on")).length === 4);
+    await page.click("[data-role=view-pads]");
+
     await page.click("[data-role=inst-kit-synth]");
     await page.click("[data-role=mode-studio]");
   }

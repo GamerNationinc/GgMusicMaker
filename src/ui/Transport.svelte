@@ -1,5 +1,9 @@
 <script lang="ts">
-  import { transport, togglePlay, stop, seek, masterLevel, engine, skipBack, toggleResample, resampling } from "../state/store";
+  import { transport, togglePlay, stop, seek, masterLevel, engine, skipBack, toggleResample, resampling, project } from "../state/store";
+  import { barBeat, tempoOf } from "../seq/tempo";
+
+  const tempo = $derived(tempoOf($project));
+  const bb = $derived(barBeat(tempo, $transport.playhead));
 
   function fmt(t: number): string {
     const m = Math.floor(t / 60);
@@ -46,7 +50,10 @@
     title={$resampling ? "Resampling — press again (Shift+B) to land it on a new layer" : "Resample (Shift+B): bounce the output, effects and all, onto a new layer — press again to stop"}
   >◉</button>
 
-  <div class="time screen">{fmt($transport.playhead)}</div>
+  <div class="time screen">
+    <span class="clock">{fmt($transport.playhead)}</span>
+    <small data-role="bar-beat" title="Bar . beat . sixteenth at the project tempo">{bb.bar}.{bb.beat}.{bb.sixteenth} · {tempo.bpm} BPM</small>
+  </div>
 
   <div class="meter" title="Master level">
     {#each segments as i}
@@ -83,6 +90,14 @@
     letter-spacing: 2px;
     min-width: 130px;
     text-align: center;
+    display: flex;
+    flex-direction: column;
+    line-height: 1.05;
+  }
+  .time small {
+    font-size: 10px;
+    letter-spacing: 1px;
+    color: var(--ink-dim);
   }
   .meter {
     display: flex;

@@ -78,6 +78,15 @@ pub struct PadSpec {
     pub bus: u32,
 }
 
+/// Pad settings one hit overrides (a sequencer step's parameter locks).
+#[derive(Deserialize, Clone, Copy, Debug, Default, PartialEq)]
+pub struct PadLock {
+    pub gain: Option<f64>,
+    pub pan: Option<f64>,
+    pub pitch: Option<f64>,
+    pub reverse: Option<bool>,
+}
+
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Stage {
     Off,
@@ -94,6 +103,8 @@ struct Voice {
     choke: u32,
     bus: u32,
     age: u64,
+    /// Frames to stay silent before starting (a hit timed inside a block).
+    wait: usize,
     buf: Option<Arc<Buffer>>,
     /// Region in source frames.
     lo: f64,
@@ -118,6 +129,7 @@ impl Voice {
         choke: 0,
         bus: 0,
         age: 0,
+        wait: 0,
         buf: None,
         lo: 0.0,
         len: 0.0,
@@ -167,6 +179,12 @@ impl Sampler {
 
     /// Press a pad. `buf` is the pad's sample (None: nothing happens).
     pub fn trigger(&mut self, p: &PadSpec, buf: Option<Arc<Buffer>>, vel: f64) {
+        self.trigger_at(p, buf, vel, &PadLock::default(), 0);
+    }
+
+    /// Press a pad `wait` frames into the next block, with `lock`'s
+    /// settings in place of the pad's for this hit.
+    pub fn trigger_at(&mut self, p: &PadSpec, buf: Option<Arc<Buffer>>, vel: f64, lock: &PadLock, wait: usize) {
         let sr = self.sr;
         let Some(buf) = buf else { return };
         // A latched loop: a second press lets it go.
@@ -200,7 +218,8 @@ impl Sampler {
             Some(i) => i,
             None => (0..VOICES).min_by_key(|&i| self.voices[i].age).unwrap_or(0),
         };
-        let g = vel.clamp(0.0, 1.0) * p.gain.max(0.0);
+        let g = vel.clamp(0.0, 1.0) * lock.gain.unwrap_or(p.gain).max(0.0);
+        let pitch = lock.pitch.unwrap_or(p.pitch);
         self.voices[slot] = Voice {
             stage: Stage::Attack,
             slot: p.slot,
@@ -208,15 +227,16 @@ impl Sampler {
             choke: p.choke,
             bus: p.bus.min(2),
             age: self.clock,
+            wait,
             buf: Some(buf.clone()),
             lo,
             len: hi - lo,
-            reverse: p.reverse,
+            reverse: lock.reverse.unwrap_or(p.reverse),
             t: 0.0,
-            step: buf.rate / sr * (p.pitch / 12.0).exp2(),
+            step: buf.rate / sr * (pitch / 12.0).exp2(),
             gl: g,
             gr: g,
-            pan: p.pan.clamp(-1.0, 1.0),
+            pan: lock.pan.unwrap_or(p.pan).clamp(-1.0, 1.0),
             env: 0.0,
             att: 1.0 / (p.attack.max(MIN_ATTACK) * sr),
             rel: 0.0,
@@ -229,6 +249,15 @@ impl Sampler {
         for v in &mut self.voices {
             if v.slot == slot && v.mode == PadMode::Gate && v.stage != Stage::Release {
                 v.release(release, sr);
+            }
+        }
+    }
+
+    /// Drop hits still waiting for their frame.
+    pub fn cancel_waiting(&mut self) {
+        for v in &mut self.voices {
+            if v.wait > 0 {
+                *v = Voice::IDLE;
             }
         }
     }
@@ -268,6 +297,10 @@ impl Sampler {
             let (lo, hi) = outs.split_at_mut(bi + 1);
             let (l, r) = (&mut *lo[bi], &mut *hi[0]);
             for i in 0..n {
+                if v.wait > 0 {
+                    v.wait -= 1;
+                    continue;
+                }
                 match v.stage {
                     Stage::Attack => {
                         v.env += v.att;
@@ -317,6 +350,27 @@ impl Sampler {
                 v.buf = None; // freed here only if the pad's buffer was dropped meanwhile
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod timing_tests {
+    use super::*;
+
+    #[test]
+    fn a_timed_hit_starts_on_its_frame_with_its_locks() {
+        let sr = 1000.0;
+        let mut s = Sampler::new(sr);
+        let b = Arc::new(Buffer { rate: sr, channels: vec![(0..1000).map(|i| (i + 1) as f32 / 1000.0).collect(); 2] });
+        let p = PadSpec { slot: 0, buffer: "b".into(), start: 0.0, end: 1.0, mode: PadMode::Oneshot, reverse: false, gain: 1.0, pan: 0.0, pitch: 0.0, attack: 0.0, release: 0.0, choke: 0, mono: true, bus: 0 };
+        s.trigger_at(&p, Some(b.clone()), 1.0, &PadLock { pitch: Some(12.0), gain: Some(0.5), ..Default::default() }, 37);
+        let (mut l, mut r) = (vec![0.0; 128], vec![0.0; 128]);
+        s.render(&mut l, &mut r);
+        assert!(l[..37].iter().all(|v| *v == 0.0));
+        assert!(l[37] > 0.0);
+        // Locked: half gain, an octave up (every other source frame).
+        assert!((l[47] - 0.5 * 21.0 / 1000.0).abs() < 1e-9, "{}", l[47]);
+        assert_eq!(s.voices_of(0), 1);
     }
 }
 

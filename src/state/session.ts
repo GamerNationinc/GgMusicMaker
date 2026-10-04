@@ -28,6 +28,8 @@ import { normalizePunch } from "../fx/punch";
 import { normalizeBass } from "../fx/bass";
 import { normalizePads } from "../pads/pads";
 import { normalizeFxBuses } from "../fx/fxbus";
+import { normalizeTempo } from "../seq/tempo";
+import { normalizePatterns } from "../seq/pattern";
 
 export const SESSION_EXTENSION = "ggmm";
 // v1: tracks had `voice: { preset, mix }`; v2: `synth` (Voice Synth) + project.surround;
@@ -325,6 +327,12 @@ export function migrateProject(project: Project): Project {
   const fx = normalizeFxBuses(project.fxBuses);
   if (fx) out.fxBuses = fx;
   else delete out.fxBuses;
+  const tempo = normalizeTempo(project.tempo);
+  if (tempo) out.tempo = tempo;
+  else delete out.tempo;
+  const patterns = normalizePatterns(project.patterns);
+  if (patterns) out.patterns = patterns;
+  else delete out.patterns;
   return out;
 }
 

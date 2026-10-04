@@ -18,7 +18,11 @@
   import { BANKS } from "../pads/pads";
   import { SCALES, NOTE_NAMES, GRID_ROWS, DRUM_NAMES, cellNote, chordNotes, chordName, scaleOf } from "../input/instrument";
   import { LIVE_PATCHES } from "../audio/live";
-  import { skipBack, toggleResample, resampling } from "../state/store";
+  import { skipBack, toggleResample, resampling, project, seq, toggleSeq, toggleSeqRecord, toggleMetronome, selectPattern, setBpm, tapTempo } from "../state/store";
+  import { padsView } from "./seqView";
+  import { tempoOf, BPM_MIN, BPM_MAX } from "../seq/tempo";
+
+  const tempo = $derived(tempoOf($project));
 
   /** Skip-back / resample from the screen: onto a pad in the PADS kit. */
   function capture(which: "skipback" | "resample") {
@@ -86,6 +90,26 @@
       <span class="val screen" data-role="inst-bank">{BANKS[v.padBank]}</span>
       <button class="btn step" onclick={screenOnly(() => setInstrument({ padBank: (v.padBank + 1) % BANKS.length }))}>▶</button>
     </div>
+    <div class="group">
+      <button class="btn patch" class:accent={$padsView === "pads"} data-role="view-pads" onclick={screenOnly(() => padsView.set("pads"))}>PADS</button>
+      <button class="btn patch" class:accent={$padsView === "steps"} data-role="view-steps" onclick={screenOnly(() => padsView.set("steps"))}>STEPS</button>
+    </div>
+    <div class="group">
+      <span class="lbl">SEQ <small>R5</small></span>
+      <button class="btn step" class:accent={$seq.playing} data-role="seq-play" onclick={screenOnly(() => toggleSeq())} title="Play / stop the pattern (R5)">{$seq.playing ? "■" : "▶"}</button>
+      <button class="btn step danger" class:on={$seq.recording} data-role="seq-rec" onclick={screenOnly(() => toggleSeqRecord())} title="Record pad hits into the pattern (L1/R1 + R5)">●</button>
+      <button class="btn step" class:accent={$seq.metronome} data-role="seq-metro" onclick={screenOnly(() => toggleMetronome())} title="Metronome (always on while recording)">♪</button>
+      <button class="btn step" onclick={screenOnly(() => selectPattern($seq.pattern - 1))} aria-label="Previous pattern">◀</button>
+      <span class="val screen" data-role="seq-pattern" title="Pattern">P{$seq.pattern + 1}</span>
+      <button class="btn step" onclick={screenOnly(() => selectPattern($seq.pattern + 1))} aria-label="Next pattern">▶</button>
+    </div>
+    <div class="group">
+      <span class="lbl">BPM</span>
+      <button class="btn step" onclick={screenOnly(() => setBpm(tempo.bpm - 1))} aria-label="Slower">−</button>
+      <input class="val screen bpm" type="number" min={BPM_MIN} max={BPM_MAX} step="0.1" value={tempo.bpm} data-role="inst-bpm" onchange={(e) => setBpm(Number((e.target as HTMLInputElement).value))} aria-label="Tempo, BPM" />
+      <button class="btn step" onclick={screenOnly(() => setBpm(tempo.bpm + 1))} aria-label="Faster">+</button>
+      <button class="btn step" data-role="inst-tap" onpointerdown={(e) => accept(e) && tapTempo()} title="Tap the beat">TAP</button>
+    </div>
     {:else}
     <div class="group">
       <span class="lbl">KEY <small>d-pad ←→</small></span>
@@ -113,10 +137,10 @@
     </div>
     {/if}
     <div class="group">
-      <span class="lbl">CAPTURE <small>R3 · L1/R1+R3</small></span>
-      <button class="btn" data-role="inst-skip-back" onclick={screenOnly(() => capture("skipback"))} title={v.kit === "pads" ? "The last minute that played → the selected pad (or the next empty one)" : "The last minute that played → a new layer"}>⟲ skip back</button>
-      <button class="btn danger" class:on={!!$resampling} data-role="inst-resample" onclick={screenOnly(() => capture("resample"))} title={v.kit === "pads" ? "Bounce the output onto a pad — press again to stop" : "Bounce the output onto a new layer — press again to stop"}>
-        {$resampling ? "◉ resampling…" : "◉ resample"}
+      <span class="lbl">{v.kit === "pads" ? "" : "CAPTURE"} <small>R3</small></span>
+      <button class="btn" class:step={v.kit === "pads"} data-role="inst-skip-back" onclick={screenOnly(() => capture("skipback"))} title={v.kit === "pads" ? "Skip back: the last minute that played → the selected pad (or the next empty one)" : "The last minute that played → a new layer"}>{v.kit === "pads" ? "⟲" : "⟲ skip back"}</button>
+      <button class="btn danger" class:step={v.kit === "pads"} class:on={!!$resampling} data-role="inst-resample" onclick={screenOnly(() => capture("resample"))} title={v.kit === "pads" ? "Resample the output onto a pad — press again to stop (L1/R1+R3)" : "Bounce the output onto a new layer — press again to stop"}>
+        {v.kit === "pads" ? "◉" : $resampling ? "◉ resampling…" : "◉ resample"}
       </button>
     </div>
   </div>
@@ -240,6 +264,13 @@
     padding: 6px 6px;
     font-weight: bold;
     color: var(--green);
+  }
+  .val.bpm {
+    width: 64px;
+    font-family: var(--font);
+    font-size: 13px;
+    border: 1px solid var(--box);
+    background: var(--panel-lo);
   }
   .val.wide {
     min-width: 92px;

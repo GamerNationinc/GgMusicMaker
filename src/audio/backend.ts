@@ -18,6 +18,7 @@ import type { ReverbSpace } from "./reverb";
 import type { SurroundLayout } from "../fx/voice-synth";
 import type { LiveEvent } from "./live";
 import type { SkipGrab } from "./skipback";
+import type { Pad } from "../pads/pads";
 
 export interface DecodedAudio {
   bufferId: string;
@@ -80,6 +81,9 @@ export interface AudioBackend {
 
   // Live instrument (Instrument mode): plays whether or not the transport runs.
   live(e: LiveEvent): void;
+  /** Pads the app plays itself (the metronome), kept beside the project's
+   *  pads on every sync; slots outside the banks. */
+  setSystemPads(pads: Pad[]): void;
 
   // Skip-back: the always-on ring of what the device played (skipback.ts).
   /** A marker for `skipGrab`: frames the ring has taken so far. */

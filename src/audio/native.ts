@@ -25,7 +25,7 @@ import type { ReverbSpace } from "./reverb";
 import type { SurroundLayout } from "../fx/voice-synth";
 import { anySoloed, isTrackAudible } from "./edits";
 import { punchIsActive } from "../fx/punch";
-import { padSpecs } from "../pads/pads";
+import { padSpecs, type Pad } from "../pads/pads";
 import { fxBusesOf, fxSpec } from "../fx/fxbus";
 import { bassIsActive } from "../fx/bass";
 import { LivePeaks } from "./liveTake";
@@ -94,14 +94,14 @@ export interface NativeStatus {
 /** The mixer-facing view of a project (mirrors native/src/mixer.rs
  *  ProjectSpec): mute/solo and every power switch resolved the way
  *  audio/channel.ts resolves them, so both engines render the same graph. */
-export function nativeProjectSpec(project: Project, opts: { masterGain: number; reverb: ReverbSpace; binaural: boolean }) {
+export function nativeProjectSpec(project: Project, opts: { masterGain: number; reverb: ReverbSpace; binaural: boolean; systemPads?: Pad[] }) {
   const solo = anySoloed(project);
   return {
     masterGain: opts.masterGain,
     surround: surroundChannels(project.surround),
     reverb: opts.reverb,
     binaural: opts.binaural,
-    pads: padSpecs(project.pads),
+    pads: padSpecs([...(project.pads ?? []), ...(opts.systemPads ?? [])]),
     fxBuses: fxBusesOf(project).map(fxSpec),
     tracks: project.tracks.map((t) => {
       const audible = isTrackAudible(t, solo);
@@ -257,7 +257,14 @@ export class NativeBackend implements AudioBackend {
   // ---- mixer ---------------------------------------------------------------
 
   private spec(project: Project): string {
-    return JSON.stringify(nativeProjectSpec(project, { masterGain: this.masterGain, reverb: this.reverb, binaural: this.headphones }));
+    return JSON.stringify(nativeProjectSpec(project, { masterGain: this.masterGain, reverb: this.reverb, binaural: this.headphones, systemPads: this.systemPads }));
+  }
+
+  private systemPads: Pad[] = [];
+  setSystemPads(pads: Pad[]): void {
+    this.systemPads = pads;
+    this.web.setSystemPads(pads);
+    if (this.lastProject) this.push(this.lastProject);
   }
 
   private push(project: Project): void {
@@ -267,7 +274,7 @@ export class NativeBackend implements AudioBackend {
       this.web.syncAll(project);
       return;
     }
-    for (const id of [...project.tracks.flatMap((t) => t.clips.map((c) => c.bufferId)), ...(project.pads ?? []).map((p) => p.bufferId)]) {
+    for (const id of [...project.tracks.flatMap((t) => t.clips.map((c) => c.bufferId)), ...[...(project.pads ?? []), ...this.systemPads].map((p) => p.bufferId)]) {
       const b = this.web.getBuffer(id);
       if (b) this.mirror(id, b);
     }

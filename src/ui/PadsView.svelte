@@ -4,6 +4,9 @@
   // and plays the pads from the touchscreen.
   import { project, playPad, releasePad, setPadParam, setPadMode, togglePadFlag, renamePad, clearPadSlot, loadPadFromClip, loadPadFiles, openChopForPad, setPadBus } from "../state/store";
   import FxBuses from "./FxBuses.svelte";
+  import StepGrid from "./StepGrid.svelte";
+  import StepEditor from "./StepEditor.svelte";
+  import { padsView } from "./seqView";
   import { setInstrument, deckPerforming } from "../input/controller";
   import { PAD_KEY_LABELS, type InstrumentView } from "../input/instrument";
   import { PAD_MODES, PAD_MODE_LABEL, PAD_RANGES, padAt, padLabel, slotOf, type PadKnob } from "../pads/pads";
@@ -12,7 +15,7 @@
 
   const slots = $derived(Array.from({ length: 16 }, (_, i) => slotOf(v.padBank, i)));
   const sel = $derived(padAt($project.pads, v.pad));
-  let fileInput: HTMLInputElement;
+  let fileInput = $state<HTMLInputElement>();
 
   /** Screen-held pads (pointer id → slot). */
   let held = $state<Record<number, number>>({});
@@ -57,6 +60,9 @@
 </script>
 
 <div class="pads-stage">
+  {#if $padsView === "steps"}
+  <StepGrid {v} />
+  {:else}
   <div class="box grid-box" data-title="pads · bank {'ABCDEFGHIJ'[v.padBank]}" data-title-right="right pad · d-pad · xyab">
     <div class="grid" data-role="pad-grid">
       {#each slots as slot, i (slot)}
@@ -79,7 +85,11 @@
     </div>
   </div>
 
+  {/if}
   <div class="side">
+  {#if $padsView === "steps"}
+  <StepEditor />
+  {:else}
   <div class="box edit" data-title="pad {padLabel(v.pad)}" data-role="pad-editor">
     <div class="edit-body">
     {#if sel}
@@ -129,20 +139,21 @@
       <div class="row actions">
         <button class="btn magenta" data-role="pad-chop" onclick={() => openChopForPad(v.pad)}>✂ CHOP</button>
         <button class="btn" onclick={() => loadPadFromClip(v.pad)} title="The clip selected in Studio">⇠ CLIP</button>
-        <button class="btn" onclick={() => fileInput.click()}>⇠ FILE</button>
+        <button class="btn" onclick={() => fileInput?.click()}>⇠ FILE</button>
         <button class="btn danger" data-role="pad-clear" onclick={() => clearPadSlot(v.pad)}>CLEAR</button>
       </div>
     {:else}
       <p class="hint">Empty. Load a sample onto it:</p>
       <div class="row actions">
         <button class="btn" data-role="pad-load-clip" onclick={() => loadPadFromClip(v.pad)} title="The clip selected in Studio">⇠ SELECTED CLIP</button>
-        <button class="btn" data-role="pad-load-file" onclick={() => fileInput.click()}>⇠ AUDIO FILE…</button>
+        <button class="btn" data-role="pad-load-file" onclick={() => fileInput?.click()}>⇠ AUDIO FILE…</button>
       </div>
       <p class="hint">…or play something and press <b>R3</b> (skip back) / <b>L1+R3</b> (resample) — it lands here.</p>
     {/if}
     </div>
     <input bind:this={fileInput} type="file" accept="audio/*" multiple hidden data-role="pad-file" onchange={onFiles} />
   </div>
+  {/if}
   <FxBuses selected={v.fxBus} onselect={(k) => setInstrument({ fxBus: k })} />
   </div>
 </div>
