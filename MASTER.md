@@ -399,6 +399,8 @@ GgMusicMaker/
 │   └── fixtures/tone.wav          Test tone (peaks right at the limiter threshold — see test comments)
 │
 ├── docs/
+│   ├── deck-dual-mode.md          Instrument / DJ mode spec, decisions, control map
+│   ├── sampler-research.md        SP-404-style sampler: feature research + build order (not built)
 │   └── screenshot.png             README screenshot
 │
 └── .github/workflows/
@@ -464,6 +466,7 @@ git tag v0.1.0 && git push origin v0.1.0     # release.yml builds + attaches art
 ### Near term
 
 - **Deck dual mode, next milestones** (`docs/deck-dual-mode.md`): DJ mix table mode, library + bulk import with analysis, album view.
+- **Sampler instrument (SP-404-style)** — research and proposed build order in `docs/sampler-research.md`; skip-back + resample first, project tempo before the sequencer.
 - **A project tempo.** BASS MOD carries its own BPM per layer because the project has none; a song BPM (and a beat grid on the ruler) would let every tempo-locked thing share it.
 - **Feel-test on the Deck** (2026-10-02 work): left-pad gain / glide friction / haptic detents, stick speeds, and BASS MOD's presets by ear.
 - **Gamepad navigation** so the app is usable in Gaming Mode (Steam Input → keyboard is the cheap first step; a focus ring + D-pad model is the real one).

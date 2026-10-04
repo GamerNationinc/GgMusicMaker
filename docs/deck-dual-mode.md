@@ -116,6 +116,9 @@ not the transport runs. Nothing sounding costs nothing.
 
 ## Next milestones
 
+Sampler (SP-404-style pads, chop, skip-back, FX buses, sequencer): research
+and proposed order in `docs/sampler-research.md`.
+
 ### DJ mix table mode
 Two decks as special tracks on the shared engine: jog on the trackpads, EQ
 on the sticks, crossfader on the triggers, cue/play on the bumpers, loops,
