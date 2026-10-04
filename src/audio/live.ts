@@ -33,4 +33,6 @@ export type LiveEvent =
   | { t: "panic" }
   /** A sampler pad (src/pads/pads.ts) pressed / let go. */
   | { t: "pad"; slot: number; vel: number }
-  | { t: "padoff"; slot: number };
+  | { t: "padoff"; slot: number }
+  /** An FX bus (0..3) engaged by `depth` 0..1, macros live (src/fx/fxbus.ts). */
+  | { t: "fx"; bus: number; depth: number; a?: number; b?: number };

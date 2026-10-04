@@ -24,6 +24,9 @@
 //               lets go (gate pads stop).
 //   L2          velocity.     L4 / R4  bank down / up (A–J).
 //   R3 / L1·R1 + R3   skip back / resample — onto a pad.
+//   FX buses (src/fx/fxbus.ts): L3 picks the bus (1–4) · L5 latches it on /
+//   off · R2 grabs it (depth = how far it's pulled) · left pad = its XY
+//   macros (A across, B up; kept when you lift).
 //
 // Pure: `update(state)` → the engine events and haptic pulses that state
 // change causes. No timers, no audio, no DOM.
@@ -73,9 +76,11 @@ export interface InstrumentSettings {
   /** PADS: bank shown (0..9 = A..J) and the selected pad's slot. */
   padBank: number;
   pad: number;
+  /** PADS: the FX bus L5 / R2 / the left pad work on (0..3). */
+  fxBus: number;
 }
 
-export const DEFAULT_SETTINGS: InstrumentSettings = { key: 0, scale: 0, octave: 3, patch: 0, kit: "synth", padBank: 0, pad: 0 };
+export const DEFAULT_SETTINGS: InstrumentSettings = { key: 0, scale: 0, octave: 3, patch: 0, kit: "synth", padBank: 0, pad: 0, fxBus: 2 };
 
 /** What the UI shows. */
 export interface InstrumentView extends InstrumentSettings {
@@ -100,11 +105,22 @@ export interface Haptic {
 /** Things the app does (not the engine): skip-back / resample. */
 export type InstrumentAction = "skipback" | "resample";
 
+/** FX bus moves (the store keeps the live state and the project). */
+export type FxAction =
+  | { t: "toggle"; bus: number }
+  | { t: "grab"; bus: number; depth: number }
+  | { t: "macros"; bus: number; a: number; b: number }
+  | { t: "commit"; bus: number };
+
 export interface Output {
   events: LiveEvent[];
   haptics: Haptic[];
   actions?: InstrumentAction[];
+  fx?: FxAction[];
 }
+
+/** R2 below this is a resting finger, not a grab. */
+const GRAB_DEAD = 0.04;
 
 const deadzone = (v: number) => (Math.abs(v) < STICK_DEAD ? 0 : (v - Math.sign(v) * STICK_DEAD) / (1 - STICK_DEAD));
 const edge = (prev: ControllerState, s: ControllerState, b: keyof ControllerState["buttons"]) => s.buttons[b] && !prev.buttons[b];
@@ -169,6 +185,9 @@ export class Instrument {
   private padCell: { cell: number; slot: number } | null = null;
   /** Menu went down without View: a tap (not the mode combo) on release. */
   private menuTap = false;
+  /** PADS: the grab being held (bus + depth last sent), the left pad's macros. */
+  private grab: { bus: number; depth: number } | null = null;
+  private fxPad: { bus: number; a: number; b: number } | null = null;
 
   constructor(settings: Partial<InstrumentSettings> = {}) {
     this.settings = { ...DEFAULT_SETTINGS, ...settings };
@@ -189,8 +208,11 @@ export class Instrument {
     if (!s.buttons.menu && prev.buttons.menu && this.menuTap) {
       this.menuTap = false;
       events.push(...this.releaseHeld());
+      const fx: FxAction[] = [];
+      this.letGoFx(fx);
       st.kit = st.kit === "synth" ? "pads" : "synth";
       haptics.push({ side: "both", strength: "bump" });
+      return { events, haptics, actions, fx };
     }
 
     // --- R3: skip-back, or resample with a bumper held ---
@@ -201,8 +223,10 @@ export class Instrument {
     }
 
     if (st.kit === "pads") {
+      const fx: FxAction[] = [];
       this.updatePads(prev, s, events, haptics);
-      return { events, haptics, actions };
+      this.updateFx(prev, s, fx, haptics);
+      return { events, haptics, actions, fx };
     }
 
     // --- settings: octave, key, scale, sound ---
@@ -330,6 +354,46 @@ export class Instrument {
     }
   }
 
+  /** PADS: the FX buses — L3 picks, L5 latches, R2 grabs, left pad = XY. */
+  private updateFx(prev: ControllerState, s: ControllerState, fx: FxAction[], haptics: Haptic[]): void {
+    const st = this.settings;
+    if (edge(prev, s, "l3")) {
+      this.letGoFx(fx);
+      st.fxBus = (st.fxBus + 1) % 4;
+      haptics.push({ side: "left", strength: "bump" });
+    }
+    if (edge(prev, s, "l5")) {
+      fx.push({ t: "toggle", bus: st.fxBus });
+      haptics.push({ side: "left", strength: "bump" });
+    }
+    const depth = s.r2 < GRAB_DEAD ? 0 : Math.round(Math.min(1, (s.r2 - GRAB_DEAD) / (0.95 - GRAB_DEAD)) * 100) / 100;
+    if (depth > 0 || this.grab) {
+      if (!this.grab || this.grab.depth !== depth) {
+        fx.push({ t: "grab", bus: st.fxBus, depth });
+        this.grab = depth > 0 ? { bus: st.fxBus, depth } : null;
+      }
+    }
+    if (s.lpad.touch) {
+      const a = Math.round(((s.lpad.x + 1) / 2) * 200) / 200;
+      const b = Math.round(((s.lpad.y + 1) / 2) * 200) / 200;
+      if (!this.fxPad || this.fxPad.a !== a || this.fxPad.b !== b) {
+        fx.push({ t: "macros", bus: st.fxBus, a, b });
+        this.fxPad = { bus: st.fxBus, a, b };
+      }
+    } else if (this.fxPad) {
+      fx.push({ t: "commit", bus: this.fxPad.bus });
+      this.fxPad = null;
+    }
+  }
+
+  /** Let go of a grab and land a left-pad gesture (bus change, kit change, leaving). */
+  private letGoFx(fx: FxAction[]): void {
+    if (this.grab) fx.push({ t: "grab", bus: this.grab.bus, depth: 0 });
+    if (this.fxPad) fx.push({ t: "commit", bus: this.fxPad.bus });
+    this.grab = null;
+    this.fxPad = null;
+  }
+
   /** Let go of whatever the current kit holds. */
   private releaseHeld(): LiveEvent[] {
     const events: LiveEvent[] = [];
@@ -348,13 +412,15 @@ export class Instrument {
   /** Release everything (leaving the mode, controller lost). */
   release(): Output {
     const events: LiveEvent[] = this.releaseHeld();
+    const fx: FxAction[] = [];
+    this.letGoFx(fx);
     if (this.controls.sustain || this.controls.bend) {
       this.controls = { ...this.controls, sustain: false, bend: 0 };
       events.push({ t: "ctl", ...this.controls });
       this.sentControls = { ...this.controls };
     }
     this.prev = null;
-    return { events, haptics: [] };
+    return { events, haptics: [], fx };
   }
 
   view(): InstrumentView {

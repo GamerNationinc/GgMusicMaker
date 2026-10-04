@@ -1,7 +1,8 @@
 // The pad sampler on the web engine — the twin of native/src/pads.rs, built
 // from Web Audio nodes: per voice, a buffer source (reversed copy for
 // reverse; playbackRate = repitch) → an envelope gain (also up-mixes a mono
-// buffer to L = R) → StereoPannerNode → the master bus. The rules (modes,
+// buffer to L = R) → StereoPannerNode → the master bus, or the input of FX
+// bus 1 / 2 (the pad's `bus`). The rules (modes,
 // latch, choke, mono, attack/release floors, 3 ms end declick) are the ones
 // pads.rs documents.
 
@@ -27,9 +28,10 @@ export class WebSampler {
   private voices: Voice[] = [];
   private reversed = new WeakMap<AudioBuffer, AudioBuffer>();
 
+  /** `outs`: dry, FX bus 1 in, FX bus 2 in. */
   constructor(
     private ctx: BaseAudioContext,
-    private out: AudioNode,
+    private outs: AudioNode[],
     private getBuffer: (id: string) => AudioBuffer | undefined,
   ) {}
 
@@ -37,9 +39,9 @@ export class WebSampler {
     this.pads = new Map((pads ?? []).map((p) => [p.slot, p]));
   }
 
-  /** The bus was rebuilt: new voices go to `node`. */
-  setOutput(node: AudioNode): void {
-    this.out = node;
+  /** The bus was rebuilt: new voices go to `outs` (dry, bus 1, bus 2). */
+  setOutputs(outs: AudioNode[]): void {
+    this.outs = outs;
   }
 
   /** Voices of a pad still sounding (not releasing). */
@@ -80,7 +82,7 @@ export class WebSampler {
     env.channelInterpretation = "speakers";
     const pan = ctx.createStereoPanner();
     pan.pan.value = Math.max(-1, Math.min(1, p.pan));
-    src.connect(env).connect(pan).connect(this.out);
+    src.connect(env).connect(pan).connect(this.outs[Math.min(p.bus ?? 0, this.outs.length - 1)]);
 
     const t0 = ctx.currentTime;
     const g = Math.max(0, Math.min(1, vel)) * Math.max(0, p.gain);

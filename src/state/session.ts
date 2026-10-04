@@ -27,6 +27,7 @@ import { normalizeMorph } from "../fx/morph";
 import { normalizePunch } from "../fx/punch";
 import { normalizeBass } from "../fx/bass";
 import { normalizePads } from "../pads/pads";
+import { normalizeFxBuses } from "../fx/fxbus";
 
 export const SESSION_EXTENSION = "ggmm";
 // v1: tracks had `voice: { preset, mix }`; v2: `synth` (Voice Synth) + project.surround;
@@ -321,6 +322,9 @@ export function migrateProject(project: Project): Project {
   const pads = normalizePads(project.pads);
   if (pads.length) out.pads = pads;
   else delete out.pads;
+  const fx = normalizeFxBuses(project.fxBuses);
+  if (fx) out.fxBuses = fx;
+  else delete out.fxBuses;
   return out;
 }
 

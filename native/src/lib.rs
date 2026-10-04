@@ -17,6 +17,7 @@ pub mod bass;
 pub mod binaural;
 pub mod deckpad;
 pub mod dsp;
+pub mod fxbus;
 pub mod live;
 pub mod mixer;
 pub mod morph;
@@ -500,7 +501,7 @@ impl Task for RenderTask {
     type Output = Vec<Vec<f32>>;
     type JsValue = Vec<Float32Array>;
     fn compute(&mut self) -> Result<Self::Output> {
-        Ok(render(std::mem::replace(&mut self.project, ProjectSpec { tracks: vec![], master_gain: 0.0, surround: 2, reverb: Space::Hall, binaural: false, pads: vec![] }), &self.buffers, self.sr, self.tail))
+        Ok(render(std::mem::replace(&mut self.project, ProjectSpec { tracks: vec![], master_gain: 0.0, surround: 2, reverb: Space::Hall, binaural: false, pads: vec![], fx_buses: vec![] }), &self.buffers, self.sr, self.tail))
     }
     fn resolve(&mut self, _env: Env, out: Self::Output) -> Result<Self::JsValue> {
         Ok(out.into_iter().map(Float32Array::new).collect())
@@ -569,6 +570,22 @@ pub fn process_module(kind: String, params_json: String, inputs: Vec<Float32Arra
         R(Box<Reverb>),
         L(Box<live::Live>, Vec<(usize, live::LiveEvent)>),
         Ba(Box<bass::Bass>, bass::BassParams, f64),
+        Fx(Box<fxbus::FxBus>, Vec<(usize, FxSet)>),
+    }
+    /// An FX bus change applied before quantum `.0` (the parity tests).
+    #[derive(serde::Deserialize, Clone, Copy)]
+    struct FxSet {
+        effect: Option<u32>,
+        a: Option<f64>,
+        b: Option<f64>,
+        depth: Option<f64>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Fs {
+        #[serde(flatten)]
+        first: FxSet,
+        #[serde(default)]
+        script: Vec<(usize, FxSet)>,
     }
     #[derive(serde::Deserialize)]
     struct Pw {
@@ -619,6 +636,12 @@ pub fn process_module(kind: String, params_json: String, inputs: Vec<Float32Arra
             let t: T0 = serde_json::from_str(&params_json).map_err(bad)?;
             M::Ba(Box::new(bass::Bass::new(sample_rate)), p, t.t0)
         }
+        "fxbus" => {
+            let p: Fs = serde_json::from_str(&params_json).map_err(bad)?;
+            let mut f = Box::new(fxbus::FxBus::new(sample_rate));
+            f.set(p.first.effect, p.first.a, p.first.b, p.first.depth);
+            M::Fx(f, p.script)
+        }
         _ => return Err(Error::from_reason("unknown module")),
     };
     let mut i = 0;
@@ -661,6 +684,18 @@ pub fn process_module(kind: String, params_json: String, inputs: Vec<Float32Arra
                 b.process(*p, *t0 + i as f64 / sample_rate, &mut l, &mut r);
                 o[0].copy_from_slice(&l);
                 o[1].copy_from_slice(&r);
+            }
+            M::Fx(f, script) => {
+                for &(_, c) in script.iter().filter(|(k, _)| *k == i / 128) {
+                    f.set(c.effect, c.a, c.b, c.depth);
+                }
+                let mut l: Vec<f64> = inp[0].iter().map(|v| *v as f64).collect();
+                let mut r: Vec<f64> = inp.get(1).unwrap_or(&inp[0]).iter().map(|v| *v as f64).collect();
+                f.process(&mut l, &mut r);
+                for n in 0..q {
+                    o[0][n] = l[n] as f32;
+                    o[1][n] = r[n] as f32;
+                }
             }
             M::R(r) => {
                 for n in 0..q {

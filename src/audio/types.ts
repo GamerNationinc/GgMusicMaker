@@ -10,6 +10,7 @@ import type { MorphParams } from "../fx/morph";
 import type { PunchParams } from "../fx/punch";
 import type { BassParams } from "../fx/bass";
 import type { Pad } from "../pads/pads";
+import type { FxBusSettings } from "../fx/fxbus";
 
 /** A region of a source buffer placed on the timeline. Non-destructive:
  *  split/trim only adjust offset/duration/startTime — the buffer is untouched. */
@@ -93,6 +94,8 @@ export interface Project {
   surround: SurroundLayout;
   /** Sampler pads with a sample (Instrument mode → PADS); absent = none. */
   pads?: Pad[];
+  /** The four FX buses' effects + macros; absent = the defaults. */
+  fxBuses?: FxBusSettings[];
 }
 
 /** Live transport state, kept separate from the (undoable) project model. */

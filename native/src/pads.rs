@@ -73,6 +73,9 @@ pub struct PadSpec {
     pub choke: u32,
     #[serde(default = "yes")]
     pub mono: bool,
+    /// 0 dry, 1 / 2 = FX bus 1 / 2 (fxbus.rs).
+    #[serde(default)]
+    pub bus: u32,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -89,6 +92,7 @@ struct Voice {
     slot: u32,
     mode: PadMode,
     choke: u32,
+    bus: u32,
     age: u64,
     buf: Option<Arc<Buffer>>,
     /// Region in source frames.
@@ -112,6 +116,7 @@ impl Voice {
         slot: 0,
         mode: PadMode::Oneshot,
         choke: 0,
+        bus: 0,
         age: 0,
         buf: None,
         lo: 0.0,
@@ -201,6 +206,7 @@ impl Sampler {
             slot: p.slot,
             mode: p.mode,
             choke: p.choke,
+            bus: p.bus.min(2),
             age: self.clock,
             buf: Some(buf.clone()),
             lo,
@@ -233,9 +239,16 @@ impl Sampler {
         }
     }
 
-    /// Add one block into `l` / `r`.
+    /// Add one block into `l` / `r`, whatever bus a pad is on.
     pub fn render(&mut self, l: &mut [f64], r: &mut [f64]) {
+        self.render_into(&mut [l, r]);
+    }
+
+    /// Add one block into dry L/R, bus 1 L/R, bus 2 L/R (`outs`, six
+    /// slices) by each pad's bus — or all into `outs[0..2]` if there are two.
+    pub fn render_into(&mut self, outs: &mut [&mut [f64]]) {
         let half = std::f64::consts::FRAC_PI_2;
+        let n = outs[0].len();
         for v in &mut self.voices {
             if v.stage == Stage::Off {
                 continue;
@@ -251,7 +264,10 @@ impl Sampler {
             // StereoPannerNode, stereo input.
             let x = if v.pan <= 0.0 { v.pan + 1.0 } else { v.pan };
             let (pl, pr) = ((x * half).cos().max(0.0), (x * half).sin());
-            for i in 0..l.len() {
+            let bi = if outs.len() >= 6 { v.bus as usize * 2 } else { 0 };
+            let (lo, hi) = outs.split_at_mut(bi + 1);
+            let (l, r) = (&mut *lo[bi], &mut *hi[0]);
+            for i in 0..n {
                 match v.stage {
                     Stage::Attack => {
                         v.env += v.att;
@@ -317,7 +333,7 @@ mod tests {
         (0..n).map(|i| (i + 1) as f32 / n as f32).collect()
     }
     fn pad(mode: PadMode) -> PadSpec {
-        PadSpec { slot: 0, buffer: "b".into(), start: 0.0, end: 1.0, mode, reverse: false, gain: 1.0, pan: 0.0, pitch: 0.0, attack: 0.0, release: 0.0, choke: 0, mono: true }
+        PadSpec { slot: 0, buffer: "b".into(), start: 0.0, end: 1.0, mode, reverse: false, gain: 1.0, pan: 0.0, pitch: 0.0, attack: 0.0, release: 0.0, choke: 0, mono: true, bus: 0 }
     }
     fn run(s: &mut Sampler, n: usize) -> (Vec<f64>, Vec<f64>) {
         let (mut l, mut r) = (vec![0.0; n], vec![0.0; n]);

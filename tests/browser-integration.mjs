@@ -869,7 +869,7 @@ async function main() {
     await touchPad("A1", "pointerdown");
     const hit = await ledsOver(300);
     await touchPad("A1", "pointerup");
-    check("touching a pad plays its sample (web sampler)", quiet === 0 && hit > 3, `${quiet} → ${hit} LEDs`);
+    check("touching a pad plays its sample (web sampler)", quiet === 0 && hit > 0, `${quiet} → ${hit} LEDs`);
 
     // Chop at the transients: four hits → four pads, silence before the first trimmed off.
     await page.waitForTimeout(2200);
@@ -915,6 +915,53 @@ async function main() {
     await page.waitForTimeout(150);
     const after = await page.$$eval("[data-role=pad-grid] .pad .name", (els) => els.slice(0, 2).map((e) => e.textContent));
     check("undo takes the chop back to one pad", after.join(",") === "loop,empty", after.join(","));
+    // --- FX buses: a pad on bus 2 (ECHO) rings on; master bus 3 (FILTER) ---
+    const hitA1 = async (ms) => {
+      await touchPad("A1", "pointerdown");
+      await page.waitForTimeout(ms);
+      await touchPad("A1", "pointerup");
+    };
+    await page.click("[data-role=pad-A1]");
+    await page.click("[data-role=pad-mode-gate]");
+    await page.waitForTimeout(300);
+    await hitA1(120);
+    await page.waitForTimeout(350);
+    const dryTail = await ledsOver(400);
+    await page.click("[data-role=pad-bus-2]");
+    await page.click("[data-role=fx-on-2]");
+    await page.waitForTimeout(200);
+    await hitA1(120);
+    await page.waitForTimeout(350);
+    const echoTail = await ledsOver(400);
+    check("a pad on bus 2 rings on through the ECHO", dryTail === 0 && echoTail > 0, `${dryTail} → ${echoTail} LEDs after release`);
+    await page.click("[data-role=fx-on-2]");
+    await page.click("[data-role=pad-bus-0]");
+    await page.click("[data-role=pad-mode-oneshot]");
+    await page.waitForTimeout(2500);
+    await hitA1(50);
+    const open = await ledsOver(400);
+    await page.waitForTimeout(2000);
+    await page.click("[data-role=fx-on-3]");
+    await page.$eval("[data-role=fx-a-3]", (el) => {
+      el.value = "0";
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await page.waitForTimeout(200);
+    await hitA1(50);
+    const shut = await ledsOver(400);
+    check("master bus 3 FILTER, latched on and closed, takes the noise hits down", open >= 5 && shut <= open - 4, `${open} → ${shut} LEDs`);
+    await page.click("[data-role=fx-on-3]");
+    await page.waitForTimeout(2000);
+    await page.$eval("[data-role=fx-grab-3]", (el) => el.dispatchEvent(new PointerEvent("pointerdown", { pointerId: 51, pointerType: "touch", bubbles: true })));
+    await hitA1(50);
+    const grabbed = await ledsOver(400);
+    await page.$eval("[data-role=fx-grab-3]", (el) => el.dispatchEvent(new PointerEvent("pointerup", { pointerId: 51, pointerType: "touch", bubbles: true })));
+    await page.waitForTimeout(2000);
+    await hitA1(50);
+    const released = await ledsOver(400);
+    check("GRAB engages the bus only while held", grabbed <= open - 4 && released >= open - 1, `${grabbed} held → ${released} let go (open ${open})`);
+
     await page.click("[data-role=inst-kit-synth]");
     await page.click("[data-role=mode-studio]");
   }

@@ -89,6 +89,7 @@ import {
   type PadMode,
 } from "../pads/pads";
 import type { Slice } from "../pads/chop";
+import { FX_BUS_COUNT, FX_INFO, busLabel, fxBusesOf, fxDepth, type FxBusSettings, type FxEffect, type FxLive } from "../fx/fxbus";
 import { INITIAL_LOAD, type LoadState, frameUtilisation, ema, audioDropout } from "./load";
 
 /** The audio runtime. Typed as the interface, not the class, so a future
@@ -1308,6 +1309,77 @@ export async function loadPadFiles(slot: number, files: FileList | File[]): Prom
   }
 }
 
+/** Which way a pad plays: dry, or into FX bus 1 / 2. */
+export function setPadBus(slot: number, bus: number): void {
+  updatePad(slot, (p) => ({ ...p, bus }));
+}
+
+// ---- FX buses ---------------------------------------------------------------
+//
+// The buses' effects and macros are in the project (src/fx/fxbus.ts); whether
+// each is engaged (ON, or grabbed by R2 / the GRAB button) is live state.
+// Macro moves from a stick, the left pad or a slider play at once and land
+// in the project (one undo step) when the gesture ends.
+
+export const fxLive = writable<FxLive[]>(Array.from({ length: FX_BUS_COUNT }, () => ({ on: false, grab: 0 })));
+/** Macros mid-gesture (not yet in the project), per bus. */
+export const fxMacros = writable<({ a: number; b: number } | null)[]>(Array.from({ length: FX_BUS_COUNT }, () => null));
+
+function sendFx(bus: number): void {
+  const l = get(fxLive)[bus];
+  const m = get(fxMacros)[bus] ?? fxBusesOf(get(project))[bus];
+  if (!l || !m) return;
+  engine.live({ t: "fx", bus, depth: fxDepth(l), a: m.a, b: m.b });
+}
+
+function updateFx(bus: number, patch: Partial<FxBusSettings>, history?: string): void {
+  updateProject((p) => ({ ...p, fxBuses: fxBusesOf(p).map((b, i) => (i === bus ? { ...b, ...patch } : b)) }), history ? { history } : {});
+}
+
+/** Latch a bus on / off. */
+export function toggleFxOn(bus: number): void {
+  void engine.ensureRunning();
+  fxLive.update((ls) => ls.map((l, i) => (i === bus ? { ...l, on: !l.on } : l)));
+  sendFx(bus);
+  const on = get(fxLive)[bus]?.on;
+  status.set(`${busLabel(bus)} ${FX_INFO[fxBusesOf(get(project))[bus].effect].label} ${on ? "ON" : "off"}.`);
+}
+
+/** Grab a bus: engaged by `amount` (0 = let go) while held. */
+export function setFxGrab(bus: number, amount: number): void {
+  if (get(fxLive)[bus]?.grab === amount) return;
+  if (amount > 0) void engine.ensureRunning();
+  fxLive.update((ls) => ls.map((l, i) => (i === bus ? { ...l, grab: Math.max(0, Math.min(1, amount)) } : l)));
+  sendFx(bus);
+}
+
+export function setFxEffect(bus: number, effect: FxEffect): void {
+  updateFx(bus, { effect });
+}
+
+/** Move a bus's macros live (a gesture in progress). */
+export function moveFxMacros(bus: number, a?: number, b?: number): void {
+  const cur = get(fxMacros)[bus] ?? fxBusesOf(get(project))[bus];
+  const next = { a: Math.max(0, Math.min(1, a ?? cur.a)), b: Math.max(0, Math.min(1, b ?? cur.b)) };
+  fxMacros.update((ms) => ms.map((m, i) => (i === bus ? next : m)));
+  sendFx(bus);
+}
+
+/** The gesture ended: its macros go into the project (undoable). */
+export function commitFxMacros(bus: number): void {
+  const m = get(fxMacros)[bus];
+  if (!m) return;
+  fxMacros.update((ms) => ms.map((x, i) => (i === bus ? null : x)));
+  updateFx(bus, m, `fx:${bus}:macros`);
+}
+
+/** Every bus off (a new / opened session). */
+function resetFxLive(): void {
+  fxLive.set(Array.from({ length: FX_BUS_COUNT }, () => ({ on: false, grab: 0 })));
+  fxMacros.set(Array.from({ length: FX_BUS_COUNT }, () => null));
+  for (let k = 0; k < FX_BUS_COUNT; k++) sendFx(k);
+}
+
 // ---- chop lab -------------------------------------------------------------
 
 /** What the chop lab is cutting: a region of a buffer, and the first pad the
@@ -1433,6 +1505,7 @@ function resetWorkspace(next: Project): void {
   liveChannels.set(engine.liveChannels);
   binauralLive.set(engine.binauralMonitor);
   engine.syncAll(next);
+  resetFxLive();
   setHistory(history.createHistory<Project>());
   selectedClipId.set(null);
   selectedTrackId.set(null);

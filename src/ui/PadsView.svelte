@@ -2,7 +2,8 @@
   // Instrument mode → PADS: the bank's 4×4 pads and the selected pad's
   // settings. The Deck mapping is in src/input/instrument.ts; this draws it
   // and plays the pads from the touchscreen.
-  import { project, playPad, releasePad, setPadParam, setPadMode, togglePadFlag, renamePad, clearPadSlot, loadPadFromClip, loadPadFiles, openChopForPad } from "../state/store";
+  import { project, playPad, releasePad, setPadParam, setPadMode, togglePadFlag, renamePad, clearPadSlot, loadPadFromClip, loadPadFiles, openChopForPad, setPadBus } from "../state/store";
+  import FxBuses from "./FxBuses.svelte";
   import { setInstrument, deckPerforming } from "../input/controller";
   import { PAD_KEY_LABELS, type InstrumentView } from "../input/instrument";
   import { PAD_MODES, PAD_MODE_LABEL, PAD_RANGES, padAt, padLabel, slotOf, type PadKnob } from "../pads/pads";
@@ -78,6 +79,7 @@
     </div>
   </div>
 
+  <div class="side">
   <div class="box edit" data-title="pad {padLabel(v.pad)}" data-role="pad-editor">
     <div class="edit-body">
     {#if sel}
@@ -98,6 +100,12 @@
         <span class="lbl">CHOKE</span>
         {#each [0, 1, 2, 3, 4] as c (c)}
           <button class="btn seg small" class:accent={sel.choke === c} onclick={() => setPadParam(v.pad, "choke", c)} title={c ? `Choke group ${c}: pads in it cut each other` : "No choke group"}>{c || "–"}</button>
+        {/each}
+      </div>
+      <div class="row">
+        <span class="lbl first">FX BUS</span>
+        {#each [0, 1, 2] as b (b)}
+          <button class="btn seg" class:accent={(sel.bus ?? 0) === b} data-role="pad-bus-{b}" onclick={() => setPadBus(v.pad, b)} title={b ? `Plays through FX bus ${b}` : "Straight to the mix (still through master buses 3 + 4)"}>{b ? `BUS ${b}` : "DRY"}</button>
         {/each}
       </div>
       {#each KNOBS as k (k.key)}
@@ -135,6 +143,8 @@
     </div>
     <input bind:this={fileInput} type="file" accept="audio/*" multiple hidden data-role="pad-file" onchange={onFiles} />
   </div>
+  <FxBuses selected={v.fxBus} onselect={(k) => setInstrument({ fxBus: k })} />
+  </div>
 </div>
 
 <style>
@@ -145,9 +155,22 @@
     grid-template-columns: 1.35fr 1fr;
     gap: 8px;
   }
-  .pads-stage > .box {
+  .pads-stage > .box,
+  .side > .edit {
     padding: 12px 10px 10px;
     min-height: 0;
+  }
+  .side {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 0;
+  }
+  .side > .edit {
+    flex: 1 1 auto;
+  }
+  .lbl.first {
+    margin-left: 0;
   }
   .grid {
     height: 100%;
@@ -222,8 +245,12 @@
     min-height: 0;
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 5px;
     overflow-y: auto;
+  }
+  /* Scroll, never squash. */
+  .edit-body > * {
+    flex-shrink: 0;
   }
   .pad-name {
     font-family: var(--font);

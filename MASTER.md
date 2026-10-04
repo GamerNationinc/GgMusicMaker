@@ -260,6 +260,18 @@ Asked for: an Ableton-like, Deck-friendly way to move round the timeline; an FX 
 |---|---|
 | **Record starts the transport** when it's stopped (you hear what you play along to); **R** again ends the take and keeps playing; **Stop / Space** ends the take and stops. While recording the song **keeps rolling past its end** (it used to auto-stop and rewind at the last clip). Starting a New / Open while recording drops the take as before. | `test:record`: R from stopped → ❚❚; Stop ends the take and stops (17/17; overdub still 0.04 ms off). `test:browser`: a 1.9 s take on a ~1 s song (94/94). `test:recovery` 14/14 |
 
+### 2026-10-04 — Character FX buses (sampler research §3.2)
+
+Asked for: start building the character FX buses (`docs/sampler-research.md`).
+
+| Change | Verified how |
+|---|---|
+| **Six SP-style performance effects**, one DSP core shared by both engines: `public/fxbus-core.js` (worklet `fxbus-processor.js`) and its line-by-line port `native/src/fxbus.rs`. Each has two macros (A/B) and a depth (0..1), all gliding over 20 ms: **VINYL** (age: wow, duller, thinner · noise: crackle + hiss), **CASSETTE** (wear: wow + flutter, tape saturation, duller · hiss + dropouts), **LO-FI** (bits 16 → 4 · sample rate 48 k → 1.5 k, no anti-aliasing), **FILTER** (DJ-style: below ½ low-pass sweeping down, above ½ high-pass sweeping up · resonance + drive), **ECHO** (60 ms → 0.96 s · feedback, darker each repeat; depth feeds it, so the tail rings on after release), **LOOPER** (engaging loops the last 500 → 16 ms, shrinking while held · speed ½× → 2×). Noise is seeded xorshift32, so renders repeat. | `src/fx/fxbus.test.ts` (18): every effect dry at depth 0 and audibly different engaged, engaging glides (no click), echo tail after release, looper repeats then lets go, full lo-fi crush < 40 levels; **Rust = JS for all six effects at two settings each, engaged → macro move → half depth → released (< 0.1 % RMS)**. Rust (5): pass-through, lo-fi grid + hold, echo time + tail, filter LP/HP, looper |
+| **Four buses, like the SP-404MKII.** BUS 1/2 = pad buses: each pad plays DRY / BUS 1 / BUS 2 (pad editor → FX BUS). BUS 3/4 = master buses: the whole mix (timeline, synth, pads, buses 1/2) goes through 3 then 4 before the limiter (L/R; surround channels pass). Native: `Mixer` holds four `FxBus`, the sampler renders into dry / bus 1 / bus 2, live `fx` events set depth (+ live macros). Web: pad buses = gain → worklet → master; master buses inserted by the new `MasterBus.setInserts`, rebuilt at the bus's width on a surround change. Effects + macros are in `Project.fxBuses` (saved, undoable; absent = defaults LO-FI / ECHO / FILTER / VINYL); engaged state is live only. Export renders without them — RESAMPLE prints them (the skip-back ring is after the limiter). | Rust mixer (2): a pad on bus 1 goes through LO-FI only when engaged (a DRY pad is bit-identical either way); master bus 3 low-pass takes a 4 kHz pad to < 10 %. `session.test.ts` +1 (buses round-trip; none saved = defaults) |
+| **Playing them.** Instrument mode → PADS: **L3** picks the bus (outlined), **L5** latches it ON/off, **R2** grabs it (depth = pull, 4 % dead zone), **left trackpad** = its A/B macros (X/Y, absolute, committed to the project on lift — one undo step). Screen: `FxBuses.svelte` under the pad editor — per bus the effect, both macros (named for the effect), ON, hold-to-GRAB. Status-bar hints follow. | `instrument.test.ts` +3 (pick / latch / grab by pull, no repeats, bus change mid-grab lets go first; left-pad macros + commit; leaving releases the grab). `test:browser` (web): a GATE pad on bus 2 ECHO still lights the meter 350 ms after release (0 → 1 LEDs), master bus 3 FILTER latched + closed 7 → 1 LEDs, GRAB only while held — 111/111. `test:instrument` (native, injected Deck reports): left-pad move lands in the project, L5 + closed filter 0.405 → 0.004, R2 pulled 0.004 → let go 0.405 — 42/42. Screenshot at 1280×800 reviewed |
+
+Not yet: resonator, isolator EQ, spring/hall reverb and ducker effects; the master buses from Studio; FX automation recording (§3.8); gyro D-Beam (§5.2).
+
 ### 2026-10-04 — Pad engine + chop lab (sampler research §2)
 
 Asked for: start building the pad engine and chop lab (`docs/sampler-research.md`).
@@ -493,7 +505,7 @@ git tag v0.1.0 && git push origin v0.1.0     # release.yml builds + attaches art
 ### Near term
 
 - **Deck dual mode, next milestones** (`docs/deck-dual-mode.md`): DJ mix table mode, library + bulk import with analysis, album view.
-- **Sampler instrument (SP-404-style)** — research and proposed build order in `docs/sampler-research.md`. Skip-back + resample, the pad engine and the chop lab are built (2026-10-04); next: character FX buses, then a project tempo before the sequencer.
+- **Sampler instrument (SP-404-style)** — research and proposed build order in `docs/sampler-research.md`. Skip-back + resample, the pad engine, the chop lab and the character FX buses are built (2026-10-04); next: a project tempo, then the sequencer (§3.4) with p-locks designed in.
 - **A project tempo.** BASS MOD carries its own BPM per layer because the project has none; a song BPM (and a beat grid on the ruler) would let every tempo-locked thing share it.
 - **Feel-test on the Deck** (2026-10-02 work): left-pad gain / glide friction / haptic detents, stick speeds, and BASS MOD's presets by ear.
 - **Gamepad navigation** so the app is usable in Gaming Mode (Steam Input → keyboard is the cheap first step; a focus ring + D-pad model is the real one).

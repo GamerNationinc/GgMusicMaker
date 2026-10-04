@@ -39,13 +39,13 @@ describe("pads", () => {
       null,
     ]);
     expect(pads.length).toBe(1);
-    expect(pads[0]).toMatchObject({ slot: 2, mode: "oneshot", gain: 1.5, choke: 2, pitch: -24, mono: true });
+    expect(pads[0]).toMatchObject({ slot: 2, mode: "oneshot", gain: 1.5, choke: 2, pitch: -24, mono: true, bus: 0 });
     expect(normalizePads(undefined)).toEqual([]);
   });
 
   it("specs carry what the native sampler reads", () => {
     expect(padSpecs([newPad(5, "b", 0.1, 0.2, "n")])[0]).toEqual({
-      slot: 5, buffer: "b", start: 0.1, end: 0.2, mode: "oneshot", reverse: false, gain: 1, pan: 0, pitch: 0, attack: 0, release: 0.05, choke: 0, mono: true,
+      slot: 5, buffer: "b", start: 0.1, end: 0.2, mode: "oneshot", reverse: false, gain: 1, pan: 0, pitch: 0, attack: 0, release: 0.05, choke: 0, mono: true, bus: 0,
     });
   });
 });

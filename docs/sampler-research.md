@@ -17,8 +17,13 @@ _Research, 2026-10-04. Nothing in here is built yet unless the note below says s
   skip-back or resample.
 - Chop lab (§2.4): waveform, tap-to-audition, draggable cuts, transient /
   equal auto-chop, slices → pads (`src/pads/chop.ts`, `ChopLab.svelte`).
+- Character FX buses (§3.2): VINYL, CASSETTE, LO-FI, FILTER+DRIVE, ECHO,
+  LOOPER on four buses (1–2 per pad, 3–4 master), latched or grabbed with R2,
+  left pad = XY macros (`public/fxbus-core.js`, `native/src/fxbus.rs`,
+  `src/fx/fxbus.ts`).
 
-Not yet: time-stretch, polyphony limit setting, drunk chop, zero-crossing
+Not yet: resonator / isolator / reverb / ducker effects, FX automation,
+time-stretch, polyphony limit setting, drunk chop, zero-crossing
 snap, BPM-grid chop, pinch zoom in the chop lab, named "ghost" snapshots,
 ghost tape (§6.2).
 

@@ -183,3 +183,42 @@ describe("PADS kit", () => {
     expect(padsOf(inst.release())).toEqual(["-1"]);
   });
 });
+
+describe("PADS kit: FX buses", () => {
+  it("L3 picks the bus, L5 latches it, R2 grabs it by how far it's pulled", () => {
+    const inst = new Instrument({ kit: "pads" });
+    inst.update(st());
+    expect(inst.settings.fxBus).toBe(2); // starts on BUS 3 (master)
+    expect(inst.update(st({ buttons: { l5: true } })).fx).toEqual([{ t: "toggle", bus: 2 }]);
+    inst.update(st());
+    const g = inst.update(st({ r2: 0.5 })).fx!;
+    expect(g).toHaveLength(1);
+    expect(g[0]).toMatchObject({ t: "grab", bus: 2 });
+    expect((g[0] as { depth: number }).depth).toBeCloseTo(0.5, 1);
+    expect(inst.update(st({ r2: 0.5 })).fx).toEqual([]); // no change, nothing sent
+    expect(inst.update(st({ r2: 0.01 })).fx).toEqual([{ t: "grab", bus: 2, depth: 0 }]);
+    expect(inst.update(st({ r2: 0 })).fx).toEqual([]);
+    // Changing bus mid-grab lets go of the old one first.
+    inst.update(st({ r2: 1 }));
+    const sw = inst.update(st({ r2: 1, buttons: { l3: true } })).fx!;
+    expect(sw[0]).toEqual({ t: "grab", bus: 2, depth: 0 });
+    expect(sw[1]).toEqual({ t: "grab", bus: 3, depth: 1 });
+    expect(inst.settings.fxBus).toBe(3);
+  });
+
+  it("the left pad moves the macros and commits them on lift", () => {
+    const inst = new Instrument({ kit: "pads" });
+    inst.update(st());
+    const m = inst.update(st({ lpad: { x: -1, y: 1, touch: true, pressure: 0 } })).fx;
+    expect(m).toEqual([{ t: "macros", bus: 2, a: 0, b: 1 }]);
+    expect(inst.update(st({ lpad: { x: 0, y: 0, touch: true, pressure: 0 } })).fx).toEqual([{ t: "macros", bus: 2, a: 0.5, b: 0.5 }]);
+    expect(inst.update(st()).fx).toEqual([{ t: "commit", bus: 2 }]);
+  });
+
+  it("leaving lets go of a held grab", () => {
+    const inst = new Instrument({ kit: "pads" });
+    inst.update(st());
+    inst.update(st({ r2: 1 }));
+    expect(inst.release().fx).toEqual([{ t: "grab", bus: 2, depth: 1 - 1 }]);
+  });
+});

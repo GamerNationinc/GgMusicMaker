@@ -28,6 +28,9 @@ export interface MasterBus {
   readonly output: AudioNode;
   /** Deepest limiter gain reduction across channels, in dB (<= 0). */
   reduction(): number;
+  /** Put effects (the master FX buses) between the input and the limiter /
+   *  meters: input → nodes[0] → … → the rest. [] takes them out. */
+  setInserts(nodes: AudioNode[]): void;
   dispose(): void;
 }
 
@@ -63,10 +66,14 @@ export function buildMasterBus(ctx: BaseAudioContext, channels: number, gain = 0
   const nodes: AudioNode[] = [input, preTap, post];
 
   input.connect(preTap); // tap only; no output
+  /** What the input (or the last insert) feeds. */
+  const downstream: AudioNode[] = [preTap];
+  let inserts: AudioNode[] = [];
   if (channels <= 2) {
     const limiter = makeLimiter(ctx);
     limiters.push(limiter);
     input.connect(limiter);
+    downstream.push(limiter);
     limiter.connect(post);
     nodes.push(limiter);
   } else {
@@ -76,6 +83,7 @@ export function buildMasterBus(ctx: BaseAudioContext, channels: number, gain = 0
     const merger = ctx.createChannelMerger(channels);
     pin(splitter, channels);
     input.connect(splitter);
+    downstream.push(splitter);
     for (let c = 0; c < channels; c++) {
       const limiter = makeLimiter(ctx);
       limiter.channelCount = 1;
@@ -122,6 +130,35 @@ export function buildMasterBus(ctx: BaseAudioContext, channels: number, gain = 0
       let r = 0;
       for (const l of limiters) if (l.reduction < r) r = l.reduction;
       return r;
+    },
+    setInserts(nodes: AudioNode[]) {
+      const last = inserts.length ? inserts[inserts.length - 1] : input;
+      for (const d of downstream) {
+        try {
+          last.disconnect(d);
+        } catch {
+          /* not connected */
+        }
+      }
+      for (const n of inserts) {
+        try {
+          n.disconnect();
+        } catch {
+          /* noop */
+        }
+      }
+      try {
+        if (inserts.length) input.disconnect(inserts[0]);
+      } catch {
+        /* noop */
+      }
+      inserts = nodes;
+      let prev: AudioNode = input;
+      for (const n of nodes) {
+        prev.connect(n);
+        prev = n;
+      }
+      for (const d of downstream) prev.connect(d);
     },
     dispose() {
       for (const n of nodes) {

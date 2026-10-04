@@ -209,6 +209,34 @@ try {
   await sleep(400);
   const gateTail = await peakOver(200);
   check("right-pad top-left = pad 1; a GATE pad stops on lift", gatePeak > 0.05 && gateTail < gatePeak * 0.05, `${gatePeak.toFixed(3)} → ${gateTail.toFixed(4)}`);
+  // --- FX buses on the native engine (fxbus.rs): L5 latches master bus 3
+  // (FILTER), the left pad closes it, R2 grabs it ---
+  const holdPeak = async (extra = {}) => {
+    await send({ rpad: { x: -0.9, y: 0.9, touch: true }, ...extra });
+    const p = await peakOver(300);
+    await send(extra);
+    await sleep(300);
+    return p;
+  };
+  const openPeak = await holdPeak();
+  await send({ buttons: { l5: true } });
+  await send();
+  await send({ lpad: { x: -1, y: -1, touch: true } });
+  await send();
+  await sleep(150);
+  check("the left pad's move lands in the project on lift", (await page.$eval("[data-role=fx-a-3]", (el) => el.value).catch(() => "")) === "0");
+  const latched = await holdPeak();
+  check("L5 latches master bus 3 (FILTER, closed by the left pad)", latched < openPeak * 0.2, `${openPeak.toFixed(3)} → ${latched.toFixed(3)}`);
+  await send({ buttons: { l5: true } });
+  await send();
+  await sleep(200);
+  await send({ r2: 1 });
+  await sleep(150); // the bus glides in over 20 ms
+  const grabbed = await holdPeak({ r2: 1 });
+  await send();
+  const after = await holdPeak();
+  check("R2 grabs the bus only while pulled", grabbed < openPeak * 0.2 && after > openPeak * 0.8, `${grabbed.toFixed(3)} pulled → ${after.toFixed(3)} let go`);
+
   await send({ buttons: { r3: true } });
   await send();
   await page.waitForFunction(() => /onto pad A2/.test(document.querySelector(".statusbar")?.textContent ?? ""), null, { timeout: 5000 }).catch(() => {});
@@ -238,8 +266,9 @@ try {
 
   const names = await page.$$eval(".head input", (i) => i.map((x) => x.value));
   check("the captures are layers in Studio", names.includes("Skip-back 1") && names.includes("Resample 1"), names.join(", "));
-  // Five undos: the three pad edits (load, GATE, skip-back onto A2), then both layers.
-  for (let i = 0; i < 5; i++) await page.keyboard.press("Control+z");
+  // Six undos: the pad edits (load, GATE, skip-back onto A2), the FX macro
+  // move, then both layers.
+  for (let i = 0; i < 6; i++) await page.keyboard.press("Control+z");
   await sleep(200);
   check("undo removes them", (await page.$$(".head")).length === 0);
 

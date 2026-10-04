@@ -37,6 +37,8 @@ export interface Pad {
   choke: number;
   /** A retrigger cuts the pad's previous voice. */
   mono: boolean;
+  /** 0 dry, 1 / 2 = into FX bus 1 / 2 (src/fx/fxbus.ts). Absent = dry. */
+  bus?: number;
 }
 
 /** The knobs, with their ranges (UI + clamping on load). */
@@ -51,7 +53,7 @@ export const PAD_RANGES = {
 export type PadKnob = keyof typeof PAD_RANGES;
 
 export function newPad(slot: number, bufferId: string, start: number, end: number, name: string): Pad {
-  return { slot, name, bufferId, start, end, mode: "oneshot", reverse: false, gain: 1, pan: 0, pitch: 0, attack: 0, release: 0.05, choke: 0, mono: true };
+  return { slot, name, bufferId, start, end, mode: "oneshot", reverse: false, gain: 1, pan: 0, pitch: 0, attack: 0, release: 0.05, choke: 0, mono: true, bus: 0 };
 }
 
 export const bankOf = (slot: number) => Math.floor(slot / PADS_PER_BANK);
@@ -116,6 +118,7 @@ export function normalizePad(raw: unknown): Pad | null {
     mode: PAD_MODES.includes(p.mode as PadMode) ? (p.mode as PadMode) : d.mode,
     reverse: !!p.reverse,
     mono: p.mono !== false,
+    bus: [1, 2].includes(Number(p.bus)) ? Number(p.bus) : 0,
   };
   for (const k of Object.keys(PAD_RANGES) as PadKnob[]) pad[k] = clampPadValue(k, p[k] ?? d[k]);
   if (!(pad.end > pad.start)) return null;
@@ -148,5 +151,6 @@ export function padSpecs(pads: readonly Pad[] | undefined) {
     release: p.release,
     choke: p.choke,
     mono: p.mono,
+    bus: p.bus ?? 0,
   }));
 }

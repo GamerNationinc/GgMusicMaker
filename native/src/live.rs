@@ -43,6 +43,8 @@ pub enum LiveEvent {
     /// A sampler pad pressed / let go (played by pads.rs, not here).
     Pad { slot: u32, vel: f64 },
     Padoff { slot: u32 },
+    /// An FX bus (0..3) engaged by `depth` (0..1), macros live (fxbus.rs).
+    Fx { bus: u32, depth: f64, a: Option<f64>, b: Option<f64> },
 }
 
 /// attack, decay, sustain, release (s), saw/square mix, detune (cents),
@@ -299,7 +301,7 @@ impl Live {
                 self.voices = [Voice::IDLE; VOICES];
                 self.drums = [Drum::IDLE; DRUMS];
             }
-            LiveEvent::Pad { .. } | LiveEvent::Padoff { .. } => {}
+            LiveEvent::Pad { .. } | LiveEvent::Padoff { .. } | LiveEvent::Fx { .. } => {}
         }
     }
 

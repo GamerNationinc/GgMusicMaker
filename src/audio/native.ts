@@ -26,6 +26,7 @@ import type { SurroundLayout } from "../fx/voice-synth";
 import { anySoloed, isTrackAudible } from "./edits";
 import { punchIsActive } from "../fx/punch";
 import { padSpecs } from "../pads/pads";
+import { fxBusesOf, fxSpec } from "../fx/fxbus";
 import { bassIsActive } from "../fx/bass";
 import { LivePeaks } from "./liveTake";
 import { synthIsActive, surroundChannels } from "../fx/voice-synth";
@@ -101,6 +102,7 @@ export function nativeProjectSpec(project: Project, opts: { masterGain: number; 
     reverb: opts.reverb,
     binaural: opts.binaural,
     pads: padSpecs(project.pads),
+    fxBuses: fxBusesOf(project).map(fxSpec),
     tracks: project.tracks.map((t) => {
       const audible = isTrackAudible(t, solo);
       return {

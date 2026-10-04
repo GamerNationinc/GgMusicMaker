@@ -19,6 +19,7 @@ import { blockLevels, logBands } from "./spectrum";
 import { assembleTake, type Chunk } from "./recording";
 import { LivePeaks } from "./liveTake";
 import { WebSampler } from "./sampler";
+import { FX_BUS_COUNT, PAD_BUSES, fxBusesOf, fxSpec } from "../fx/fxbus";
 import { RING_SECONDS, songTimeAt, type PlaySpan, type SkipGrab } from "./skipback";
 import { buildMasterBus, deviceChannelsFor, type MasterBus } from "./master";
 import { surroundChannels, type SurroundLayout } from "../fx/voice-synth";
@@ -36,6 +37,8 @@ const BINAURAL_WORKLET_URL = `${import.meta.env.BASE_URL}binaural-processor.js`;
 const LIVE_WORKLET_URL = `${import.meta.env.BASE_URL}live-processor.js`;
 const RECORDER_WORKLET_URL = `${import.meta.env.BASE_URL}recorder-processor.js`;
 const SKIPBACK_WORKLET_URL = `${import.meta.env.BASE_URL}skipback-processor.js`;
+const FXBUS_CORE_URL = `${import.meta.env.BASE_URL}fxbus-core.js`;
+const FXBUS_WORKLET_URL = `${import.meta.env.BASE_URL}fxbus-processor.js`;
 
 export class AudioEngine implements AudioBackend {
   readonly ctx: AudioContext;
@@ -94,6 +97,11 @@ export class AudioEngine implements AudioBackend {
     this.reverbReturn.gain.value = 1;
     this.convolver.connect(this.reverbReturn);
     this.reverbReturn.connect(this.master.input);
+    for (let k = 0; k < PAD_BUSES; k++) {
+      const g = this.ctx.createGain();
+      g.connect(this.master.input);
+      this.padBusIn.push(g);
+    }
 
     this.synthReady = this.loadFxWorklets(this.ctx);
   }
@@ -140,6 +148,8 @@ export class AudioEngine implements AudioBackend {
       this.binauralAvailable = await this.loadWorklet(ctx, BINAURAL_WORKLET_URL);
       this.liveAvailable = await this.loadWorklet(ctx, LIVE_WORKLET_URL);
       this.skipLoaded = await this.loadWorklet(ctx, SKIPBACK_WORKLET_URL);
+      this.fxAvailable = (await this.loadWorklet(ctx, FXBUS_CORE_URL)) && (await this.loadWorklet(ctx, FXBUS_WORKLET_URL));
+      this.buildFx();
       if (this.skipWanted) this.startSkipBack();
     }
     return ok;
@@ -157,7 +167,7 @@ export class AudioEngine implements AudioBackend {
   private sampler: WebSampler | null = null;
 
   private pads(): WebSampler {
-    if (!this.sampler) this.sampler = new WebSampler(this.ctx, this.master.input, (id) => this.buffers.get(id));
+    if (!this.sampler) this.sampler = new WebSampler(this.ctx, [this.master.input, ...this.padBusIn], (id) => this.buffers.get(id));
     return this.sampler;
   }
 
@@ -166,7 +176,78 @@ export class AudioEngine implements AudioBackend {
     return this.sampler?.voicesOf(slot) ?? 0;
   }
 
+  // ---- FX buses (src/fx/fxbus.ts) ---------------------------------------------
+  //
+  // Pads on bus 1 / 2: sampler → padBusIn[k] → fxbus worklet → master input.
+  // Buses 3 / 4: worklets inserted in the master bus, before the limiter,
+  // as wide as the bus (channels past L/R pass through). Without worklets
+  // the pad buses are plain pass-throughs.
+
+  private padBusIn: GainNode[] = [];
+  private fxAvailable = false;
+  private fxNodes: (AudioWorkletNode | null)[] = Array.from({ length: FX_BUS_COUNT }, () => null);
+  /** What each bus was last told, resent when its node is rebuilt. */
+  private fxSet = Array.from({ length: FX_BUS_COUNT }, () => ({ effect: 0, a: 0.5, b: 0.5, depth: 0 }));
+
+  private makeFxNode(channels: number): AudioWorkletNode {
+    return new AudioWorkletNode(this.ctx, "fxbus-processor", {
+      numberOfInputs: 1,
+      numberOfOutputs: 1,
+      outputChannelCount: [channels],
+      channelCount: channels,
+      channelCountMode: "explicit",
+      channelInterpretation: channels > 2 ? "discrete" : "speakers",
+    });
+  }
+
+  private buildFx(): void {
+    if (!this.fxAvailable) return;
+    try {
+      for (let k = 0; k < PAD_BUSES; k++) {
+        if (this.fxNodes[k]) continue;
+        const node = this.makeFxNode(2);
+        this.padBusIn[k].disconnect();
+        this.padBusIn[k].connect(node);
+        node.connect(this.master.input);
+        this.fxNodes[k] = node;
+        node.port.postMessage({ ...this.fxSet[k] });
+      }
+      this.buildMasterFx();
+    } catch {
+      this.fxAvailable = false;
+    }
+  }
+
+  /** Buses 3 / 4 as wide as the master bus, inserted before its limiter. */
+  private buildMasterFx(): void {
+    if (!this.fxAvailable) return;
+    const nodes: AudioWorkletNode[] = [];
+    for (let k = PAD_BUSES; k < FX_BUS_COUNT; k++) {
+      this.fxNodes[k]?.disconnect();
+      const node = this.makeFxNode(this.master.channels);
+      node.port.postMessage({ ...this.fxSet[k] });
+      this.fxNodes[k] = node;
+      nodes.push(node);
+    }
+    this.master.setInserts(nodes);
+  }
+
+  /** Change a bus (only what differs is sent). */
+  private setFx(k: number, p: Partial<{ effect: number; a: number; b: number; depth: number }>): void {
+    const cur = this.fxSet[k];
+    if (!cur) return;
+    const diff: Record<string, number> = {};
+    for (const [key, v] of Object.entries(p) as [keyof typeof cur, number][]) {
+      if (v !== undefined && cur[key] !== v) {
+        cur[key] = v;
+        diff[key] = v;
+      }
+    }
+    if (Object.keys(diff).length) this.fxNodes[k]?.port.postMessage(diff);
+  }
+
   live(e: LiveEvent): void {
+    if (e.t === "fx") return this.setFx(e.bus, { depth: e.depth, a: e.a, b: e.b });
     if (e.t === "pad") return this.pads().trigger(e.slot, e.vel);
     if (e.t === "padoff") return this.pads().release(e.slot);
     if (e.t === "panic") this.sampler?.panic();
@@ -347,7 +428,13 @@ export class AudioEngine implements AudioBackend {
     this.preTimeBuf = new Float32Array(new ArrayBuffer(4 * this.master.preTap.fftSize));
     this.preFreqBuf = new Uint8Array(new ArrayBuffer(this.master.preTap.frequencyBinCount));
     this.reverbReturn.connect(this.master.input);
-    this.sampler?.setOutput(this.master.input);
+    for (let k = 0; k < PAD_BUSES; k++) {
+      const out = this.fxNodes[k] ?? this.padBusIn[k];
+      out.disconnect();
+      out.connect(this.master.input);
+    }
+    this.sampler?.setOutputs([this.master.input, ...this.padBusIn]);
+    this.buildMasterFx();
     if (this.skipNode) this.master.output.connect(this.skipNode);
     if (this.liveNode) {
       this.liveNode.disconnect();
@@ -432,6 +519,7 @@ export class AudioEngine implements AudioBackend {
 
   syncAll(project: Project): void {
     this.pads().setPads(project.pads);
+    fxBusesOf(project).forEach((b, k) => this.setFx(k, fxSpec(b)));
     const hasSolo = anySoloed(project);
     for (const track of project.tracks) this.applyTrackParams(track, hasSolo);
   }

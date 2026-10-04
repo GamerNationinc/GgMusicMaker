@@ -15,6 +15,7 @@ use crate::dsp::{Biquad, Compressor, Kind, Punch, PunchParams};
 use crate::morph::{Morph, MorphParams};
 use crate::placer::Placer;
 use crate::live::{Live, LiveEvent};
+use crate::fxbus::{FxBus, FxBusSpec};
 use crate::pads::{PadSpec, Sampler};
 use crate::reverb::{Reverb, Space};
 use crate::synth::{SynthParams, VoiceSynth};
@@ -127,6 +128,9 @@ pub struct ProjectSpec {
     /// Sampler pads with a sample (Instrument mode).
     #[serde(default)]
     pub pads: Vec<PadSpec>,
+    /// The four FX buses' effects + macros (1–2 pads, 3–4 master).
+    #[serde(default)]
+    pub fx_buses: Vec<FxBusSpec>,
 }
 fn two() -> usize {
     2
@@ -229,6 +233,10 @@ pub struct Mixer {
     live: Live,
     /// The sampler pads (Instrument mode, PADS).
     sampler: Sampler,
+    /// FX buses 1–4 (performance effects; engaged by live `fx` events).
+    fx: Vec<FxBus>,
+    /// Pads on bus 1 / 2: L, R, L, R.
+    padb: [[f64; Q]; 4],
     binaural: Option<(usize, Binaural)>,
     comps: Vec<Compressor>,
     /// The compressor's look-ahead line (Chromium's DynamicsCompressor
@@ -263,11 +271,13 @@ impl Mixer {
             sr,
             device_ch,
             buffers: HashMap::new(),
-            project: ProjectSpec { tracks: vec![], master_gain: 0.9, surround: 2, reverb: Space::Hall, binaural: false, pads: vec![] },
+            project: ProjectSpec { tracks: vec![], master_gain: 0.9, surround: 2, reverb: Space::Hall, binaural: false, pads: vec![], fx_buses: vec![] },
             dsp: HashMap::new(),
             reverb: Reverb::new(Space::Hall, sr),
             live: Live::new(sr),
             sampler: Sampler::new(sr),
+            fx: (0..4).map(|_| FxBus::new(sr)).collect(),
+            padb: [[0.0; Q]; 4],
             binaural: None,
             comps: vec![],
             ahead: vec![[0.0; MAX_CH]; ((sr * 0.006).round() as usize).max(1)],
@@ -334,6 +344,9 @@ impl Mixer {
         let keep: std::collections::HashSet<&str> = p.tracks.iter().map(|t| t.id.as_str()).collect();
         let gone: Vec<String> = self.dsp.keys().filter(|k| !keep.contains(k.as_str())).cloned().collect();
         let dropped = gone.into_iter().filter_map(|k| self.dsp.remove(&k)).collect();
+        for (f, b) in self.fx.iter_mut().zip(&p.fx_buses) {
+            f.set(Some(b.effect), Some(b.a), Some(b.b), None);
+        }
         let old_reverb = reverb.map(|r| std::mem::replace(&mut self.reverb, r));
         let old = std::mem::replace(&mut self.project, p);
         if self.master.is_nan() {
@@ -353,6 +366,11 @@ impl Mixer {
             LiveEvent::Padoff { slot } => {
                 let rel = self.project.pads.iter().find(|p| p.slot == slot).map_or(0.0, |p| p.release);
                 self.sampler.release(slot, rel);
+            }
+            LiveEvent::Fx { bus, depth, a, b } => {
+                if let Some(f) = self.fx.get_mut(bus as usize) {
+                    f.set(None, a, b, Some(depth));
+                }
             }
             LiveEvent::Panic => {
                 self.sampler.panic();
@@ -573,10 +591,30 @@ impl Mixer {
             self.live.render([&mut b0[0][..q], &mut b1[0][..q]], [&mut s0[0][..q], &mut s1[0][..q]]);
         }
 
-        // --- sampler pads (dry, stereo) ---
+        // --- sampler pads: dry, or into FX bus 1 / 2 ---
+        for c in &mut self.padb {
+            c[..q].fill(0.0);
+        }
         if self.sampler.active() {
             let (b0, b1) = self.bus.split_at_mut(1);
-            self.sampler.render(&mut b0[0][..q], &mut b1[0][..q]);
+            let [p0, p1, p2, p3] = &mut self.padb;
+            self.sampler.render_into(&mut [&mut b0[0][..q], &mut b1[0][..q], &mut p0[..q], &mut p1[..q], &mut p2[..q], &mut p3[..q]]);
+        }
+        for k in 0..2 {
+            if !self.fx[k].busy() {
+                // No effect: the bus is a plain pass-through.
+                for i in 0..q {
+                    self.bus[0][i] += self.padb[2 * k][i];
+                    self.bus[1][i] += self.padb[2 * k + 1][i];
+                }
+                continue;
+            }
+            let (pl, pr) = self.padb.split_at_mut(2 * k + 1);
+            self.fx[k].process(&mut pl[2 * k][..q], &mut pr[0][..q]);
+            for i in 0..q {
+                self.bus[0][i] += self.padb[2 * k][i];
+                self.bus[1][i] += self.padb[2 * k + 1][i];
+            }
         }
 
         // --- reverb return → bus L/R (runs always so tails ring out) ---
@@ -584,6 +622,14 @@ impl Mixer {
             let (l, r) = self.reverb.step(self.send[0][i], self.send[1][i]);
             self.bus[0][i] += l;
             self.bus[1][i] += r;
+        }
+
+        // --- master FX buses 3 then 4, on L/R (other channels pass) ---
+        for k in 2..4 {
+            if self.fx[k].busy() {
+                let (b0, b1) = self.bus.split_at_mut(1);
+                self.fx[k].process(&mut b0[0][..q], &mut b1[0][..q]);
+            }
         }
 
         // --- master: level, meters, compressor(s), device ---
@@ -677,5 +723,64 @@ mod pad_tests {
         // An unknown pad does nothing.
         m.live_event(serde_json::from_str(r#"{"t":"pad","slot":9,"vel":1}"#).unwrap());
         assert_eq!(m.pad_voices(9), 0);
+    }
+}
+
+#[cfg(test)]
+mod fx_tests {
+    use super::*;
+
+    /// Peak of the device output over `blocks` renders.
+    fn peak(m: &mut Mixer, blocks: usize) -> (f64, Vec<f32>) {
+        let mut all = vec![];
+        for _ in 0..blocks {
+            let (mut l, mut r) = (vec![0f32; 512], vec![0f32; 512]);
+            m.render(&mut [&mut l, &mut r]);
+            all.extend_from_slice(&l);
+        }
+        (all.iter().fold(0.0f64, |a, v| a.max(v.abs() as f64)), all)
+    }
+
+    fn mixer(pad_bus: u32) -> Mixer {
+        let sr = 48000.0;
+        let mut m = Mixer::new(sr, 2);
+        let tone: Vec<f32> = (0..96000).map(|i| (0.3 * (std::f64::consts::TAU * 4000.0 * i as f64 / sr).sin()) as f32).collect();
+        m.add_buffer("b".into(), Arc::new(Buffer { rate: sr, channels: vec![tone.clone(), tone] }));
+        let json = format!(
+            r#"{{"tracks":[],"masterGain":1,"pads":[{{"slot":0,"buffer":"b","start":0,"end":2,"mode":"gate","bus":{pad_bus}}}],
+               "fxBuses":[{{"effect":3,"a":1,"b":1}},{{"effect":0}},{{"effect":4,"a":0.05,"b":0}},{{"effect":0}}]}}"#
+        );
+        m.set_project(serde_json::from_str(&json).unwrap(), vec![], None);
+        m.live_event(serde_json::from_str(r#"{"t":"pad","slot":0,"vel":1}"#).unwrap());
+        m
+    }
+
+    #[test]
+    fn a_pad_on_bus_1_goes_through_its_effect_only_when_engaged() {
+        let (_, dry) = peak(&mut mixer(1), 40);
+        let mut m = mixer(1);
+        m.live_event(serde_json::from_str(r#"{"t":"fx","bus":0,"depth":1}"#).unwrap());
+        let (_, wet) = peak(&mut m, 40);
+        // Lo-fi at 4 bits / 1.5 kHz: a 4 kHz tone comes out as something else.
+        let rms = |v: &[f64]| (v.iter().map(|x| x * x).sum::<f64>() / v.len() as f64).sqrt();
+        let d: Vec<f64> = wet[10000..].iter().zip(&dry[10000..]).map(|(a, b)| (*a - *b) as f64).collect();
+        let base: Vec<f64> = dry[10000..].iter().map(|v| *v as f64).collect();
+        assert!(rms(&d) > 0.3 * rms(&base), "{} vs {}", rms(&d), rms(&base));
+        // The same pad left DRY ignores bus 1.
+        let mut m0 = mixer(0);
+        m0.live_event(serde_json::from_str(r#"{"t":"fx","bus":0,"depth":1}"#).unwrap());
+        let (_, still) = peak(&mut m0, 40);
+        let (_, dry0) = peak(&mut mixer(0), 40);
+        assert_eq!(still, dry0);
+    }
+
+    #[test]
+    fn master_bus_3_filters_everything() {
+        let (open, _) = peak(&mut mixer(0), 40);
+        let mut m = mixer(0);
+        m.live_event(serde_json::from_str(r#"{"t":"fx","bus":2,"depth":1}"#).unwrap());
+        let (_, all) = peak(&mut m, 40);
+        let late = all[12000..].iter().fold(0.0f64, |a, v| a.max(v.abs() as f64));
+        assert!(late < open * 0.1, "low-pass far below 4 kHz: {late} vs {open}");
     }
 }

@@ -253,3 +253,18 @@ describe("sampler pads in a session", () => {
     expect(header.project.pads).toBeUndefined();
   });
 });
+
+describe("FX buses in a session", () => {
+  it("round-trips the buses' effects and macros; none saved = defaults on open", () => {
+    const fxBuses = [
+      { effect: "looper" as const, a: 0.1, b: 0.9 },
+      { effect: "off" as const, a: 0.5, b: 0.5 },
+      { effect: "cassette" as const, a: 0.3, b: 0.2 },
+      { effect: "echo" as const, a: 1, b: 0 },
+    ];
+    const extras = { reverbSpace: "hall" as const, pixelsPerSecond: 80, playhead: 0 };
+    const { header } = unpackSession(packSession({ ...project, fxBuses }, extras, (id) => buffers.get(id)));
+    expect(header.project.fxBuses).toEqual(fxBuses);
+    expect(unpackSession(packSession(project, extras, (id) => buffers.get(id))).header.project.fxBuses).toBeUndefined();
+  });
+});
