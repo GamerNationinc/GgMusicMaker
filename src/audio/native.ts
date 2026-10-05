@@ -17,7 +17,7 @@
 
 import { fileStreams } from "../state/platform";
 import type { LiveEvent } from "./live";
-import type { AudioBackend, DecodedAudio, MasterMeter } from "./backend";
+import type { AudioBackend, ClickSpec, DecodedAudio, MasterMeter } from "./backend";
 import type { AudioEngine } from "./engine";
 import type { Project, Track } from "./types";
 import type { ReverbSpace } from "./reverb";
@@ -63,7 +63,13 @@ export interface NativeEngineBridge {
   /** Native capture (older shells don't have it: recording stays web).
    *  `device`: a cpal device name from `listInputDevices`, or undefined for
    *  the default. */
-  recStart?(device?: string): Promise<{ sampleRate: number; channels: number; device: string }>;
+  recStart?(device?: string, input?: number | null): Promise<{ sampleRate: number; channels: number; device: string }>;
+  /** Record the Deck instrument (fed by the mixer). */
+  recStartDeck?(): Promise<{ sampleRate: number; channels: number; device: string }>;
+  monitorStart?(device?: string, input?: number | null): Promise<string>;
+  monitorStop?(): Promise<void>;
+  inputLevel?(): Promise<number>;
+  inputChannels?(device?: string): Promise<number>;
   recStop?(): Promise<NativeTake>;
   /** Live waveform of the running take from pair `from` on (older shells: absent). */
   recPeaks?(from: number): Promise<{ peaks: Float32Array; frames: number; sampleRate: number; bucket: number } | null>;
@@ -88,7 +94,7 @@ export interface NativeStatus {
 /** The mixer-facing view of a project (mirrors native/src/mixer.rs
  *  ProjectSpec): mute/solo and every power switch resolved the way
  *  audio/channel.ts resolves them, so both engines render the same graph. */
-export function nativeProjectSpec(project: Project, opts: { masterGain: number; reverb: ReverbSpace; binaural: boolean }) {
+export function nativeProjectSpec(project: Project, opts: { masterGain: number; reverb: ReverbSpace; binaural: boolean; click?: ClickSpec | null }) {
   const solo = anySoloed(project);
   return {
     masterGain: opts.masterGain,
@@ -96,6 +102,7 @@ export function nativeProjectSpec(project: Project, opts: { masterGain: number; 
     reverb: opts.reverb,
     binaural: opts.binaural,
     barOrigin: project.tempo.offset,
+    click: opts.click ?? null,
     tracks: project.tracks.map((t) => {
       const audible = isTrackAudible(t, solo);
       return {
@@ -142,6 +149,12 @@ export class NativeBackend implements AudioBackend {
   /** cpal device name (native) or browser deviceId (web fallback) to record
    *  from next; "" = default mic. Set by `setInputDevice`. */
   private wantDevice = "";
+  /** One input of the device (0-based), or null for inputs 1+2. */
+  private inputChannel: number | null = null;
+  /** The running take is the Deck instrument, not an input. */
+  private deckRec = false;
+  /** The metronome, sent with every project (null = off). */
+  private click: ClickSpec | null = null;
   takeStart: number | null = null;
   takeNote = "";
   onFallback: (why: string) => void = () => {};
@@ -245,7 +258,7 @@ export class NativeBackend implements AudioBackend {
   // ---- mixer ---------------------------------------------------------------
 
   private spec(project: Project): string {
-    return JSON.stringify(nativeProjectSpec(project, { masterGain: this.masterGain, reverb: this.reverb, binaural: this.headphones }));
+    return JSON.stringify(nativeProjectSpec(project, { masterGain: this.masterGain, reverb: this.reverb, binaural: this.headphones, click: this.click }));
   }
 
   private push(project: Project): void {
@@ -430,12 +443,57 @@ export class NativeBackend implements AudioBackend {
     this.recLive = null;
   }
 
+  setInputChannel(ch: number | null): void {
+    this.inputChannel = ch;
+  }
+
+  async inputChannels(): Promise<number> {
+    if (this.fallback || !this.native.inputChannels) return 2;
+    return this.native.inputChannels(this.wantDevice || undefined);
+  }
+
+  private needsNative(what: string): void {
+    if (this.fallback) throw new Error(`${what} needs the native engine`);
+  }
+
+  async startMonitor(): Promise<string> {
+    this.needsNative("hearing the input");
+    if (!this.native.monitorStart) throw new Error("this app build can't monitor the input");
+    return this.native.monitorStart(this.wantDevice || undefined, this.inputChannel);
+  }
+
+  async stopMonitor(): Promise<void> {
+    if (!this.fallback) await this.native.monitorStop?.();
+  }
+
+  async inputLevel(): Promise<number> {
+    if (this.fallback || !this.native.inputLevel) return 0;
+    return this.native.inputLevel();
+  }
+
+  setClick(spec: ClickSpec | null): void {
+    this.click = spec;
+    if (!this.fallback && this.lastProject) this.push(this.lastProject);
+  }
+
+  async startDeckRecording(): Promise<void> {
+    this.needsNative("recording the Deck instrument");
+    if (!this.native.recStartDeck) throw new Error("this app build can't record the Deck instrument");
+    this.takeStart = null;
+    this.takeNote = "";
+    const info = await this.native.recStartDeck();
+    this.nativeRec = true;
+    this.deckRec = true;
+    this.startLivePoll(info.sampleRate);
+  }
+
   async startRecording(): Promise<void> {
     this.takeStart = null;
     this.takeNote = "";
+    this.deckRec = false;
     if (!this.fallback && this.native.recStart) {
       try {
-        const info = await this.native.recStart(this.wantDevice || undefined);
+        const info = await this.native.recStart(this.wantDevice || undefined, this.inputChannel);
         this.inputDevice = info.device;
         this.nativeRec = true;
         this.startLivePoll(info.sampleRate);
@@ -454,10 +512,15 @@ export class NativeBackend implements AudioBackend {
     this.nativeRec = false;
     this.stopLivePoll();
     const take = await this.native.recStop!();
+    const deck = this.deckRec;
+    this.deckRec = false;
     let channels = take.channels.length ? take.channels : [new Float32Array(1)];
-    const notes = ["native capture"];
+    const notes = [deck ? "Deck instrument" : "native capture"];
     if (take.startTime == null) {
       notes.push("transport stopped: placed at the playhead");
+    } else if (deck) {
+      // Captured inside the mixer: no mic round trip to calibrate out.
+      this.takeStart = take.startTime;
     } else {
       const ms = this.recordLatency;
       let start = take.startTime;

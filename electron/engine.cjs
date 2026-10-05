@@ -91,10 +91,29 @@ function register() {
   ipcMain.handle("engine-scope", () => getEngine()?.scope() ?? null);
   // Native recording (native/src/record.rs). Errors reject the invoke, and
   // the page falls back to recording through Chromium.
-  ipcMain.handle("engine-rec-start", (_e, device) => {
+  // `input`: one input of the device (0-based), or null for inputs 1+2.
+  ipcMain.handle("engine-rec-start", (_e, device, input) => {
     const e = getEngine();
     if (!e) throw new Error(loadError || "native engine unavailable");
-    return e.recStart(device || undefined);
+    return e.recStart(device || undefined, input ?? undefined);
+  });
+  // Record the Deck instrument (Instrument mode): fed by the mixer itself.
+  ipcMain.handle("engine-rec-start-deck", () => {
+    const e = getEngine();
+    if (!e) throw new Error(loadError || "native engine unavailable");
+    return e.recStartDeck();
+  });
+  // Hear the armed input through the output; its level for the meter.
+  ipcMain.handle("engine-monitor-start", (_e, device, input) => {
+    const e = getEngine();
+    if (!e) throw new Error(loadError || "native engine unavailable");
+    return e.monitorStart(device || undefined, input ?? undefined);
+  });
+  ipcMain.handle("engine-monitor-stop", () => getEngine()?.monitorStop());
+  ipcMain.handle("engine-input-level", () => getEngine()?.inputLevel() ?? 0);
+  ipcMain.handle("engine-input-channels", (_e, device) => {
+    if (!getEngine()) throw new Error(loadError || "native engine unavailable");
+    return getModule().inputChannels(device || undefined);
   });
   // Live waveform of the take while it records (small: a few KB per poll).
   ipcMain.handle("engine-rec-peaks", (_e, from) => getEngine()?.recPeaks(from >>> 0) ?? null);

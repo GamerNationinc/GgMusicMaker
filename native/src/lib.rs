@@ -12,6 +12,7 @@
 //! both read one process clock so a take is placed where the music was.
 
 pub mod bass;
+pub mod click;
 pub mod binaural;
 pub mod deckpad;
 pub mod dsp;
@@ -39,6 +40,8 @@ enum Cmd {
     Play(f64),
     Stop,
     Live(live::LiveEvent),
+    Capture(Option<record::Capture>),
+    Monitor(Option<record::MonitorFeed>),
 }
 
 #[allow(dead_code)]
@@ -47,6 +50,8 @@ enum Garbage {
     Project(Box<ProjectSpec>),
     Dsp(Vec<TrackDsp>),
     Reverb(Box<Reverb>),
+    Capture(record::Capture),
+    Monitor(record::MonitorFeed),
 }
 
 #[derive(Default)]
@@ -104,6 +109,16 @@ impl Audio {
                 Cmd::Play(t) => m.play(t),
                 Cmd::Stop => m.stop(),
                 Cmd::Live(e) => m.live_event(e),
+                Cmd::Capture(c) => {
+                    if let Some(old) = m.set_capture(c) {
+                        let _ = self.trash.try_send(Garbage::Capture(old));
+                    }
+                }
+                Cmd::Monitor(f) => {
+                    if let Some(old) = m.set_monitor(f) {
+                        let _ = self.trash.try_send(Garbage::Monitor(old));
+                    }
+                }
             }
         }
         // Where this buffer sits in the song and when it will be heard: what
@@ -111,6 +126,7 @@ impl Audio {
         let ts = info.timestamp();
         let out_latency = ts.playback.duration_since(&ts.callback).unwrap_or_default();
         self.clock.publish(m.playing, m.time(), out_latency, m.output_delay());
+        m.out_latency = out_latency.as_secs_f64();
         let frames = data.len() / channels;
         for c in &mut self.chans {
             if c.len() < frames {
@@ -223,6 +239,7 @@ pub struct NativeEngine {
     known: Mutex<(std::collections::HashSet<String>, Option<Space>)>,
     clock: Arc<record::Clock>,
     rec: Mutex<Option<record::Recording>>,
+    monitor: Mutex<Option<record::Monitor>>,
     /// Every loaded buffer (shared with the audio thread, not copied), so an
     /// export renders from what's already here instead of shipping the whole
     /// project's audio over IPC again — which crashes Chromium past ~256 MB.
@@ -300,6 +317,7 @@ impl NativeEngine {
                         known: Mutex::new((Default::default(), None)),
                         clock,
                         rec: Mutex::new(None),
+                        monitor: Mutex::new(None),
                         library: Mutex::new(Default::default()),
                         _stream: Some(stream),
                     });
@@ -396,21 +414,49 @@ impl NativeEngine {
     /// Start capturing from `device` (its cpal name, from `list_input_devices`),
     /// falling back to GGMM_INPUT_DEVICE (tests) and then the default. A take
     /// already running is discarded.
+    /// `input`: record only that input of the device (0-based) as a mono take.
     #[napi]
-    pub fn rec_start(&self, device: Option<String>) -> Result<RecordingInfo> {
+    pub fn rec_start(&self, device: Option<String>, input: Option<u32>) -> Result<RecordingInfo> {
         let mut slot = self.rec.lock().unwrap();
-        slot.take();
+        self.drop_take(&mut slot);
         let want = device.filter(|s| !s.is_empty()).or_else(|| env_device("GGMM_INPUT_DEVICE"));
-        let r = record::Recording::start(want.as_deref(), self.sr, self.clock.clone()).map_err(Error::from_reason)?;
+        let r = record::Recording::start(want.as_deref(), input.map(|k| k as usize), self.sr, self.clock.clone()).map_err(Error::from_reason)?;
         let info = RecordingInfo { sample_rate: r.rate, channels: r.channels as u32, device: r.device.clone() };
         *slot = Some(r);
         Ok(info)
+    }
+
+    /// Record what the Deck instrument plays (Instrument mode): the mixer
+    /// feeds the take, so it's exactly in time — placed where it was heard.
+    #[napi]
+    pub fn rec_start_deck(&self) -> Result<RecordingInfo> {
+        let mut slot = self.rec.lock().unwrap();
+        self.drop_take(&mut slot);
+        let (r, cap) = record::Recording::start_deck(self.sr).map_err(Error::from_reason)?;
+        self.send(Cmd::Capture(Some(cap)))?;
+        let info = RecordingInfo { sample_rate: r.rate, channels: 2, device: r.device.clone() };
+        *slot = Some(r);
+        Ok(info)
+    }
+
+    /// Discard a running take (a Deck take also stops being fed).
+    fn drop_take(&self, slot: &mut Option<record::Recording>) {
+        if let Some(r) = slot.take() {
+            if r.device == record::DECK_SOURCE {
+                let _ = self.send(Cmd::Capture(None));
+            }
+        }
     }
 
     /// Stop capturing and return the take, placed on the timeline.
     #[napi]
     pub fn rec_stop(&self) -> Result<RecordedTake> {
         let r = self.rec.lock().unwrap().take().ok_or_else(|| Error::from_reason("not recording"))?;
+        if r.device == record::DECK_SOURCE {
+            self.send(Cmd::Capture(None))?;
+            // Let the audio thread hand the last blocks over before the drain stops.
+            std::thread::sleep(std::time::Duration::from_millis(30));
+        }
         let t = r.finish();
         Ok(RecordedTake {
             sample_rate: t.rate,
@@ -431,6 +477,36 @@ impl NativeEngine {
         let r = slot.as_ref()?;
         let (peaks, frames) = r.peaks_since(from as usize);
         Some(RecPeaks { peaks: Float32Array::new(peaks), frames: frames as f64, sample_rate: r.rate, bucket: record::PEAK_BUCKET as u32 })
+    }
+
+    /// Hear `device` (input `input`, or inputs 1+2) through the output
+    /// while it's armed. Replaces a monitor already running.
+    #[napi]
+    pub fn monitor_start(&self, device: Option<String>, input: Option<u32>) -> Result<String> {
+        let mut slot = self.monitor.lock().unwrap();
+        if slot.take().is_some() {
+            self.send(Cmd::Monitor(None))?;
+        }
+        let want = device.filter(|s| !s.is_empty()).or_else(|| env_device("GGMM_INPUT_DEVICE"));
+        let (m, feed) = record::Monitor::start(want.as_deref(), input.map(|k| k as usize), self.sr).map_err(Error::from_reason)?;
+        self.send(Cmd::Monitor(Some(feed)))?;
+        let name = m.device.clone();
+        *slot = Some(m);
+        Ok(name)
+    }
+
+    #[napi]
+    pub fn monitor_stop(&self) -> Result<()> {
+        if self.monitor.lock().unwrap().take().is_some() {
+            self.send(Cmd::Monitor(None))?;
+        }
+        Ok(())
+    }
+
+    /// The monitored input's peak since the last call (0 = not monitoring).
+    #[napi]
+    pub fn input_level(&self) -> f64 {
+        self.monitor.lock().unwrap().as_ref().map(|m| m.take_peak() as f64).unwrap_or(0.0)
     }
 
     #[napi]
@@ -456,7 +532,7 @@ impl Task for RenderTask {
     type Output = Vec<Vec<f32>>;
     type JsValue = Vec<Float32Array>;
     fn compute(&mut self) -> Result<Self::Output> {
-        Ok(render(std::mem::replace(&mut self.project, ProjectSpec { tracks: vec![], master_gain: 0.0, surround: 2, reverb: Space::Hall, binaural: false, bar_origin: 0.0 }), &self.buffers, self.sr, self.tail))
+        Ok(render(std::mem::replace(&mut self.project, ProjectSpec { tracks: vec![], master_gain: 0.0, surround: 2, reverb: Space::Hall, binaural: false, bar_origin: 0.0, click: None }), &self.buffers, self.sr, self.tail))
     }
     fn resolve(&mut self, _env: Env, out: Self::Output) -> Result<Self::JsValue> {
         Ok(out.into_iter().map(Float32Array::new).collect())
@@ -488,6 +564,13 @@ pub fn render(mut p: ProjectSpec, buffers: &[(String, Arc<Buffer>)], sr: f64, ta
 /// Float32Array per channel of the project's layout.
 /// Every input device's name, for a picker in the UI. The default device (if
 /// it can still be named) is listed first.
+/// How many inputs `device` has (as it would be opened at 48 kHz).
+#[napi]
+pub fn input_channels(device: Option<String>) -> Result<u32> {
+    let want = device.filter(|s| !s.is_empty()).or_else(|| env_device("GGMM_INPUT_DEVICE"));
+    record::input_channels(want.as_deref(), 48_000.0).map(|n| n as u32).map_err(Error::from_reason)
+}
+
 #[napi]
 pub fn list_input_devices() -> Result<Vec<String>> {
     record::list_input_devices().map_err(Error::from_reason)

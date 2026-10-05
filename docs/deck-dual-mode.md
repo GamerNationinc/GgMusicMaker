@@ -111,8 +111,9 @@ not the transport runs. Nothing sounding costs nothing.
   would make both modes clean.
 - Only the native engine's live path is exercised in the app test; the web
   engine's (AudioWorkletNode → master + reverb) is covered by parity only.
-- Playing isn't recorded yet (a piano-roll / take of what you play is the
-  natural next Instrument step).
+- Playing is recorded as **audio** (2026-10-05: Menu = record, View = play,
+  see MASTER.md §2). Recording it as editable notes (a piano roll) is the
+  natural next step.
 
 ## Next milestones
 

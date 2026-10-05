@@ -10,7 +10,7 @@
 // all 250 reports a second.
 
 import { get, writable } from "svelte/store";
-import { engine, status } from "../state/store";
+import { engine, status, transport, startRecording, stopRecording, togglePlay } from "../state/store";
 import { emptyState, fromGamepad, hapticPulse, parseDeckReport, type ControllerState } from "./deckpad";
 import { Instrument, type Haptic, type InstrumentView, type Output } from "./instrument";
 import { StudioNav } from "./studioNav";
@@ -139,15 +139,41 @@ function pollGamepads(): void {
 
 // ---- the loop --------------------------------------------------------------
 
+/** View + Menu was used as the mode combo since both were last up: their
+ *  releases then don't count as taps. */
+let comboUsed = false;
+
+/** Instrument mode: Menu tapped = record the Deck (again = stop the take),
+ *  View tapped = play / stop. A tap counts on release, so pressing both
+ *  for the mode switch never starts either. */
+export function transportTaps(prev: ControllerState, s: ControllerState, comboHeld: boolean): { rec: boolean; play: boolean } {
+  return {
+    rec: !comboHeld && prev.buttons.menu && !s.buttons.menu && !s.buttons.view,
+    play: !comboHeld && prev.buttons.view && !s.buttons.view && !s.buttons.menu,
+  };
+}
+
+/** Record or stop recording what's played on the Deck. */
+export function toggleDeckRecording(): void {
+  if (get(transport).isRecording) void stopRecording();
+  else void startRecording("deck");
+}
+
 function handle(s: ControllerState): void {
   const combo = s.buttons.view && s.buttons.menu;
   const was = prev.buttons.view && prev.buttons.menu;
+  const last = prev;
   prev = s;
   if (combo && !was) {
+    comboUsed = true;
     setMode(get(mode) === "studio" ? "instrument" : "studio");
     return;
   }
+  const taps = transportTaps(last, s, comboUsed);
+  if (!s.buttons.view && !s.buttons.menu) comboUsed = false;
   if (get(mode) === "instrument") {
+    if (taps.rec) toggleDeckRecording();
+    else if (taps.play) togglePlay();
     send(instrument.update(s));
     scheduleView();
   } else if (get(mode) === "studio") {

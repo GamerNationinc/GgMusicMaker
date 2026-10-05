@@ -25,6 +25,7 @@ import {
 } from "../audio/edits";
 import { AudioEngine } from "../audio/engine";
 import { NativeBackend, type NativeEngineBridge } from "../audio/native";
+import { trimBefore } from "../audio/record-align";
 import type { AudioBackend, MasterMeter } from "../audio/backend";
 import * as history from "./history";
 import { encodeWav, wavParts } from "../audio/wav";
@@ -55,7 +56,7 @@ import {
   punchPresetParams,
   type PunchKey,
 } from "../fx/punch";
-import { DEFAULT_TEMPO, clampBpm, foldOffset, followSongTempo, formatBpm, BEATS_PER_BAR } from "../audio/tempo";
+import { barSeconds, DEFAULT_TEMPO, clampBpm, foldOffset, followSongTempo, formatBpm, BEATS_PER_BAR } from "../audio/tempo";
 import { DEFAULT_BASS, BASS_PRESETS, clampBassValue, bassPresetParams, type BassKey } from "../fx/bass";
 import {
   packSessionParts,
@@ -148,6 +149,7 @@ void refreshInputDevices();
 export function setInputDevice(id: string): void {
   selectedInputDevice.set(id);
   engine.setInputDevice(id || undefined);
+  void refreshInputChannels().then(() => updateMonitor(true));
   try {
     localStorage.setItem(INPUT_DEVICE_KEY, id);
   } catch {
@@ -1051,7 +1053,9 @@ export function startMeterLoop(): void {
   if (!rafId) rafId = requestAnimationFrame(tick);
 }
 
-export async function play(): Promise<void> {
+/** Start the transport at the playhead (or at `from`: a count-in starts a
+ *  bar or two before it, maybe before 0 s). */
+export async function play(from?: number): Promise<void> {
   await engine.ensureRunning();
   if (!engine.isAudioReady) {
     // Most likely cause on Linux: WebKitGTK couldn't build its GStreamer audio
@@ -1059,9 +1063,9 @@ export async function play(): Promise<void> {
     status.set("No audio output available — check the system audio (GStreamer) setup.");
     return;
   }
-  const from = get(transport).playhead;
-  engine.play(get(project), from);
-  transport.update((s) => ({ ...s, isPlaying: true }));
+  const at = from ?? get(transport).playhead;
+  engine.play(get(project), at);
+  transport.update((s) => ({ ...s, isPlaying: true, playhead: at }));
   status.set("Playing.");
 }
 
@@ -1071,7 +1075,8 @@ export function stop(): void {
   // Stop button rewinds — can't move the take.)
   if (get(transport).isRecording) void stopRecording();
   engine.stop();
-  transport.update((s) => ({ ...s, isPlaying: false }));
+  // Stopped during a count-in: back to where Record was pressed.
+  transport.update((s) => ({ ...s, isPlaying: false, playhead: s.playhead < 0 ? (punchIn ?? 0) : s.playhead }));
 }
 
 export function togglePlay(): void {
@@ -1113,24 +1118,57 @@ function stopLiveView(): void {
   liveRecording.set(null);
 }
 
-export async function startRecording(): Promise<void> {
+/** Where Record was pressed when the song was stopped: the take is cut to
+ *  start here. null = Record was pressed mid-song. */
+let punchIn: number | null = null;
+/** Where the song started rolling for this take (Record's point less any
+ *  count-in): where a take with no clock of its own (web capture) began. */
+let recordOrigin: number | null = null;
+
+/** Record. `source`: an input (mic / interface, the toolbar's picker) or
+ *  the Deck instrument (Instrument mode's Menu button). */
+export async function startRecording(source: RecordSource = "input"): Promise<void> {
+  if (get(transport).isRecording) return;
   let armed = get(project).tracks.find((t) => t.armed);
   if (!armed) {
     const id = addEmptyTrack();
+    if (source === "deck") renameTrack(id, "Deck instrument");
     armTrack(id);
     armed = get(project).tracks.find((t) => t.id === id)!;
   }
   try {
     // Like Ableton: Record starts the song playing (you hear what you're
-    // playing along to). Stop — or Space — ends the take; R again ends it
-    // and keeps playing.
-    if (!get(transport).isPlaying) await play();
-    await engine.startRecording();
+    // playing along to), after a bar of clicks when the count-in is on.
+    // Stop — or Space — ends the take; R again ends it and keeps playing.
+    const at = get(transport).playhead;
+    const rolling = get(transport).isPlaying;
+    const count = !rolling && get(metronome) && clickAvailable() ? get(countInBars) : 0;
+    // From stopped, capture starts before the song does: opening an input
+    // can take a second or more, and nothing played after Record may be
+    // lost. Whatever comes before Record's point (that wait, the count-in)
+    // is cut off the take when it stops.
+    punchIn = rolling ? null : at;
+    recordOrigin = null;
+    if (source === "deck") {
+      if (!engine.startDeckRecording) throw new Error("recording the Deck instrument needs the desktop app");
+      await engine.startDeckRecording();
+    } else if (!rolling) {
+      await engine.startRecording();
+    }
+    if (!rolling) {
+      recordOrigin = at - count * barSeconds(get(project).tempo);
+      await play(recordOrigin);
+    } else if (source === "input") {
+      await engine.startRecording();
+    }
     transport.update((s) => ({ ...s, isRecording: true }));
-    startLiveView(armed.id, get(transport).playhead);
-    status.set(`Recording onto ${armed.name}…${engine.takeNote ?? ""}`);
+    startLiveView(armed.id, at);
+    status.set(`Recording ${source === "deck" ? "the Deck instrument " : ""}onto ${armed.name}${count ? ` after ${count} bar${count > 1 ? "s" : ""} of count-in` : ""}…${engine.takeNote ?? ""}`);
   } catch (err) {
-    status.set(`Mic unavailable: ${(err as Error).message}`);
+    punchIn = null;
+    recordOrigin = null;
+    if (engine.isRecording) await engine.stopRecording().catch(() => undefined);
+    status.set(`${source === "deck" ? "Can't record the Deck" : "Mic unavailable"}: ${(err as Error).message}`);
   }
 }
 
@@ -1139,12 +1177,25 @@ export async function stopRecording(): Promise<void> {
   const playheadAtStop = get(transport).playhead;
   const liveStart = get(liveRecording)?.start;
   const usedWorklet = engine.recordingUsesWorklet;
-  const buffer = await engine.stopRecording();
+  const from = punchIn;
+  const origin = recordOrigin;
+  punchIn = null;
+  recordOrigin = null;
+  let buffer = await engine.stopRecording();
   stopLiveView();
   // The native engine knows where the take belongs from the device clocks;
   // otherwise it starts where the playhead was when recording began (the
   // web path used to place it at the playhead at *stop* — wrong mid-play).
-  const startedAt = engine.takeStart ?? liveStart ?? playheadAtStop;
+  let startedAt = engine.takeStart ?? origin ?? liveStart ?? playheadAtStop;
+  if (from != null && startedAt < from) {
+    // The count-in was for listening: the take starts where Record was pressed.
+    const chans = Array.from({ length: buffer.numberOfChannels }, (_, c) => buffer.getChannelData(c));
+    const cut = trimBefore(chans, startedAt, from, buffer.sampleRate);
+    startedAt = cut.start;
+    const out = new AudioBuffer({ numberOfChannels: chans.length, length: Math.max(1, cut.channels[0].length), sampleRate: buffer.sampleRate });
+    cut.channels.forEach((c, i) => out.copyToChannel(c as Float32Array<ArrayBuffer>, i));
+    buffer = out;
+  }
   const bufferId = engine.registerBuffer(buffer);
   const armed = get(project).tracks.find((t) => t.armed);
   transport.update((s) => ({ ...s, isRecording: false }));
@@ -1162,6 +1213,138 @@ export async function stopRecording(): Promise<void> {
   // Flag the degraded capture path so a glitchy take has a visible cause.
   const note = (usedWorklet ? "" : " (fallback capture — may drop samples)") + (engine.takeNote ?? "");
   status.set(`Recorded ${buffer.duration.toFixed(1)}s onto ${armed.name}.${note}`);
+}
+
+// ---- recording setup: metronome, count-in, inputs, monitoring --------------
+
+export type RecordSource = "input" | "deck";
+
+function readPref<T>(key: string, parse: (v: string) => T, dflt: T): T {
+  try {
+    const v = localStorage.getItem(key);
+    return v == null ? dflt : parse(v);
+  } catch {
+    return dflt;
+  }
+}
+function writePref(key: string, v: string): void {
+  try {
+    localStorage.setItem(key, v);
+  } catch {
+    /* storage blocked: the choice just won't be remembered */
+  }
+}
+
+/** The metronome only exists in the native engine (it's in its mixer). */
+function clickAvailable(): boolean {
+  return !!engine.setClick && engineKind === "native" && !(engine as NativeBackend).failure;
+}
+export const canClick = engineKind === "native";
+export const canMonitor = engineKind === "native";
+export const canRecordDeck = engineKind === "native";
+
+/** Metronome on/off: clicks on the grid whenever the song plays. */
+export const metronome = writable<boolean>(readPref("ggmm.click", (v) => v === "on", false));
+/** Bars of count-in before a recording starts from stopped (0 = none). */
+export const countInBars = writable<number>(readPref("ggmm.countIn", (v) => Math.max(0, Math.min(2, Number(v) || 0)), 1));
+export const CLICK_LEVEL = 0.5;
+
+function syncClick(): void {
+  const t = get(project).tempo;
+  engine.setClick?.(get(metronome) ? { bpm: t.bpm, beatsPerBar: t.beatsPerBar, offset: t.offset, level: CLICK_LEVEL } : null);
+}
+let clickTempo = get(project).tempo;
+project.subscribe((p) => {
+  if (p.tempo === clickTempo) return;
+  clickTempo = p.tempo;
+  if (get(metronome)) syncClick();
+});
+syncClick();
+
+export function toggleMetronome(): void {
+  const on = !get(metronome);
+  metronome.set(on);
+  writePref("ggmm.click", on ? "on" : "off");
+  syncClick();
+  status.set(on ? (clickAvailable() ? "Metronome on." : "The metronome needs the native engine.") : "Metronome off.");
+}
+
+export function setCountIn(bars: number): void {
+  const n = Math.max(0, Math.min(2, Math.round(bars)));
+  countInBars.set(n);
+  writePref("ggmm.countIn", String(n));
+  status.set(n ? `Count-in: ${n} bar${n > 1 ? "s" : ""} (with the metronome on).` : "No count-in.");
+}
+
+/** One input of the device (0-based) to record and hear, or null = 1+2. */
+export const inputChannel = writable<number | null>(readPref("ggmm.inputChannel", (v) => (v === "" ? null : Number(v)), null));
+/** How many inputs the chosen device has. */
+export const inputChannelCount = writable<number>(2);
+engine.setInputChannel?.(get(inputChannel));
+
+export function setInputChannel(ch: number | null): void {
+  inputChannel.set(ch);
+  engine.setInputChannel?.(ch);
+  writePref("ggmm.inputChannel", ch == null ? "" : String(ch));
+  void updateMonitor(true);
+}
+
+/** Ask the device how many inputs it has; drop a choice it no longer has. */
+export async function refreshInputChannels(): Promise<void> {
+  if (!engine.inputChannels) return;
+  const n = await engine.inputChannels().catch(() => 2);
+  inputChannelCount.set(n);
+  const ch = get(inputChannel);
+  if (ch != null && ch >= n) setInputChannel(null);
+}
+
+/** Hear the input while a layer is armed (like Ableton's Auto monitoring). */
+export const monitorInput = writable<boolean>(readPref("ggmm.monitor", (v) => v === "on", false));
+/** The monitored input's level, 0..1 (0 when not monitoring). */
+export const inputLevel = writable<number>(0);
+let monitoring = false;
+let levelTimer: ReturnType<typeof setInterval> | null = null;
+
+async function updateMonitor(restart = false): Promise<void> {
+  const want = get(monitorInput) && get(project).tracks.some((t) => t.armed) && !!engine.startMonitor;
+  if (want === monitoring && !(restart && want)) return;
+  monitoring = want;
+  try {
+    if (want) {
+      const name = await engine.startMonitor!();
+      if (!levelTimer) {
+        levelTimer = setInterval(() => {
+          void engine.inputLevel?.().then((p) => inputLevel.update((old) => Math.max(p, old * 0.8)));
+        }, 66);
+      }
+      status.set(`Hearing ${name} — use headphones, or the speakers will feed back.`);
+    } else {
+      await engine.stopMonitor?.();
+      if (levelTimer) clearInterval(levelTimer);
+      levelTimer = null;
+      inputLevel.set(0);
+    }
+  } catch (err) {
+    monitoring = false;
+    monitorInput.set(false);
+    status.set(`Can't hear the input: ${(err as Error).message}`);
+  }
+}
+let anyArmed = false;
+project.subscribe((p) => {
+  const armedNow = p.tracks.some((t) => t.armed);
+  if (armedNow !== anyArmed) {
+    anyArmed = armedNow;
+    void updateMonitor();
+  }
+});
+
+export function toggleMonitor(): void {
+  const on = !get(monitorInput);
+  monitorInput.set(on);
+  writePref("ggmm.monitor", on ? "on" : "off");
+  if (on && !get(project).tracks.some((t) => t.armed)) status.set("Monitor on: arm a layer (●) to hear the input.");
+  void updateMonitor();
 }
 
 // ---- export ---------------------------------------------------------------

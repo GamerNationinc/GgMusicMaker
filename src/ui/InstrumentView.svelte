@@ -11,7 +11,10 @@
     screenDrum,
     setInstrument,
     screenOnly,
+    toggleDeckRecording,
   } from "../input/controller";
+  import { transport, togglePlay, project, canRecordDeck, metronome, toggleMetronome, canClick } from "../state/store";
+  import { formatBarsBeats } from "../audio/tempo";
   import { SCALES, NOTE_NAMES, GRID_ROWS, DRUM_NAMES, cellNote, chordNotes, chordName, scaleOf } from "../input/instrument";
   import { LIVE_PATCHES } from "../audio/live";
 
@@ -78,6 +81,19 @@
       <button class="btn step" onclick={screenOnly(() => setInstrument({ octave: Math.max(1, v.octave - 1) }))}>−</button>
       <span class="val screen" data-role="inst-octave">{v.octave}</span>
       <button class="btn step" onclick={screenOnly(() => setInstrument({ octave: Math.min(6, v.octave + 1) }))}>+</button>
+    </div>
+    <div class="group take" data-role="inst-transport">
+      <button
+        class="btn rec"
+        class:on={$transport.isRecording}
+        onclick={screenOnly(toggleDeckRecording)}
+        disabled={!canRecordDeck}
+        title={canRecordDeck ? "Record what you play onto a layer, in time with the song (Menu on the Deck)" : "Recording the Deck needs the native engine"}
+        data-role="inst-rec"
+      >{$transport.isRecording ? "● REC…" : "● REC"} <small>menu</small></button>
+      <button class="btn" onclick={screenOnly(togglePlay)} data-role="inst-play">{$transport.isPlaying ? "■ STOP" : "▶ PLAY"} <small>view</small></button>
+      <button class="btn" class:accent={$metronome} onclick={screenOnly(toggleMetronome)} disabled={!canClick} aria-pressed={$metronome} data-role="inst-click">♩</button>
+      <span class="val screen wide" data-role="inst-bars">{formatBarsBeats($transport.playhead, $project.tempo)}</span>
     </div>
     <div class="group">
       <span class="lbl">SOUND <small>L3</small></span>
@@ -162,6 +178,14 @@
     flex-direction: column;
     gap: 4px;
     margin: 0 6px;
+  }
+  .take .rec.on {
+    color: var(--danger);
+    border-color: var(--danger);
+  }
+  .take small {
+    opacity: 0.6;
+    font-size: 9px;
   }
   .settings {
     display: flex;

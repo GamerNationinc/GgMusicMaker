@@ -13,7 +13,7 @@
 // Needs Chromium: `npx playwright-core install chromium`, or set CHROME_PATH.
 
 import http from "node:http";
-import { readFile, writeFile, mkdtemp } from "node:fs/promises";
+import { readFile, writeFile, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { extname, join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -68,6 +68,9 @@ function check(name, pass, detail = "") {
   results.push({ name, pass, detail });
   console.log(`${pass ? "  PASS" : "  FAIL"}  ${name}${detail ? ` — ${detail}` : ""}`);
 }
+
+/** Temp dirs to delete at the end. */
+const tempDirs = [];
 
 async function main() {
   const { chromium } = require("playwright-core");
@@ -518,6 +521,7 @@ async function main() {
   await page.keyboard.press("Control+n");
   await page.waitForTimeout(400);
   const dir = await mkdtemp(join(tmpdir(), "ggmm-long-"));
+  tempDirs.push(dir);
   const files = [];
   for (let f = 0; f < 12; f++) {
     const rate = 16000, secs = 150, n = rate * secs;
@@ -857,6 +861,8 @@ async function main() {
 
   await browser.close();
   server.close();
+  // /tmp is RAM on the Deck: the long test tracks (~55 MB) mustn't stay.
+  for (const d of tempDirs) await rm(d, { recursive: true, force: true });
 
   const failed = results.filter((r) => !r.pass);
   console.log(`\n${results.length - failed.length}/${results.length} checks passed`);

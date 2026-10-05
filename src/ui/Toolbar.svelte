@@ -6,10 +6,6 @@
     deleteSelectedClip,
     startRecording,
     stopRecording,
-    inputDevices,
-    selectedInputDevice,
-    setInputDevice,
-    refreshInputDevices,
     exportMix,
     separateStems,
     stemsUnavailable,
@@ -28,6 +24,7 @@
   import { SESSION_EXTENSION } from "../state/session";
   import { projectDuration } from "../audio/edits";
   import { nav } from "./timelineNav";
+  import RecordPanel from "./RecordPanel.svelte";
 
   let fileInput: HTMLInputElement;
   let sessionInput: HTMLInputElement;
@@ -56,9 +53,6 @@
     else void startRecording();
   }
 
-  function onInputDeviceChange(e: Event) {
-    setInputDevice((e.target as HTMLSelectElement).value);
-  }
 
   // Multiplicative zoom over a wide range: from a whole song on one screen
   // down to a few samples per pixel for trimming dead space.
@@ -127,20 +121,7 @@
     {$transport.isRecording ? "● REC…" : "● Record"}
   </button>
 
-  <select
-    class="btn input-device"
-    data-role="input-device"
-    disabled={$transport.isRecording}
-    value={$selectedInputDevice}
-    onchange={onInputDeviceChange}
-    onmousedown={() => void refreshInputDevices(true)}
-    title={`Microphone: ${$inputDevices.find((d) => d.id === $selectedInputDevice)?.label || "default"} — pick which one to record from`}
-  >
-    <option value="">🎤 Default mic</option>
-    {#each $inputDevices as d (d.id)}
-      <option value={d.id}>🎤 {d.label}</option>
-    {/each}
-  </select>
+  <RecordPanel />
 
   <span class="divider"></span>
 
@@ -156,12 +137,6 @@
 </div>
 
 <style>
-  .input-device {
-    max-width: 160px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
   .toolbar {
     display: flex;
     align-items: center;
@@ -200,9 +175,6 @@
   @media (max-width: 1400px) {
     .toolbar {
       gap: 4px;
-    }
-    .input-device {
-      max-width: 72px;
     }
     .zoom :global(button.btn) {
       padding: 0 6px;

@@ -160,13 +160,61 @@ try {
   check("a touch on the grid plays", touchPeak > 0.01, `peak ${touchPeak.toFixed(3)}`);
   await sleep(1200);
 
-  await page.screenshot({ path: join(userData, "..", `ggmm-instrument-${process.pid}.png`) }).catch(() => {});
+  // (In the user-data dir, which is deleted at the end: /tmp is RAM on the Deck.)
+  await page.screenshot({ path: join(userData, "instrument.png") }).catch(() => {});
+
+  // --- transport on the Deck: View = play/stop, Menu = record what's played ---
+  const playLabel = () => page.textContent("[data-role=inst-play]").then((t) => t.trim());
+  await send({ buttons: { view: true } });
+  await send();
+  await sleep(150);
+  check("View plays the song", /STOP/.test(await playLabel()), await playLabel());
+  await send({ buttons: { view: true } });
+  await send();
+  await sleep(150);
+  check("View again stops it", /PLAY/.test(await playLabel()), await playLabel());
+  // The metronome (header ♩) is heard while the song plays.
+  await page.click("[data-role=metronome]");
+  await send({ buttons: { view: true } });
+  await send();
+  const clickPeak = await peakOver(1200);
+  await send({ buttons: { view: true } });
+  await send();
+  check("the metronome clicks while it plays", clickPeak > 0.05, `peak ${clickPeak.toFixed(3)}`);
+  await page.click("[data-role=metronome]"); // off: the take below holds only the kick
+  await sleep(300);
+  // Record: Menu tap, a kick, Menu tap.
+  await send({ buttons: { menu: true } });
+  await send();
+  await sleep(400);
+  check("Menu starts recording the Deck", /REC…/.test(await page.textContent("[data-role=inst-rec]")));
+  await send({ buttons: { a: true } });
+  await sleep(150);
+  await send();
+  await sleep(700);
+  await send({ buttons: { menu: true } });
+  await send();
+  await sleep(600);
+  const recDone = (await page.textContent(".statusbar")).trim();
+  check("Menu again stops the take onto a layer", /^Recorded \d+\.\ds onto Deck instrument\. \(Deck instrument/.test(recDone), recDone);
+  await send({ buttons: { view: true } }); // the take keeps the song rolling: stop it
+  await send();
+  await sleep(1500);
 
   // --- back out ---
   await send({ buttons: { view: true, menu: true } });
   await send();
   await page.waitForSelector(".workspace", { timeout: 3000 }).catch(() => {});
   check("View + Menu goes back to Studio", !!(await page.$(".workspace")) && !(await page.$("[data-role=instrument]")));
+  check("the Deck take is a layer in Studio", (await page.$$eval(".head input, .head .name", (els) => els.map((e) => e.value ?? e.textContent))).some((n) => /Deck instrument/.test(n)));
+  // Play it back from the start: the kick is in the take.
+  await page.click("button[aria-label='Stop']"); // rewinds to 0
+  await page.evaluate(() => document.activeElement?.blur?.());
+  await page.keyboard.press("Space");
+  const takePeak = await peakOver(1500);
+  await page.keyboard.press("Space");
+  check("the take plays back the kick", takePeak > 0.05, `peak ${takePeak.toFixed(3)}`);
+  await sleep(1500);
   await send({ buttons: { a: true } });
   check("in Studio the controller plays nothing", (await peakOver(250)) < 1e-3);
   await send();

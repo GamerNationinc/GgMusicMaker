@@ -53,7 +53,7 @@
   }
 
   const STUDIO_KEYS = [["space", "play"], ["s", "split"], ["r", "rec"], ["del", "delete"], ["^z", "undo"], ["^s", "save"], ["←→↑↓", "scroll/zoom"], ["L-pad", "swipe · click+drag zoom"], ["z", "fit"], ["b", "bar here"], ["^4", "snap"], ["f", "follow"], ["t", "theme"]];
-  const INSTRUMENT_KEYS = [["R-pad", "notes"], ["L-pad", "cutoff/reverb"], ["ABXY", "drums"], ["L1/R1+ABXY", "chords"], ["R2", "swell"], ["L5", "sustain"], ["R5", "tilt bend"], ["View+Menu", "studio"]];
+  const INSTRUMENT_KEYS = [["R-pad", "notes"], ["L-pad", "cutoff/reverb"], ["ABXY", "drums"], ["L1/R1+ABXY", "chords"], ["R2", "swell"], ["L5", "sustain"], ["R5", "tilt bend"], ["Menu", "rec"], ["View", "play"], ["View+Menu", "studio"]];
 
   const sessionName = $derived(sessionDisplayName($sessionPath));
 

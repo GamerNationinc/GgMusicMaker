@@ -7,7 +7,7 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 const CHUNK = 32 * 1024 * 1024;
-const invoke = (channel, args) => ipcRenderer.invoke(channel, args);
+const invoke = (channel, ...args) => ipcRenderer.invoke(channel, ...args);
 
 const bytesOf = (v) => (v instanceof Uint8Array ? v : new Uint8Array(v.buffer ?? v, v.byteOffset ?? 0, v.byteLength));
 
@@ -126,7 +126,12 @@ contextBridge.exposeInMainWorld("ggmmNative", {
     live: (json) => ipcRenderer.send("engine-live", json),
     status: () => invoke("engine-status"),
     scope: () => invoke("engine-scope"),
-    recStart: (device) => invoke("engine-rec-start", device),
+    recStart: (device, input) => invoke("engine-rec-start", device, input ?? null),
+    recStartDeck: () => invoke("engine-rec-start-deck"),
+    monitorStart: (device, input) => invoke("engine-monitor-start", device, input ?? null),
+    monitorStop: () => invoke("engine-monitor-stop"),
+    inputLevel: () => invoke("engine-input-level"),
+    inputChannels: (device) => invoke("engine-input-channels", device),
     listInputDevices: () => invoke("engine-list-input-devices"),
     recPeaks: (from) => invoke("engine-rec-peaks", from),
     recStop: async () => {

@@ -10,6 +10,8 @@
 //! live stream and offline export. Nothing allocates while rendering.
 
 use crate::bass::{Bass, BassParams};
+use crate::click::{Click, ClickSpec};
+use crate::record::{Capture, MonitorFeed};
 use crate::binaural::Binaural;
 use crate::dsp::{Biquad, Compressor, Kind, Punch, PunchParams};
 use crate::morph::{Morph, MorphParams};
@@ -126,6 +128,9 @@ pub struct ProjectSpec {
     /// Song time of bar 1 (the tempo grid's offset): BASS MOD's LFO counts from it.
     #[serde(default)]
     pub bar_origin: f64,
+    /// The metronome (live only; never in an export).
+    #[serde(default)]
+    pub click: Option<ClickSpec>,
 }
 fn two() -> usize {
     2
@@ -226,6 +231,16 @@ pub struct Mixer {
     reverb: Reverb,
     /// The instrument played live from the controller (Instrument mode).
     live: Live,
+    /// The instrument's last block (L, R), before it joins the bus.
+    lv: [[f64; Q]; 2],
+    /// A Deck-instrument take being recorded.
+    capture: Option<Capture>,
+    /// The armed input, heard through the master.
+    monitor: Option<MonitorFeed>,
+    click: Click,
+    /// Output latency the device last reported (s): with the look-ahead,
+    /// how long until a rendered frame is heard.
+    pub out_latency: f64,
     binaural: Option<(usize, Binaural)>,
     comps: Vec<Compressor>,
     /// The compressor's look-ahead line (Chromium's DynamicsCompressor
@@ -260,10 +275,15 @@ impl Mixer {
             sr,
             device_ch,
             buffers: HashMap::new(),
-            project: ProjectSpec { tracks: vec![], master_gain: 0.9, surround: 2, reverb: Space::Hall, binaural: false, bar_origin: 0.0 },
+            project: ProjectSpec { tracks: vec![], master_gain: 0.9, surround: 2, reverb: Space::Hall, binaural: false, bar_origin: 0.0, click: None },
             dsp: HashMap::new(),
             reverb: Reverb::new(Space::Hall, sr),
             live: Live::new(sr),
+            lv: [[0.0; Q]; 2],
+            capture: None,
+            monitor: None,
+            click: Click::new(sr),
+            out_latency: 0.0,
             binaural: None,
             comps: vec![],
             ahead: vec![[0.0; MAX_CH]; ((sr * 0.006).round() as usize).max(1)],
@@ -342,6 +362,17 @@ impl Mixer {
         self.live.event(e);
     }
 
+    /// Start (Some) or stop (None) feeding a Deck-instrument take; the one
+    /// replaced is handed back to be freed off the audio thread.
+    pub fn set_capture(&mut self, c: Option<Capture>) -> Option<Capture> {
+        std::mem::replace(&mut self.capture, c)
+    }
+
+    /// Start (Some) or stop (None) hearing the armed input.
+    pub fn set_monitor(&mut self, m: Option<MonitorFeed>) -> Option<MonitorFeed> {
+        std::mem::replace(&mut self.monitor, m)
+    }
+
     pub fn reverb_space(&self) -> Space {
         self.reverb.space
     }
@@ -349,8 +380,10 @@ impl Mixer {
         self.dsp.contains_key(id)
     }
 
+    /// Start at song time `from`. It may be before 0 s: a count-in (the
+    /// metronome plays, clips start at 0).
     pub fn play(&mut self, from: f64) {
-        self.from = from.max(0.0);
+        self.from = from.max(-60.0);
         self.pos = 0;
         self.playing = true;
     }
@@ -360,6 +393,7 @@ impl Mixer {
             self.pos = 0;
         }
         self.playing = false;
+        self.click.reset();
     }
     pub fn time(&self) -> f64 {
         self.from + self.pos as f64 / self.sr
@@ -392,6 +426,8 @@ impl Mixer {
         }
         self.send[0][..q].fill(0.0);
         self.send[1][..q].fill(0.0);
+        // Song time of this block's first frame (read before it advances).
+        let t_block = self.time();
 
         if self.playing {
             let t0 = self.time();
@@ -543,10 +579,40 @@ impl Mixer {
         }
 
         // --- live instrument (plays whether or not the transport runs) ---
-        if self.live.active() {
-            let (b0, b1) = self.bus.split_at_mut(1);
+        let live_on = self.live.active();
+        if live_on {
+            self.lv[0][..q].fill(0.0);
+            self.lv[1][..q].fill(0.0);
+            let (l0, l1) = self.lv.split_at_mut(1);
             let (s0, s1) = self.send.split_at_mut(1);
-            self.live.render([&mut b0[0][..q], &mut b1[0][..q]], [&mut s0[0][..q], &mut s1[0][..q]]);
+            self.live.render([&mut l0[0][..q], &mut l1[0][..q]], [&mut s0[0][..q], &mut s1[0][..q]]);
+            for i in 0..q {
+                self.bus[0][i] += self.lv[0][i];
+                self.bus[1][i] += self.lv[1][i];
+            }
+        }
+        // A Deck take records the instrument dry, every block (silence too,
+        // so its frames stay locked to song time).
+        if let Some(cap) = &mut self.capture {
+            if !live_on {
+                self.lv[0][..q].fill(0.0);
+                self.lv[1][..q].fill(0.0);
+            }
+            cap.push(&self.lv[0][..q], &self.lv[1][..q], t_block, self.playing, self.out_latency + self.ahead.len() as f64 / sr);
+        }
+
+        // --- metronome (and count-in before 0 s) ---
+        if self.playing {
+            if let Some(spec) = self.project.click {
+                let (b0, b1) = self.bus.split_at_mut(1);
+                self.click.render(&spec, t_block, &mut b0[0][..q], &mut b1[0][..q]);
+            }
+        }
+
+        // --- the armed input, heard ---
+        if let Some(m) = &mut self.monitor {
+            let (b0, b1) = self.bus.split_at_mut(1);
+            m.render(&mut b0[0][..q], &mut b1[0][..q], 1.0);
         }
 
         // --- reverb return → bus L/R (runs always so tails ring out) ---

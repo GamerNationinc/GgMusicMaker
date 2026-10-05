@@ -13,6 +13,16 @@
 // and only touches raw buffers for waveform drawing.
 import type { LivePeaks } from "./liveTake";
 
+/** The metronome, as the native mixer takes it (native/src/click.rs). */
+export interface ClickSpec {
+  bpm: number;
+  beatsPerBar: number;
+  /** Song time of bar 1 (s). */
+  offset: number;
+  /** Linear gain of each blip. */
+  level: number;
+}
+
 import type { Project, Track } from "./types";
 import type { ReverbSpace } from "./reverb";
 import type { SurroundLayout } from "../fx/voice-synth";
@@ -120,6 +130,23 @@ export interface AudioBackend {
   readonly takeStart?: number | null;
   /** How the last take was captured, appended to the status line. */
   readonly takeNote?: string;
+  /** Which input of the device to record and monitor: 0-based, or null =
+   *  inputs 1+2 (stereo). Native engine only. */
+  setInputChannel?(ch: number | null): void;
+  /** How many inputs the chosen device has (native). */
+  inputChannels?(): Promise<number>;
+  /** Hear the chosen input through the output (native). Resolves to the
+   *  device's name. */
+  startMonitor?(): Promise<string>;
+  stopMonitor?(): Promise<void>;
+  /** The monitored input's peak since the last call (0..1+). */
+  inputLevel?(): Promise<number>;
+  /** Record what the Deck instrument plays instead of an input (native):
+   *  `stopRecording` then returns that take. */
+  startDeckRecording?(): Promise<void>;
+  /** The metronome: clicks on the song's grid while playing (null = off).
+   *  Live only — never in an export. */
+  setClick?(spec: ClickSpec | null): void;
   /** Measure the recording round-trip latency (native engine). Returns ms. */
   calibrateLatency?(): Promise<{ ms: number; confidence: number }>;
   /** The calibrated latency for the current devices (ms), or null. */

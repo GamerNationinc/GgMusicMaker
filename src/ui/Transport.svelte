@@ -1,8 +1,10 @@
 <script lang="ts">
-  import { transport, togglePlay, stop, seek, masterLevel, engine, project } from "../state/store";
+  import { transport, togglePlay, stop, seek, masterLevel, engine, project, metronome, toggleMetronome, canClick } from "../state/store";
   import { formatBarsBeats } from "../audio/tempo";
 
   function fmt(t: number): string {
+    // Before 0 s: a count-in.
+    if (t < 0) return `-${fmt(-t)}`;
     const m = Math.floor(t / 60);
     const s = Math.floor(t % 60);
     const cs = Math.floor((t * 100) % 100);
@@ -30,6 +32,16 @@
     {$transport.isPlaying ? "❚❚" : "▶"}
   </button>
   <button class="btn" onclick={() => { stop(); seek(0); }} aria-label="Stop">■</button>
+  <button
+    class="btn click"
+    class:accent={$metronome}
+    onclick={toggleMetronome}
+    disabled={!canClick}
+    aria-pressed={$metronome}
+    aria-label="Metronome"
+    title={canClick ? "Metronome: clicks on the beat while the song plays (count-in: 🎤 ▾ in the toolbar)" : "The metronome needs the native engine"}
+    data-role="metronome"
+  >♩</button>
 
   <div class="time screen" data-role="clock" data-time={$transport.playhead}>
     <span class="clock">{fmt($transport.playhead)}</span>
@@ -61,6 +73,9 @@
   .btn {
     min-width: 54px;
     font-size: 18px;
+  }
+  .click {
+    min-width: 40px;
   }
   .time {
     display: flex;

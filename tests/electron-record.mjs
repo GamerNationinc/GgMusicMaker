@@ -239,6 +239,81 @@ async function waitStatus(page, re, ms = 20000) {
   await app.evaluate(({ app }) => app.exit(0));
 }
 
+// 3. Recording an instrument: one input of the device, a count-in with the
+//    metronome, hearing the input while armed.
+{
+  const { app, page, saveDir } = await launch();
+  await page.setInputFiles("input[type=file][accept='audio/*']", [wavPath]);
+  await page.waitForFunction(() => document.querySelectorAll(".head").length === 1);
+  await page.click("[data-role=record-setup]");
+  await page.waitForSelector("[data-role=record-panel]");
+  // The test sink's monitor is stereo: inputs 1+2, or either alone.
+  let opts = [];
+  for (let i = 0; i < 20 && opts.length < 3; i++) {
+    opts = await page.$$eval("[data-role=input-channel] option", (os) => os.map((o) => o.textContent.trim()));
+    if (opts.length < 3) await sleep(100);
+  }
+  check("the input picker lists the device's inputs", opts.join(" | ") === "Inputs 1+2 (stereo) | Input 1 (mono) | Input 2 (mono)", opts.join(" | "));
+  await page.selectOption("[data-role=input-channel]", "1");
+  check("the toolbar says which input", (await page.textContent("[data-role=record-setup]")).includes("in 2"));
+  check("a 1-bar count-in by default", (await page.getAttribute("[data-role=count-in-1]", "aria-checked")) === "true");
+  await page.click("[data-role=metronome]"); // the header ♩ (the panel closes on a click outside it)
+  check("the metronome turns on", (await page.getAttribute("[data-role=metronome]", "aria-pressed")) === "true");
+  check("the panel closed", !(await page.$("[data-role=record-panel]")));
+  await page.evaluate(() => document.activeElement?.blur?.());
+  await page.keyboard.press("r");
+  const counting = await waitStatus(page, /Recording onto .*count-in/);
+  check("Record from stopped counts in", /after 1 bar of count-in/.test(counting), counting);
+  // (The window is hidden, so the on-screen clock doesn't tick: ask the engine.)
+  const t0 = await page.evaluate(() => window.ggmmNative.engine.status().then((s) => s.time));
+  check("the count-in plays a bar before the song (120 BPM: from −2 s)", t0 < -1.5 && t0 >= -2.1, `${t0.toFixed(2)} s`);
+  await sleep(4500); // the 2 s count-in, then ~2.5 s of take
+  await page.click("button[aria-label='Stop']");
+  const done = await waitStatus(page, /^Recorded /);
+  // Where the song stopped (the engine's own clock; the page's timing
+  // under test load isn't exact): the take must run from 0 s to there.
+  const stoppedAt = await page.evaluate(() => window.ggmmNative.engine.status().then((s) => s.time));
+  const secs = Number(/^Recorded ([\d.]+)s/.exec(done)?.[1]);
+  check("the count-in isn't in the take, and nothing after it is missing", Math.abs(secs - stoppedAt) < 0.15, `${secs}s take, the song stopped at ${stoppedAt.toFixed(2)} s`);
+  await page.keyboard.press("Control+s");
+  let file = null;
+  for (let i = 0; i < 50 && !file; i++) {
+    file = (await readdir(saveDir)).find((f) => f.endsWith(".ggmm"));
+    if (!file) await sleep(200);
+  }
+  const { header, audio } = readSession(await readFile(join(saveDir, file)));
+  const take = header.project.tracks.flatMap((t) => t.clips).find((c) => c.name === "Take");
+  check("the take starts where Record was pressed (0 s), not at the count-in", !!take && take.startTime >= 0 && take.startTime < 0.01, take ? take.startTime.toFixed(4) : "none");
+  if (take) {
+    const pcm = audio.get(take.bufferId);
+    check("one input = a mono take", pcm.channels.length === 1, `${pcm.channels.length} channel(s)`);
+    let peak = 0;
+    for (const v of pcm.channels[0]) peak = Math.max(peak, Math.abs(v));
+    check("…that heard the song", peak > 0.05, `peak ${peak.toFixed(3)}`);
+  }
+  // Monitoring: the take's layer is still armed; turn the metronome off and
+  // hear the input while the click track plays.
+  await page.click("[data-role=metronome]");
+  await page.click("[data-role=record-setup]");
+  await page.click("[data-role=monitor]");
+  await sleep(300);
+  check("monitor on (a layer is armed)", (await page.getAttribute("[data-role=monitor]", "aria-pressed")) === "true");
+  await page.click("button[aria-label='Play or pause']"); // (closes the panel)
+  await page.click("[data-role=record-setup]"); // open it again to read the meter
+  let level = 0;
+  for (let i = 0; i < 20; i++) {
+    await sleep(100);
+    level = Math.max(level, Number(await page.getAttribute("[data-role=input-level]", "data-level").catch(() => 0)) || 0);
+  }
+  await page.click("button[aria-label='Stop']");
+  check("the input meter moves while monitoring", level > 0.05, `level ${level.toFixed(3)}`);
+  await page.click("[data-role=record-setup]");
+  await page.click("[data-role=monitor]");
+  await sleep(200);
+  check("monitor off again", (await page.getAttribute("[data-role=monitor]", "aria-pressed")) === "false");
+  await app.evaluate(({ app }) => app.exit(0));
+}
+
 unload();
 // /tmp is RAM on the Deck: never leave test audio behind.
 for (const d of tempDirs) await rm(d, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });

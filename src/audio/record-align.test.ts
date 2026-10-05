@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { applyOffset, calibrationClicks, findLag } from "./record-align";
+import { applyOffset, calibrationClicks, findLag, trimBefore } from "./record-align";
 
 const SR = 48000;
 
@@ -48,5 +48,14 @@ describe("record-align", () => {
     const cut = applyOffset(ch, 0.25, 0.75, 4); // 0.5 s = 2 samples before 0
     expect(cut.start).toBe(0);
     expect([...cut.channels[0]]).toEqual([3, 4, 5]);
+  });
+
+  it("trimBefore drops a count-in: the take starts where Record was pressed", () => {
+    const ch = [Float32Array.from([1, 2, 3, 4, 5]), Float32Array.from([6, 7, 8, 9, 10])];
+    const t = trimBefore(ch, 1.0, 1.5, 4); // 0.5 s = 2 samples of count-in
+    expect(t.start).toBe(1.5);
+    expect([...t.channels[0]]).toEqual([3, 4, 5]);
+    expect([...t.channels[1]]).toEqual([8, 9, 10]);
+    expect(trimBefore(ch, 2, 1.5, 4).channels).toBe(ch); // started after: untouched
   });
 });

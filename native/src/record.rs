@@ -21,9 +21,12 @@
 //!   (now + output latency + the master compressor's 6 ms look-ahead, which
 //!   delays everything the mixer plays);
 //! * the first input callback that finds playback running computes the wall
-//!   time its first frame was *captured* (now − input latency) and asks the
-//!   mark which song time was being heard at that instant ([`song_at`]).
-//!   That pair (captured frame index, song time) is the take's [`Anchor`].
+//!   time its *last* frame was captured and asks the mark which song time
+//!   was being heard at that instant ([`song_at`]). That pair (captured
+//!   frame index, song time) is the take's [`Anchor`] ([`anchor_at`]).
+//!   The last frame, not the first: an input often starts with a burst of
+//!   buffered audio (seconds of it, on PipeWire through ALSA) while
+//!   reporting no latency, and only the newest frame was captured "now".
 //!
 //! The take then starts at `anchor.song − anchor.frame / rate` ([`place`]):
 //! audio captured before the transport started is kept (pre-roll) unless it
@@ -39,7 +42,7 @@
 //! a drain thread, so the capture callback never allocates or blocks.
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -83,6 +86,18 @@ pub struct Anchor {
     pub out_latency_ns: i64,
 }
 
+/// The anchor an input callback gives: `before` frames came earlier, this
+/// block holds `frames` more, and its first frame was captured `lat_ns`
+/// before `now_ns` (cpal's callback − capture; 0 when the backend doesn't
+/// say). Anchored at the block's end, captured `lat_ns − block length` ago
+/// (never in the future).
+pub fn anchor_at(mark: &OutMark, now_ns: i64, lat_ns: i64, before: u64, frames: u64, rate: f64) -> Option<Anchor> {
+    let block_ns = (frames as f64 / rate * 1e9) as i64;
+    let end_lat = (lat_ns - block_ns).max(0);
+    let song = song_at(mark, now_ns - end_lat)?;
+    Some(Anchor { frame: before + frames, song, in_latency_ns: lat_ns, out_latency_ns: mark.latency_ns })
+}
+
 /// Where a take goes: its start time on the timeline and how many leading
 /// frames to drop (they would land before 0 s).
 pub fn place(anchor: &Anchor, rate: f64) -> (f64, usize) {
@@ -96,15 +111,19 @@ pub fn place(anchor: &Anchor, rate: f64) -> (f64, usize) {
 }
 
 /// Split interleaved samples into at most 2 channels, dropping `skip`
-/// leading frames.
-pub fn deinterleave(data: &[f32], channels: usize, skip: usize) -> Vec<Vec<f32>> {
+/// leading frames. `pick`: keep only that one input (a mono take of, say,
+/// the guitar on input 1 of an interface).
+pub fn deinterleave(data: &[f32], channels: usize, skip: usize, pick: Option<usize>) -> Vec<Vec<f32>> {
     let channels = channels.max(1);
     let frames = data.len() / channels;
-    let keep = channels.min(2);
     let skip = skip.min(frames);
-    let mut out = vec![Vec::with_capacity(frames - skip); keep];
+    let sel: Vec<usize> = match pick {
+        Some(k) => vec![k.min(channels - 1)],
+        None => (0..channels.min(2)).collect(),
+    };
+    let mut out = vec![Vec::with_capacity(frames - skip); sel.len()];
     for f in skip..frames {
-        for (c, ch) in out.iter_mut().enumerate() {
+        for (ch, &c) in out.iter_mut().zip(&sel) {
             ch.push(data[f * channels + c]);
         }
     }
@@ -202,12 +221,142 @@ impl PeakAcc {
 
 /// An open capture stream. Dropping it without `finish` discards the take.
 pub struct Recording {
-    stream: cpal::Stream,
+    /// The input stream; None when recording the Deck instrument (the mixer
+    /// feeds the take through a [`Capture`]).
+    stream: Option<cpal::Stream>,
     shared: Arc<Shared>,
     drain: Option<JoinHandle<Vec<f32>>>,
     pub rate: f64,
     pub channels: usize,
+    /// One input of a multi-input interface, or None for the first two.
+    pub pick: Option<usize>,
     pub device: String,
+}
+
+/// The name a Deck-instrument take reports as its device.
+pub const DECK_SOURCE: &str = "Deck instrument";
+
+/// The audio-thread end of a Deck-instrument take: the mixer pushes what
+/// the instrument plays, every block, whether or not a note sounds (so the
+/// take's frames stay locked to song time).
+pub struct Capture {
+    prod: rtrb::Producer<f32>,
+    shared: Arc<Shared>,
+}
+
+impl Capture {
+    /// One block of the instrument (L, R). `song`: song time of its first
+    /// frame; `heard_after`: how long until that frame reaches the speaker
+    /// (output latency + the master look-ahead). The player reacted to what
+    /// they heard then, so the take is placed that much earlier — the same
+    /// rule as a mic take (see the module docs). Never blocks or allocates.
+    pub fn push(&mut self, l: &[f64], r: &[f64], song: f64, playing: bool, heard_after: f64) {
+        let before = self.shared.frames.load(Ordering::Relaxed);
+        if playing {
+            if let Ok(mut a) = self.shared.anchor.try_lock() {
+                if a.is_none() {
+                    *a = Some(Anchor { frame: before, song: song - heard_after, in_latency_ns: 0, out_latency_ns: (heard_after * 1e9) as i64 });
+                }
+            }
+        }
+        let n = l.len().min(r.len());
+        let fit = (self.prod.slots() / 2).min(n);
+        if let Ok(mut chunk) = self.prod.write_chunk_uninit(fit * 2) {
+            let (a, b) = chunk.as_mut_slices();
+            for (i, dst) in a.iter_mut().chain(b.iter_mut()).enumerate() {
+                let f = i / 2;
+                dst.write(if i % 2 == 0 { l[f] } else { r[f] } as f32);
+            }
+            unsafe { chunk.commit_all() };
+        }
+        if fit < n {
+            self.shared.dropped.fetch_add(((n - fit) * 2) as u64, Ordering::Relaxed);
+        }
+        self.shared.frames.store(before + n as u64, Ordering::Relaxed);
+    }
+}
+
+/// The input config to open: f32 at `want_rate` (the output's rate, so
+/// nothing resamples), stereo preferred; else the device default.
+fn choose_config(dev: &cpal::Device, want_rate: f64) -> Result<cpal::SupportedStreamConfig, String> {
+    let mut cfg = dev.default_input_config().map_err(|e| format!("input config: {e}"))?;
+    if let Ok(configs) = dev.supported_input_configs() {
+        let want = want_rate as u32;
+        let mut best: Option<cpal::SupportedStreamConfig> = None;
+        for c in configs {
+            if c.sample_format() == cpal::SampleFormat::F32 && c.min_sample_rate().0 <= want && c.max_sample_rate().0 >= want {
+                let s = c.with_sample_rate(cpal::SampleRate(want));
+                // Prefer stereo, then whatever the default has.
+                let better = match &best {
+                    None => true,
+                    Some(b) => (s.channels() == 2) && b.channels() != 2,
+                };
+                if better {
+                    best = Some(s);
+                }
+            }
+        }
+        if let Some(b) = best {
+            cfg = b;
+        }
+    }
+    Ok(cfg)
+}
+
+/// How many inputs a device offers (as it would be opened), for the
+/// "Input 1 / Input 2 …" picker.
+pub fn input_channels(device: Option<&str>, want_rate: f64) -> Result<usize, String> {
+    let dev = pick_input(device)?;
+    Ok(choose_config(&dev, want_rate)?.channels() as usize)
+}
+
+fn check_pick(pick: Option<usize>, channels: usize) -> Result<(), String> {
+    match pick {
+        Some(k) if k >= channels => Err(format!("input {} doesn't exist (the device has {channels})", k + 1)),
+        _ => Ok(()),
+    }
+}
+
+fn spawn_drain(mut cons: rtrb::Consumer<f32>, channels: usize, rate: f64, sh: Arc<Shared>) -> Result<JoinHandle<Vec<f32>>, String> {
+    std::thread::Builder::new()
+        .name("ggmm-rec-drain".into())
+        .spawn(move || {
+            let mut out: Vec<f32> = Vec::with_capacity(rate as usize * channels * 60);
+            let mut acc = PeakAcc::default();
+            let mut fresh: Vec<f32> = Vec::new();
+            let mut seen = 0usize;
+            loop {
+                let done = sh.stop.load(Ordering::Acquire);
+                let n = cons.slots();
+                if n > 0 {
+                    if let Ok(chunk) = cons.read_chunk(n) {
+                        let (a, b) = chunk.as_slices();
+                        out.extend_from_slice(a);
+                        out.extend_from_slice(b);
+                        chunk.commit_all();
+                    }
+                }
+                // Whole frames only; a partial frame waits for the next pass.
+                let whole = (out.len() / channels.max(1)) * channels.max(1);
+                if whole > seen {
+                    acc.feed(&out[seen..whole], channels, &mut fresh);
+                    seen = whole;
+                    if !fresh.is_empty() {
+                        sh.peaks.lock().unwrap().extend_from_slice(&fresh);
+                        fresh.clear();
+                    }
+                }
+                if done {
+                    break out;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        })
+        .map_err(|e| format!("drain thread: {e}"))
+}
+
+fn new_shared() -> Arc<Shared> {
+    Arc::new(Shared { frames: AtomicU64::new(0), dropped: AtomicU64::new(0), stop: AtomicBool::new(false), anchor: Mutex::new(None), peaks: Mutex::new(Vec::new()) })
 }
 
 fn pick_input(name: Option<&str>) -> Result<cpal::Device, String> {
@@ -240,82 +389,38 @@ pub fn list_input_devices() -> Result<Vec<String>, String> {
 impl Recording {
     /// Open the input (`device`, or the default) and start capturing,
     /// preferring f32 at `want_rate` (the output's rate, so nothing resamples).
-    pub fn start(device: Option<&str>, want_rate: f64, clock: Arc<Clock>) -> Result<Recording, String> {
+    /// `pick`: record only that input (0-based) as a mono take.
+    pub fn start(device: Option<&str>, pick: Option<usize>, want_rate: f64, clock: Arc<Clock>) -> Result<Recording, String> {
         let dev = pick_input(device)?;
         let name = dev.name().unwrap_or_else(|_| "default".into());
-        let mut cfg = dev.default_input_config().map_err(|e| format!("input config: {e}"))?;
-        if let Ok(configs) = dev.supported_input_configs() {
-            let want = want_rate as u32;
-            let mut best: Option<cpal::SupportedStreamConfig> = None;
-            for c in configs {
-                if c.sample_format() == cpal::SampleFormat::F32 && c.min_sample_rate().0 <= want && c.max_sample_rate().0 >= want {
-                    let s = c.with_sample_rate(cpal::SampleRate(want));
-                    // Prefer stereo, then whatever the default has.
-                    let better = match &best {
-                        None => true,
-                        Some(b) => (s.channels() == 2) && b.channels() != 2,
-                    };
-                    if better {
-                        best = Some(s);
-                    }
-                }
-            }
-            if let Some(b) = best {
-                cfg = b;
-            }
-        }
+        let cfg = choose_config(&dev, want_rate)?;
         let channels = cfg.channels() as usize;
+        check_pick(pick, channels)?;
         let rate = cfg.sample_rate().0 as f64;
-        let shared = Arc::new(Shared { frames: AtomicU64::new(0), dropped: AtomicU64::new(0), stop: AtomicBool::new(false), anchor: Mutex::new(None), peaks: Mutex::new(Vec::new()) });
+        let shared = new_shared();
         // Four seconds of headroom; the drain thread empties it every 10 ms.
-        let (prod, mut cons) = rtrb::RingBuffer::<f32>::new((rate as usize * channels * 4).max(1 << 16));
+        let (prod, cons) = rtrb::RingBuffer::<f32>::new((rate as usize * channels * 4).max(1 << 16));
 
         let stream = match cfg.sample_format() {
-            cpal::SampleFormat::F32 => build::<f32>(&dev, &cfg.config(), channels, prod, shared.clone(), clock),
-            cpal::SampleFormat::I16 => build::<i16>(&dev, &cfg.config(), channels, prod, shared.clone(), clock),
-            cpal::SampleFormat::I32 => build::<i32>(&dev, &cfg.config(), channels, prod, shared.clone(), clock),
+            cpal::SampleFormat::F32 => build::<f32>(&dev, &cfg.config(), channels, rate, prod, shared.clone(), clock),
+            cpal::SampleFormat::I16 => build::<i16>(&dev, &cfg.config(), channels, rate, prod, shared.clone(), clock),
+            cpal::SampleFormat::I32 => build::<i32>(&dev, &cfg.config(), channels, rate, prod, shared.clone(), clock),
             f => return Err(format!("unsupported input format {f:?}")),
         }?;
         stream.play().map_err(|e| format!("start input: {e}"))?;
+        let drain = spawn_drain(cons, channels, rate, shared.clone())?;
+        Ok(Recording { stream: Some(stream), shared, drain: Some(drain), rate, channels, pick, device: name })
+    }
 
-        let sh = shared.clone();
-        let drain = std::thread::Builder::new()
-            .name("ggmm-rec-drain".into())
-            .spawn(move || {
-                let mut out: Vec<f32> = Vec::with_capacity(rate as usize * channels * 60);
-                let mut acc = PeakAcc::default();
-                let mut fresh: Vec<f32> = Vec::new();
-                let mut seen = 0usize;
-                loop {
-                    let done = sh.stop.load(Ordering::Acquire);
-                    let n = cons.slots();
-                    if n > 0 {
-                        if let Ok(chunk) = cons.read_chunk(n) {
-                            let (a, b) = chunk.as_slices();
-                            out.extend_from_slice(a);
-                            out.extend_from_slice(b);
-                            chunk.commit_all();
-                        }
-                    }
-                    // Whole frames only; a partial frame waits for the next pass.
-                    let whole = (out.len() / channels.max(1)) * channels.max(1);
-                    if whole > seen {
-                        acc.feed(&out[seen..whole], channels, &mut fresh);
-                        seen = whole;
-                        if !fresh.is_empty() {
-                            sh.peaks.lock().unwrap().extend_from_slice(&fresh);
-                            fresh.clear();
-                        }
-                    }
-                    if done {
-                        break out;
-                    }
-                    std::thread::sleep(Duration::from_millis(10));
-                }
-            })
-            .map_err(|e| format!("drain thread: {e}"))?;
-
-        Ok(Recording { stream, shared, drain: Some(drain), rate, channels, device: name })
+    /// Record the Deck instrument: no input stream — the mixer pushes the
+    /// instrument's output into the returned [`Capture`] (stereo, at the
+    /// engine's rate).
+    pub fn start_deck(rate: f64) -> Result<(Recording, Capture), String> {
+        let shared = new_shared();
+        let (prod, cons) = rtrb::RingBuffer::<f32>::new((rate as usize * 2 * 4).max(1 << 16));
+        let drain = spawn_drain(cons, 2, rate, shared.clone())?;
+        let rec = Recording { stream: None, shared: shared.clone(), drain: Some(drain), rate, channels: 2, pick: None, device: DECK_SOURCE.into() };
+        Ok((rec, Capture { prod, shared }))
     }
 
     /// Live waveform pairs from pair index `from` on; also the frames captured.
@@ -327,7 +432,9 @@ impl Recording {
 
     /// Stop capturing and hand back the take.
     pub fn finish(mut self) -> Take {
-        let _ = self.stream.pause();
+        if let Some(st) = &self.stream {
+            let _ = st.pause();
+        }
         self.shared.stop.store(true, Ordering::Release);
         let data = self.drain.take().and_then(|h| h.join().ok()).unwrap_or_default();
         let anchor = *self.shared.anchor.lock().unwrap();
@@ -340,7 +447,7 @@ impl Recording {
         };
         Take {
             rate: self.rate,
-            channels: deinterleave(&data, self.channels, skip),
+            channels: deinterleave(&data, self.channels, skip, self.pick),
             start,
             in_latency_ms: anchor.map(|a| a.in_latency_ns as f64 / 1e6).unwrap_or(0.0),
             out_latency_ms: anchor.map(|a| a.out_latency_ns as f64 / 1e6).unwrap_or(0.0),
@@ -350,7 +457,147 @@ impl Recording {
     }
 }
 
-fn build<T>(dev: &cpal::Device, cfg: &cpal::StreamConfig, channels: usize, mut prod: rtrb::Producer<f32>, shared: Arc<Shared>, clock: Arc<Clock>) -> Result<cpal::Stream, String>
+// ---- input monitoring --------------------------------------------------------
+
+/// Hear the input while it's armed: an input stream of its own (beside any
+/// recording; PipeWire shares the device) whose samples the mixer plays
+/// through the master. Also measures the input level for the meter.
+pub struct Monitor {
+    _stream: cpal::Stream,
+    peak: Arc<AtomicU32>,
+    pub device: String,
+    pub channels: usize,
+}
+
+/// The audio-thread end of a [`Monitor`].
+pub struct MonitorFeed {
+    cons: rtrb::Consumer<f32>,
+    channels: usize,
+    pick: Option<usize>,
+    primed: bool,
+}
+
+/// Frames kept queued before the monitor starts playing (absorbs callback
+/// jitter between the input and output streams) …
+pub const MONITOR_PRIME: usize = 256;
+/// … and the most it may fall behind before old frames are skipped, so the
+/// delay you hear stays small when the two clocks drift.
+pub const MONITOR_BACKLOG: usize = 1024;
+
+impl MonitorFeed {
+    /// Add one block of the input into L and R (a picked input or a mono
+    /// device in both; otherwise inputs 1 and 2). Never blocks or allocates.
+    pub fn render(&mut self, l: &mut [f64], r: &mut [f64], gain: f64) {
+        let n = l.len();
+        let ch = self.channels.max(1);
+        let mut avail = self.cons.slots() / ch;
+        if !self.primed {
+            if avail < n + MONITOR_PRIME {
+                return;
+            }
+            self.primed = true;
+        }
+        if avail < n {
+            // Ran dry: wait to build the cushion up again.
+            self.primed = false;
+            return;
+        }
+        if avail > n + MONITOR_BACKLOG {
+            let skip = avail - n - MONITOR_PRIME;
+            if let Ok(c) = self.cons.read_chunk(skip * ch) {
+                c.commit_all();
+            }
+            avail -= skip;
+        }
+        let _ = avail;
+        let Ok(chunk) = self.cons.read_chunk(n * ch) else { return };
+        let (a, b) = chunk.as_slices();
+        let at = |i: usize| if i < a.len() { a[i] } else { b[i - a.len()] } as f64;
+        for f in 0..n {
+            let (x, y) = match self.pick {
+                Some(k) => {
+                    let v = at(f * ch + k.min(ch - 1));
+                    (v, v)
+                }
+                None if ch == 1 => (at(f), at(f)),
+                None => (at(f * ch), at(f * ch + 1)),
+            };
+            l[f] += x * gain;
+            r[f] += y * gain;
+        }
+        chunk.commit_all();
+    }
+}
+
+impl Monitor {
+    /// Open `device`'s input for monitoring. It must run at the output's
+    /// rate (`rate`): the mixer plays its samples as they come.
+    pub fn start(device: Option<&str>, pick: Option<usize>, rate: f64) -> Result<(Monitor, MonitorFeed), String> {
+        let dev = pick_input(device)?;
+        let name = dev.name().unwrap_or_else(|_| "default".into());
+        let cfg = choose_config(&dev, rate)?;
+        if cfg.sample_format() != cpal::SampleFormat::F32 {
+            return Err("the input has no f32 format to monitor".into());
+        }
+        if cfg.sample_rate().0 as f64 != rate {
+            return Err(format!("the input runs at {} Hz, the output at {rate} Hz", cfg.sample_rate().0));
+        }
+        let channels = cfg.channels() as usize;
+        check_pick(pick, channels)?;
+        let peak = Arc::new(AtomicU32::new(0));
+        let mut last_err = String::new();
+        // A small fixed buffer when the device allows it (less delay to hear).
+        for fixed in [true, false] {
+            let mut sc = cfg.config();
+            if fixed {
+                sc.buffer_size = cpal::BufferSize::Fixed(256);
+            }
+            let (prod, cons) = rtrb::RingBuffer::<f32>::new(rate as usize * channels / 2);
+            match build_monitor(&dev, &sc, channels, pick, prod, peak.clone()) {
+                Ok(stream) => {
+                    stream.play().map_err(|e| format!("start monitor: {e}"))?;
+                    let feed = MonitorFeed { cons, channels, pick, primed: false };
+                    return Ok((Monitor { _stream: stream, peak, device: name, channels }, feed));
+                }
+                Err(e) => last_err = e,
+            }
+        }
+        Err(format!("open monitor: {last_err}"))
+    }
+
+    /// The loudest input sample since the last call (0..1+), then reset.
+    pub fn take_peak(&self) -> f32 {
+        f32::from_bits(self.peak.swap(0, Ordering::Relaxed))
+    }
+}
+
+fn build_monitor(dev: &cpal::Device, cfg: &cpal::StreamConfig, channels: usize, pick: Option<usize>, mut prod: rtrb::Producer<f32>, peak: Arc<AtomicU32>) -> Result<cpal::Stream, String> {
+    dev.build_input_stream(
+        cfg,
+        move |data: &[f32], _: &cpal::InputCallbackInfo| {
+            let mut p = 0f32;
+            for (i, v) in data.iter().enumerate() {
+                if pick.map_or(true, |k| i % channels == k) {
+                    p = p.max(v.abs());
+                }
+            }
+            let _ = peak.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |old| (p > f32::from_bits(old)).then_some(p.to_bits()));
+            let n = data.len().min(prod.slots());
+            if let Ok(mut chunk) = prod.write_chunk_uninit(n) {
+                let (a, b) = chunk.as_mut_slices();
+                for (dst, src) in a.iter_mut().chain(b.iter_mut()).zip(data.iter()) {
+                    dst.write(*src);
+                }
+                unsafe { chunk.commit_all() };
+            }
+        },
+        |e| eprintln!("ggmm-engine: monitor stream error: {e}"),
+        None,
+    )
+    .map_err(|e| e.to_string())
+}
+
+fn build<T>(dev: &cpal::Device, cfg: &cpal::StreamConfig, channels: usize, rate: f64, mut prod: rtrb::Producer<f32>, shared: Arc<Shared>, clock: Arc<Clock>) -> Result<cpal::Stream, String>
 where
     T: cpal::SizedSample,
     f32: cpal::FromSample<T>,
@@ -363,12 +610,11 @@ where
             let ts = info.timestamp();
             let lat = ts.callback.duration_since(&ts.capture).map(|d| d.as_nanos() as i64).unwrap_or(0);
             let before = shared.frames.load(Ordering::Relaxed);
+            let frames = (data.len() / channels) as u64;
             if let Ok(mut a) = shared.anchor.try_lock() {
                 if a.is_none() {
                     if let Ok(m) = clock.mark.try_lock() {
-                        if let Some(song) = song_at(&m, now - lat) {
-                            *a = Some(Anchor { frame: before, song, in_latency_ns: lat, out_latency_ns: m.latency_ns });
-                        }
+                        *a = anchor_at(&m, now, lat, before, frames, rate);
                     }
                 }
             }
@@ -383,7 +629,7 @@ where
             if n < data.len() {
                 shared.dropped.fetch_add((data.len() - n) as u64, Ordering::Relaxed);
             }
-            shared.frames.store(before + (data.len() / channels) as u64, Ordering::Relaxed);
+            shared.frames.store(before + frames, Ordering::Relaxed);
         },
         |e| eprintln!("ggmm-engine: input stream error: {e}"),
         None,
@@ -452,6 +698,25 @@ mod tests {
     }
 
     #[test]
+    fn a_startup_burst_is_anchored_at_its_newest_frame() {
+        // Playing from song −2 s since wall 0 (no output latency). The input
+        // opened at wall −1.5 s but its first callback comes at +0.5 s with
+        // all 2 s buffered and no latency reported.
+        let m = OutMark { playing: true, song: -2.0, heard_ns: 0, latency_ns: 0 };
+        let a = anchor_at(&m, 500_000_000, 0, 0, 96_000, 48_000.0).unwrap();
+        assert_eq!(a.frame, 96_000);
+        assert!((a.song - -1.5).abs() < 1e-9);
+        // So the take's first frame was captured at song −3.5 s (before the
+        // song started); cut at 0, it keeps exactly what came after.
+        let (start, trim) = place(&a, 48_000.0);
+        assert_eq!((start, trim), (0.0, 168_000));
+        // A backend that reports the first frame's latency honestly gives
+        // the same anchor.
+        let b = anchor_at(&m, 500_000_000, 2_000_000_000, 0, 96_000, 48_000.0).unwrap();
+        assert_eq!((b.frame, b.song), (a.frame, a.song));
+    }
+
+    #[test]
     fn pre_roll_before_zero_is_trimmed() {
         let a = Anchor { frame: 96_000, song: 0.5, in_latency_ns: 0, out_latency_ns: 0 };
         let (start, trim) = place(&a, 48_000.0);
@@ -462,11 +727,68 @@ mod tests {
     #[test]
     fn deinterleave_keeps_two_channels_and_skips() {
         let data = [1.0, 10.0, 100.0, 2.0, 20.0, 200.0, 3.0, 30.0, 300.0];
-        let out = deinterleave(&data, 3, 1);
+        let out = deinterleave(&data, 3, 1, None);
         assert_eq!(out, vec![vec![2.0, 3.0], vec![20.0, 30.0]]);
-        let mono = deinterleave(&[1.0, 2.0, 3.0], 1, 0);
+        let mono = deinterleave(&[1.0, 2.0, 3.0], 1, 0, None);
         assert_eq!(mono, vec![vec![1.0, 2.0, 3.0]]);
-        assert_eq!(deinterleave(&[1.0, 2.0], 2, 5), vec![Vec::<f32>::new(), vec![]]);
+        assert_eq!(deinterleave(&[1.0, 2.0], 2, 5, None), vec![Vec::<f32>::new(), vec![]]);
+        // One input of an interface: input 3 alone, as a mono take.
+        assert_eq!(deinterleave(&data, 3, 0, Some(2)), vec![vec![100.0, 200.0, 300.0]]);
+    }
+
+    #[test]
+    fn the_monitor_primes_then_plays_the_picked_input_and_skips_a_backlog() {
+        let (mut prod, cons) = rtrb::RingBuffer::<f32>::new(1 << 16);
+        let mut feed = MonitorFeed { cons, channels: 2, pick: Some(1), primed: false };
+        let mut push = |frames: usize, v: f32| {
+            for _ in 0..frames {
+                prod.push(9.0).unwrap(); // input 1: not picked
+                prod.push(v).unwrap();
+            }
+        };
+        let (mut l, mut r) = ([0.0; 128], [0.0; 128]);
+        push(200, 0.5);
+        feed.render(&mut l, &mut r, 1.0);
+        assert_eq!(l[0], 0.0); // not enough cushion yet: silent
+        push(200, 0.5);
+        feed.render(&mut l, &mut r, 0.5);
+        assert_eq!((l[0], r[127]), (0.25, 0.25)); // input 2 in both sides, at the gain
+        // Far behind (the clocks drifted): old frames are skipped, so what
+        // plays is the newest audio less the priming cushion.
+        push(4000, 0.1);
+        let (mut l, mut r) = ([0.0; 128], [0.0; 128]);
+        feed.render(&mut l, &mut r, 1.0);
+        assert!((l[0] - 0.1).abs() < 1e-6);
+        assert_eq!(feed.cons.slots() / 2, MONITOR_PRIME);
+    }
+
+    #[test]
+    fn a_missing_input_is_refused() {
+        assert!(check_pick(Some(1), 2).is_ok());
+        assert!(check_pick(None, 1).is_ok());
+        assert_eq!(check_pick(Some(2), 2).unwrap_err(), "input 3 doesn't exist (the device has 2)");
+    }
+
+    #[test]
+    fn a_deck_take_is_placed_where_it_was_heard() {
+        let (rec, mut cap) = Recording::start_deck(48_000.0).unwrap();
+        let block = |v: f64| (vec![v; 128], vec![-v; 128]);
+        // Two blocks with the transport stopped, then playing from song 10 s.
+        let (l, r) = block(0.0);
+        cap.push(&l, &r, 0.0, false, 0.02);
+        cap.push(&l, &r, 0.0, false, 0.02);
+        let (l, r) = block(0.5);
+        cap.push(&l, &r, 10.0, true, 0.02);
+        cap.push(&l, &r, 10.0 + 128.0 / 48_000.0, true, 0.02);
+        std::thread::sleep(Duration::from_millis(30));
+        let t = rec.finish();
+        // 256 frames of pre-roll before the anchor at 10 s − 20 ms.
+        assert!((t.start.unwrap() - (10.0 - 0.02 - 256.0 / 48_000.0)).abs() < 1e-9);
+        assert_eq!(t.channels.len(), 2);
+        assert_eq!(t.channels[0].len(), 512);
+        assert_eq!((t.channels[0][300], t.channels[1][300]), (0.5, -0.5));
+        assert_eq!(t.device, DECK_SOURCE);
+        assert_eq!(t.dropped, 0);
     }
 
     #[test]

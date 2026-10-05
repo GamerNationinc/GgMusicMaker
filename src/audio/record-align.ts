@@ -81,8 +81,25 @@ export function applyOffset(
   return { channels: channels.map((c) => c.subarray(cut)), start: 0 };
 }
 
+/**
+ * Cut whatever a take holds from before `at` (s): a count-in's bar is
+ * heard, not kept — the take starts where Record was pressed.
+ */
+export function trimBefore(
+  channels: Float32Array[],
+  start: number,
+  at: number,
+  sampleRate: number,
+): { channels: Float32Array[]; start: number } {
+  if (start >= at) return { channels, start };
+  const cut = Math.min(channels[0]?.length ?? 0, Math.round((at - start) * sampleRate));
+  return { channels: channels.map((c) => c.subarray(cut)), start: at };
+}
+
 /** Where the calibrated latency is kept (per output+input device pair). */
-export const LATENCY_KEY = "ggmm.recordLatency";
+// v2 (2026-10-05): takes are anchored on each block's newest frame, which
+// moves the measured round trip — older calibrations don't apply.
+export const LATENCY_KEY = "ggmm.recordLatency.v2";
 
 export interface StoredLatency {
   devices: string;
