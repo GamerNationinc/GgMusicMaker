@@ -170,7 +170,7 @@ build, not one you compiled yourself on a newer distro** (see the glibc note bel
 
 ```bash
 chmod +x install-steamdeck.sh
-./install-steamdeck.sh ~/Downloads/GgMusicMaker_0.1.0_amd64.AppImage
+./install-steamdeck.sh ~/Downloads/GgMusicMaker-0.2.0-x86_64.AppImage
 ```
 
 That copies the AppImage to `~/Applications`, installs the icons, and adds a menu entry —

@@ -1,7 +1,7 @@
 {
   "name": "ggmusicmaker",
-  "version": "0.1.0",
-  "description": "GgMusicMaker \u2014 a simple, playful DAW for the Steam Deck",
+  "version": "0.2.0",
+  "description": "GgMusicMaker — a simple, playful DAW for the Steam Deck",
   "type": "module",
   "scripts": {
     "dev": "vite",

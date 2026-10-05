@@ -27,7 +27,7 @@ fi
 
 if [ -z "${SRC_APPIMAGE:-}" ] || [ ! -f "$SRC_APPIMAGE" ]; then
   echo "error: no AppImage found." >&2
-  echo "  Pass one explicitly:  $0 ~/Downloads/GgMusicMaker_0.1.0_amd64.AppImage" >&2
+  echo "  Pass one explicitly:  $0 ~/Downloads/GgMusicMaker-0.2.0-x86_64.AppImage" >&2
   echo "  Or build one first:   npm run dist:deck" >&2
   exit 1
 fi
