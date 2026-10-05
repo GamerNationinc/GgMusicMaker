@@ -142,6 +142,8 @@ export class AudioEngine implements AudioBackend {
 
   /** Context time at which song time 0 plays (BASS MOD's LFO lock). */
   private songOrigin = 0;
+  /** Song time of bar 1 (the tempo grid's offset): BASS MOD's LFO counts from it. */
+  private barOrigin = 0;
   private binauralAvailable = false;
   private liveAvailable = false;
   /** The live instrument (public/live-processor.js): output 0 dry → master,
@@ -287,7 +289,7 @@ export class AudioEngine implements AudioBackend {
   private createChannel(trackId: string): TrackChannel {
     const ch = new TrackChannel(this.ctx, this.synthAvailable, this.master.channels);
     ch.connect(this.master.input, this.convolver);
-    ch.setSongOrigin(this.songOrigin);
+    ch.setSongOrigin(this.songOrigin + this.barOrigin);
     this.channels.set(trackId, ch);
     return ch;
   }
@@ -319,6 +321,10 @@ export class AudioEngine implements AudioBackend {
   }
 
   syncAll(project: Project): void {
+    if (project.tempo.offset !== this.barOrigin) {
+      this.barOrigin = project.tempo.offset;
+      for (const ch of this.channels.values()) ch.setSongOrigin(this.songOrigin + this.barOrigin);
+    }
     const hasSolo = anySoloed(project);
     for (const track of project.tracks) this.applyTrackParams(track, hasSolo);
   }
@@ -332,11 +338,12 @@ export class AudioEngine implements AudioBackend {
     this.playStartCtxTime = startAt;
     this.playStartOffset = fromTime;
     this.songOrigin = startAt - fromTime;
+    this.barOrigin = project.tempo.offset;
 
     for (const track of project.tracks) {
       const channel = this.ensureChannel(track);
       channel.applyTrack(track, hasSolo);
-      channel.setSongOrigin(this.songOrigin);
+      channel.setSongOrigin(this.songOrigin + this.barOrigin);
       // Schedule every track, audible or not: mute/solo are just the channel
       // gain, so toggling them mid-playback must find sources already running.
       // Skipping inaudible tracks here left them silent until the next play.
@@ -575,6 +582,8 @@ export class AudioEngine implements AudioBackend {
       const channel = new TrackChannel(offline, hasSynth, channels);
       channel.connect(master.input, convolver);
       channel.applyTrack(track, hasSolo, /* smooth */ false);
+      // Offline, context time is song time.
+      channel.setSongOrigin(project.tempo.offset);
 
       for (const clip of track.clips) {
         const buffer = this.buffers.get(clip.bufferId);

@@ -9,6 +9,7 @@ import type { FxEnabled } from "../fx/chain";
 import type { MorphParams } from "../fx/morph";
 import type { PunchParams } from "../fx/punch";
 import type { BassParams } from "../fx/bass";
+import type { Tempo } from "./tempo";
 
 /** A region of a source buffer placed on the timeline. Non-destructive:
  *  split/trim only adjust offset/duration/startTime — the buffer is untouched. */
@@ -90,6 +91,8 @@ export interface Project {
   /** Output layout: stereo, 5.1 or 7.1. Drives the live bus when the device
    *  has the channels, and the channel count of an exported WAV. */
   surround: SurroundLayout;
+  /** The song's tempo + bar grid. Every layer's BASS MOD follows its BPM. */
+  tempo: Tempo;
 }
 
 /** Live transport state, kept separate from the (undoable) project model. */

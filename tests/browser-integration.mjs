@@ -637,6 +637,63 @@ async function main() {
   await page.waitForTimeout(300);
   await page.click(".dialog button");
 
+  // --- song tempo, bar grid, snap -------------------------------------------
+  check("BASS MOD's BPM is the song's tempo", (await page.inputValue("[data-role=bpm]")) === "100", await page.inputValue("[data-role=bpm]"));
+  await page.fill("[data-role=bpm]", "90");
+  await page.press("[data-role=bpm]", "Enter");
+  await page.waitForTimeout(100);
+  check("setting the song tempo moves BASS MOD with it", (await page.inputValue(".bpm-num")) === "90", await page.inputValue(".bpm-num"));
+  const clockTime = () => page.$eval("[data-role=clock]", (el) => Number(el.dataset.time));
+  const barsText = () => page.textContent("[data-role=bars]").then((t) => t.trim());
+  {
+    const lane = await page.$eval(".lanes-scroll", (el) => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y + r.height - 6 }; });
+    // Shift = place freely: the playhead lands off the grid, then B makes a bar start there.
+    await page.keyboard.down("Shift");
+    await page.mouse.click(lane.x + 237, lane.y);
+    await page.keyboard.up("Shift");
+    const t1 = await clockTime();
+    await page.evaluate(() => document.activeElement?.blur?.());
+    await page.keyboard.press("b");
+    await page.waitForTimeout(100);
+    check("B makes a bar start at the playhead", /^\d+\.1\.1$/.test(await barsText()), `${await barsText()} at ${t1.toFixed(3)}s`);
+    const sixteenth = 60 / 90 / 4;
+    const onGrid = (t) => Math.abs((t - t1) / sixteenth - Math.round((t - t1) / sixteenth)) < 1e-3;
+    await page.mouse.click(lane.x + 411, lane.y);
+    const t2 = await clockTime();
+    check("a click snaps the playhead to the grid (counted from that bar)", t2 !== t1 && onGrid(t2), `${t2.toFixed(4)}s`);
+    check("SNAP shows as on", (await page.getAttribute("[data-role=snap]", "aria-pressed")) === "true");
+    await page.keyboard.press("Control+4");
+    await page.waitForTimeout(50);
+    check("Ctrl+4 turns snap off", (await page.getAttribute("[data-role=snap]", "aria-pressed")) === "false");
+    await page.mouse.click(lane.x + 413, lane.y);
+    const t3 = await clockTime();
+    check("with snap off, a click lands where it's clicked", !onGrid(t3), `${t3.toFixed(4)}s`);
+    await page.click("[data-role=snap]");
+    check("the SNAP button turns it back on", (await page.getAttribute("[data-role=snap]", "aria-pressed")) === "true");
+    await page.selectOption("[data-role=signature]", "3");
+    await page.waitForTimeout(50);
+    check("time signature 3/4", (await page.inputValue("[data-role=signature]")) === "3");
+    await page.evaluate(() => document.activeElement?.blur?.());
+    await page.keyboard.press("Control+z");
+    await page.waitForTimeout(50);
+    check("undo puts the time signature back", (await page.inputValue("[data-role=signature]")) === "4", await page.inputValue("[data-role=signature]"));
+    const rulerInk = await page.evaluate(() => {
+      const c = document.querySelector(".ruler-track canvas");
+      const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+      let n = 0;
+      for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] > 300) n++;
+      return n;
+    });
+    check("the ruler draws bar numbers", rulerInk > 50, `${rulerInk} bright px`);
+    // Every control on one line, none squeezed onto two.
+    const corner = await page.$eval(".ruler-row .corner", (el) => ({
+      w: el.clientWidth,
+      sw: el.scrollWidth,
+      tall: [...el.querySelectorAll("button, select, input")].filter((c) => c.getBoundingClientRect().height > 24).length,
+    }));
+    check("tempo controls fit the corner on one line", corner.sw <= corner.w && corner.tall === 0, `${corner.sw} in ${corner.w}, ${corner.tall} wrapped`);
+  }
+
   // --- layer stacks + instrument racks ---------------------------------------
   await page.keyboard.press("Control+n");
   await page.waitForTimeout(400);

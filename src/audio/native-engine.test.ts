@@ -89,6 +89,26 @@ describe.skipIf(!has)("native engine (Rust)", () => {
     expect(maxErr).toBeLessThan(2e-4);
   });
 
+  it("BASS MOD's LFO counts from bar 1 (barOrigin), like the worklet's songT0", async () => {
+    const p0 = bassPresetParams(BASS_PRESETS.find((x) => x.name === "Festival")!);
+    const p = Object.fromEntries(Object.entries(p0).map(([k, v]) => [k, Math.fround(v)])) as unknown as BassParams;
+    const m = Math.fround(0.05) * MAKEUP;
+    const origin = 0.3125; // bar 1 a little into the song
+    const [l, r] = await native!.renderOffline(
+      JSON.stringify({ tracks: [track({ bass: p })], masterGain: 0.05, barOrigin: origin }),
+      ["b"], [SR], [[input[0], input[1]]], SR, 0,
+    );
+    const core = new BassCore(SR);
+    core.set(p);
+    let maxErr = 0;
+    for (let i = 0; i + AHEAD < input[0].length; i++) {
+      if (i % 128 === 0) core.block(i / SR - origin);
+      core.step(input[0][i], input[1][i]);
+      maxErr = Math.max(maxErr, Math.abs(l[i + AHEAD] / m - core.l), Math.abs(r[i + AHEAD] / m - core.r));
+    }
+    expect(maxErr).toBeLessThan(2e-4);
+  });
+
   it("mute (gain 0) is silent; pan hard left empties the right channel", async () => {
     const [, r0] = await render([track({ gain: 0 })], 0.5, input);
     expect(r0.every((v) => v === 0)).toBe(true);

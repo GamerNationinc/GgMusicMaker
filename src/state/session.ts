@@ -25,7 +25,8 @@ import { normalizeSynth, SURROUND_ORDER, type SurroundLayout } from "../fx/voice
 import { normalizeFx } from "../fx/chain";
 import { normalizeMorph } from "../fx/morph";
 import { normalizePunch } from "../fx/punch";
-import { normalizeBass } from "../fx/bass";
+import { normalizeBass, bassIsActive } from "../fx/bass";
+import { normalizeTempo, followSongTempo } from "../audio/tempo";
 
 export const SESSION_EXTENSION = "ggmm";
 // v1: tracks had `voice: { preset, mix }`; v2: `synth` (Voice Synth) + project.surround;
@@ -315,7 +316,11 @@ export function migrateProject(project: Project): Project {
     } as Track;
   });
   const surround: SurroundLayout = SURROUND_ORDER.includes(project.surround) ? project.surround : "stereo";
-  return { ...project, tracks, surround };
+  // Song tempo (older files had none): BASS MOD carried its own BPM per
+  // layer, so a song that used it keeps that tempo.
+  const bassBpm = tracks.find((t) => bassIsActive(t.bass))?.bass.bpm;
+  const tempo = normalizeTempo((project as Partial<Project>).tempo, bassBpm);
+  return followSongTempo({ ...project, tracks, surround, tempo });
 }
 
 /** Strip the path and extension from a session path for display. */

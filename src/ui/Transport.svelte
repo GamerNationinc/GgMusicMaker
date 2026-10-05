@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { transport, togglePlay, stop, seek, masterLevel, engine } from "../state/store";
+  import { transport, togglePlay, stop, seek, masterLevel, engine, project } from "../state/store";
+  import { formatBarsBeats } from "../audio/tempo";
 
   function fmt(t: number): string {
     const m = Math.floor(t / 60);
@@ -30,7 +31,10 @@
   </button>
   <button class="btn" onclick={() => { stop(); seek(0); }} aria-label="Stop">■</button>
 
-  <div class="time screen">{fmt($transport.playhead)}</div>
+  <div class="time screen" data-role="clock" data-time={$transport.playhead}>
+    <span class="clock">{fmt($transport.playhead)}</span>
+    <span class="bars" title="Bar . beat . 16th" data-role="bars">{formatBarsBeats($transport.playhead, $project.tempo)}</span>
+  </div>
 
   <div class="meter" title="Master level">
     {#each segments as i}
@@ -59,10 +63,21 @@
     font-size: 18px;
   }
   .time {
-    font-size: 22px;
-    letter-spacing: 2px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    line-height: 1;
     min-width: 130px;
-    text-align: center;
+  }
+  .clock {
+    font-size: 18px;
+    letter-spacing: 2px;
+  }
+  .bars {
+    font-size: 10px;
+    letter-spacing: 1px;
+    color: var(--ink-dim);
+    margin-top: 1px;
   }
   .meter {
     display: flex;

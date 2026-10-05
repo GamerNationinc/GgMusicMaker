@@ -95,6 +95,7 @@ export function nativeProjectSpec(project: Project, opts: { masterGain: number; 
     surround: surroundChannels(project.surround),
     reverb: opts.reverb,
     binaural: opts.binaural,
+    barOrigin: project.tempo.offset,
     tracks: project.tracks.map((t) => {
       const audible = isTrackAudible(t, solo);
       return {

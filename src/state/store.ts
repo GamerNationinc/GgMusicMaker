@@ -55,6 +55,7 @@ import {
   punchPresetParams,
   type PunchKey,
 } from "../fx/punch";
+import { DEFAULT_TEMPO, clampBpm, foldOffset, followSongTempo, formatBpm, BEATS_PER_BAR } from "../audio/tempo";
 import { DEFAULT_BASS, BASS_PRESETS, clampBassValue, bassPresetParams, type BassKey } from "../fx/bass";
 import {
   packSessionParts,
@@ -192,6 +193,7 @@ export const project = writable<Project>({
   tracks: [],
   sampleRate: engine.sampleRate,
   surround: "stereo",
+  tempo: { ...DEFAULT_TEMPO },
 });
 
 export const transport = writable<TransportState>({
@@ -370,6 +372,8 @@ function updateProject(fn: (p: Project) => Project, opts: EditOptions = {}): voi
     if (next === p) return p;
     // Linked stack layers follow every clip edit made on any one of them.
     next = syncStacks(p, next);
+    // New layers, racks and presets all pick up the song's BPM.
+    next = followSongTempo(next);
     if (opts.history !== false) {
       setHistory(history.push(hist, p, opts.history ?? null, performance.now()));
       dirty.set(true);
@@ -652,8 +656,10 @@ export async function applyPunchPreset(trackId: string, name: string): Promise<v
   status.set(`PUNCH: ${preset.name} on the selected layer.`);
 }
 
-/** Turn one BASS MOD knob. Drags coalesce into a single undo step. */
+/** Turn one BASS MOD knob. Drags coalesce into a single undo step. Its BPM
+ *  is the song's: changing it on one layer changes the song tempo. */
 export function setBassParam(trackId: string, key: BassKey, value: number): void {
+  if (key === "bpm") return setBpm(value);
   const v = clampBassValue(key, value);
   updateTrack(trackId, (t) => (t.bass[key] === v ? t : { ...t, bass: { ...t.bass, [key]: v } }), {
     history: `bass:${key}:${trackId}`,
@@ -809,6 +815,57 @@ async function importList(list: File[], report: (p: number | null, detail?: stri
       status.set(`Couldn't decode ${file.name}: ${(err as Error).message}`);
     }
   }
+}
+
+// ---- tempo + grid ---------------------------------------------------------
+
+/** Set the song tempo. Drags and taps coalesce into one undo step. The grid's
+ *  bar 1 stays where it is; audio clips don't move (they aren't warped). */
+export function setBpm(bpm: number): void {
+  const v = clampBpm(bpm);
+  updateProject((p) => (p.tempo.bpm === v ? p : { ...p, tempo: { ...p.tempo, bpm: v, offset: foldOffset(p.tempo.offset, { ...p.tempo, bpm: v }) } }), {
+    history: "tempo:bpm",
+  });
+  status.set(`Song tempo ${formatBpm(v)} BPM.`);
+}
+
+/** Beats in a bar: 2–7 (4 = 4/4, 3 = 3/4 …). */
+export function setBeatsPerBar(n: number): void {
+  if (!(BEATS_PER_BAR as readonly number[]).includes(n)) return;
+  updateProject((p) => (p.tempo.beatsPerBar === n ? p : { ...p, tempo: { ...p.tempo, beatsPerBar: n, offset: foldOffset(p.tempo.offset, { ...p.tempo, beatsPerBar: n }) } }));
+  status.set(`Time signature ${n}/4.`);
+}
+
+/** Lay the grid so a bar starts at `time` — line it up with an imported
+ *  song's downbeat. BASS MOD's sweeps restart on that bar too. */
+export function setDownbeat(time: number): void {
+  updateProject((p) => {
+    const offset = foldOffset(time, p.tempo);
+    return Math.abs(offset - p.tempo.offset) < 1e-9 ? p : { ...p, tempo: { ...p.tempo, offset } };
+  });
+  status.set(`A bar now starts at ${time.toFixed(2)}s.`);
+}
+
+function readSnap(): boolean {
+  try {
+    return localStorage.getItem("ggmm.snap") !== "off";
+  } catch {
+    return true;
+  }
+}
+/** Snap to grid: clip moves, trims and clicks land on the nearest visible
+ *  grid line. A view setting (like zoom), not part of the undoable song. */
+export const snapToGrid = writable<boolean>(readSnap());
+export function toggleSnap(): boolean {
+  const on = !get(snapToGrid);
+  snapToGrid.set(on);
+  try {
+    localStorage.setItem("ggmm.snap", on ? "on" : "off");
+  } catch {
+    /* storage blocked: it just won't be remembered */
+  }
+  status.set(on ? "Snap to grid on (hold Alt while dragging to place freely)." : "Snap to grid off.");
+  return on;
 }
 
 // ---- editing --------------------------------------------------------------
@@ -1200,7 +1257,7 @@ async function confirmDiscard(): Promise<boolean> {
 /** Start over with an empty project. */
 export async function newSession(): Promise<void> {
   if (!(await confirmDiscard())) return;
-  resetWorkspace({ tracks: [], sampleRate: engine.sampleRate, surround: "stereo" });
+  resetWorkspace({ tracks: [], sampleRate: engine.sampleRate, surround: "stereo", tempo: { ...DEFAULT_TEMPO } });
   sessionPath.set(null);
   dirty.set(false);
   await clearAutosave();

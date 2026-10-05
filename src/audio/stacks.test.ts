@@ -2,11 +2,12 @@ import { describe, it, expect } from "vitest";
 import { syncStacks, ensureLinkIds, makeStackLayer } from "./stacks";
 import type { Clip, Project, Track } from "./types";
 import { splitClip, moveClip } from "./edits";
+import { DEFAULT_TEMPO } from "./tempo";
 
 const clip = (id: string, start = 0): Clip => ({ id, bufferId: "b", startTime: start, offset: 0, duration: 4, name: "x" });
 const tr = (id: string, clips: Clip[], stackId: string | null = "s", linked = true): Track =>
   ({ id, name: id, clips, stackId, linked } as unknown as Track);
-const proj = (tracks: Track[]): Project => ({ tracks, sampleRate: 48000, surround: "stereo" });
+const proj = (tracks: Track[]): Project => ({ tracks, sampleRate: 48000, surround: "stereo", tempo: { ...DEFAULT_TEMPO } });
 
 describe("layer stacks", () => {
   const src = tr("a", ensureLinkIds([clip("c1"), clip("c2", 5)]));

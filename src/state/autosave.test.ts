@@ -3,6 +3,7 @@ import { Autosaver, recoverAutosave, type AutosaveBridge, type AutosaveMeta, typ
 import { type SessionExtras, type SessionHeaderBase } from "./session";
 import type { Project, Track } from "../audio/types";
 import type { PcmSource } from "../audio/wav";
+import { DEFAULT_TEMPO } from "../audio/tempo";
 
 function pcm(samples: number[]): PcmSource {
   const data = new Float32Array(samples);
@@ -27,7 +28,7 @@ function track(id: string, bufferIds: string[]): Track {
   } as unknown as Track;
 }
 
-const project = (bufs: string[]): Project => ({ sampleRate: 48000, surround: "stereo", tracks: [track("track_1", bufs)] });
+const project = (bufs: string[]): Project => ({ sampleRate: 48000, surround: "stereo", tempo: { ...DEFAULT_TEMPO }, tracks: [track("track_1", bufs)] });
 const extras: SessionExtras = { reverbSpace: "room", pixelsPerSecond: 80, playhead: 0 };
 
 /** In-memory stand-in for electron/autosave.cjs. */

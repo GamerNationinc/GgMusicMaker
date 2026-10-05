@@ -19,6 +19,7 @@ import {
 } from "./edits";
 import { __resetIds } from "./types";
 import type { Clip, Project, Track } from "./types";
+import { DEFAULT_TEMPO } from "./tempo";
 
 function makeClip(over: Partial<Clip> = {}): Clip {
   return {
@@ -113,7 +114,7 @@ describe("clipEnd + projectDuration", () => {
   it("computes project duration as the furthest clip end", () => {
     const project: Project = {
       sampleRate: 48000,
-      surround: "stereo",
+      surround: "stereo", tempo: { ...DEFAULT_TEMPO },
       tracks: [
         { clips: [makeClip({ startTime: 0, duration: 3 })] } as Track,
         { clips: [makeClip({ startTime: 5, duration: 4 })] } as Track,
@@ -123,7 +124,7 @@ describe("clipEnd + projectDuration", () => {
   });
 
   it("is zero for an empty project", () => {
-    expect(projectDuration({ sampleRate: 48000, surround: "stereo", tracks: [] })).toBe(0);
+    expect(projectDuration({ sampleRate: 48000, surround: "stereo", tempo: { ...DEFAULT_TEMPO }, tracks: [] })).toBe(0);
   });
 });
 
@@ -170,11 +171,11 @@ describe("solo / mute audibility", () => {
   it("anySoloed detects solo state", () => {
     const p: Project = {
       sampleRate: 48000,
-      surround: "stereo",
+      surround: "stereo", tempo: { ...DEFAULT_TEMPO },
       tracks: [base({}), base({ soloed: true })],
     };
     expect(anySoloed(p)).toBe(true);
-    expect(anySoloed({ sampleRate: 48000, surround: "stereo", tracks: [base({})] })).toBe(false);
+    expect(anySoloed({ sampleRate: 48000, surround: "stereo", tempo: { ...DEFAULT_TEMPO }, tracks: [base({})] })).toBe(false);
   });
 });
 

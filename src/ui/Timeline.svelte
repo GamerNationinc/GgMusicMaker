@@ -10,7 +10,10 @@
     moveClipTo,
     trimClipTo,
     liveRecording,
+    snapToGrid,
+    setDownbeat,
   } from "../state/store";
+  import { beatSeconds, gridBeats, gridLines, snapTime, type GridLine } from "../audio/tempo";
   import { getSummary, columnStats, type ColumnStats } from "../render/peaks";
   import { clipEnd, projectDuration } from "../audio/edits";
   import type { Clip, Track } from "../audio/types";
@@ -19,6 +22,7 @@
   import { Glide, fitRange, followScroll, zoomAround } from "./navMath";
   import { wheelGuard } from "../input/controller";
   import TrackHead from "./TrackHead.svelte";
+  import TempoControls from "./TempoControls.svelte";
   import { theme } from "./themeStore";
   import { laneColor } from "./themes";
   import { punchPreviewFor, previewTick } from "./punchPreviewStore";
@@ -59,18 +63,17 @@
     if (x !== view.x || y !== view.y || w !== view.w || h !== view.h) view = { x, y, w, h };
   }
 
-  /** Ruler/grid spacing so labels stay ~70 px apart at any zoom. */
-  const STEPS = [0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300];
-  function gridStep(pps: number): number {
-    for (const s of STEPS) if (s * pps >= 70) return s;
-    return 600;
+  /** The bar/beat grid lines between two song times, at the step this zoom shows. */
+  function visibleGrid(from: number, to: number): GridLine[] {
+    const tempo = $project.tempo;
+    const step = gridBeats(tempo, $pixelsPerSecond);
+    return gridLines(tempo, step, from, to);
   }
-  function timeLabel(t: number, step: number): string {
-    const m = Math.floor(t / 60);
-    const sec = t - m * 60;
-    const digits = step < 0.01 ? 3 : step < 0.1 ? 2 : step < 1 ? 1 : 0;
-    const ss = sec.toFixed(digits).padStart(digits ? 3 + digits : 2, "0");
-    return m > 0 ? `${m}:${ss}` : `${sec.toFixed(digits)}s`;
+
+  /** Grid snapping for a pointer: on unless switched off or Shift/Alt is held. */
+  function snap(t: number, e: { shiftKey: boolean; altKey: boolean }): number {
+    if (!$snapToGrid || e.shiftKey || e.altKey) return t;
+    return snapTime(t, $project.tempo, gridBeats($project.tempo, $pixelsPerSecond));
   }
 
   // ---- drawing ------------------------------------------------------------
@@ -100,7 +103,7 @@
     ctx.save();
     ctx.translate(-vx, -vy);
     const k = $theme.tokens;
-    const step = gridStep(pps);
+    const lines = visibleGrid(vx / pps, (vx + w) / pps);
     const first = Math.max(0, Math.floor(vy / LANE_HEIGHT));
     const last = Math.min($project.tracks.length - 1, Math.floor((vy + h) / LANE_HEIGHT));
 
@@ -111,13 +114,19 @@
       ctx.fillRect(vx, y, w, LANE_HEIGHT);
       ctx.strokeStyle = k.grid;
       ctx.lineWidth = 1;
-      ctx.beginPath();
-      for (let t = Math.floor(vx / pps / step) * step; t * pps < vx + w; t += step) {
-        const x = Math.round(t * pps) + 0.5;
-        ctx.moveTo(x, y);
-        ctx.lineTo(x, y + LANE_HEIGHT);
+      // Bars full strength, beats softer, 16ths/8ths faint.
+      for (const [kind, alpha] of [["sub", 0.3], ["beat", 0.6], ["bar", 1]] as const) {
+        ctx.globalAlpha = alpha;
+        ctx.beginPath();
+        for (const l of lines) {
+          if (l.kind !== kind) continue;
+          const x = Math.round(l.time * pps) + 0.5;
+          ctx.moveTo(x, y);
+          ctx.lineTo(x, y + LANE_HEIGHT);
+        }
+        ctx.stroke();
       }
-      ctx.stroke();
+      ctx.globalAlpha = 1;
       for (const clip of track.clips) {
         const cx = clip.startTime * pps;
         if (cx > vx + w || cx + clip.duration * pps < vx) continue;
@@ -382,14 +391,28 @@
     ctx.fillRect(0, 0, w, RULER_HEIGHT);
     ctx.fillStyle = k["ink-dim"];
     ctx.strokeStyle = k.box;
-    ctx.font = "10px 'DejaVu Sans Mono', monospace";
-    const step = gridStep(pps);
+    // Bars like Ableton: numbers every 1, 2, 4… bars so they stay ~44 px
+    // apart; once a beat is that wide, beats get "bar.beat" labels too.
+    const tempo = $project.tempo;
+    const beatPx = beatSeconds(tempo) * pps;
+    let every = 1;
+    while (every * beatPx * tempo.beatsPerBar < 44) every *= 2;
+    const beatLabels = beatPx >= 44;
     ctx.beginPath();
-    for (let t = Math.floor(vx / pps / step) * step; t * pps < vx + w; t += step) {
-      const x = Math.round(t * pps - vx) + 0.5;
-      ctx.moveTo(x, RULER_HEIGHT - 8);
+    for (const l of visibleGrid(vx / pps, (vx + w) / pps)) {
+      const x = Math.round(l.time * pps - vx) + 0.5;
+      const tick = l.kind === "bar" ? 14 : l.kind === "beat" ? 8 : 4;
+      ctx.moveTo(x, RULER_HEIGHT - tick);
       ctx.lineTo(x, RULER_HEIGHT);
-      ctx.fillText(timeLabel(Math.round(t / step) * step, step), x + 3, 12);
+      if (l.kind === "bar" && l.bar >= 0 && l.bar % every === 0) {
+        ctx.font = "bold 10px 'DejaVu Sans Mono', monospace";
+        ctx.fillStyle = k.ink;
+        ctx.fillText(String(l.bar + 1), x + 3, 12);
+      } else if (l.kind === "beat" && beatLabels && l.bar >= 0) {
+        ctx.font = "9px 'DejaVu Sans Mono', monospace";
+        ctx.fillStyle = k["ink-dim"];
+        ctx.fillText(`${l.bar + 1}.${Math.round(l.beat) + 1}`, x + 3, 12);
+      }
     }
     ctx.stroke();
   }
@@ -560,11 +583,11 @@
     const track = $project.tracks[ti];
     const empty = () => {
       if (touch) {
-        pan = { x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, moved: false, time };
+        pan = { x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, moved: false, time: snap(time, e) };
         return;
       }
       selectClip(null);
-      seek(time);
+      seek(snap(time, e));
     };
     if (!track) {
       empty();
@@ -617,7 +640,8 @@
       }
     }
     if (!drag) return;
-    const time = eventTime(e);
+    // Moves snap the clip's start, trims the edge being dragged.
+    const time = drag.kind === "move" ? snap(eventTime(e) - drag.grab, e) + drag.grab : snap(eventTime(e), e);
     if (drag.kind === "move") {
       moveClipTo(drag.trackId, drag.clipId, time - drag.grab);
     } else if (drag.kind === "trim-l") {
@@ -680,7 +704,11 @@
   }
 
   function onRulerUp(e: PointerEvent) {
-    if (rulerDrag && !rulerDrag.moved) seek(rulerDrag.t);
+    if (rulerDrag && !rulerDrag.moved) {
+      // Shift+click: a bar starts here (line the grid up with the song).
+      if (e.shiftKey) setDownbeat(rulerDrag.t);
+      else seek(snap(rulerDrag.t, e));
+    }
     rulerDrag = null;
     try {
       rulerCanvas.releasePointerCapture(e.pointerId);
@@ -725,13 +753,13 @@
   <!-- Ruler row: corner + scrollable ruler -->
   <div class="ruler-row" style:height="{RULER_HEIGHT}px" bind:this={rulerRow}>
     <div class="corner" style:width="{HEAD_WIDTH}px">
-      <span class="label">LAYERS</span>
+      <TempoControls />
       <button
         class="follow"
         class:on={$follow}
         onclick={() => nav.toggleFollow()}
         aria-pressed={$follow}
-        title="Follow: the view turns the page with the playhead (F)">⇥ FOLLOW</button>
+        title="Follow: the view turns the page with the playhead (F)">FOLLOW</button>
     </div>
     <div class="ruler-scroll" bind:this={rulerScroll}>
       <div class="ruler-track" style:width="{contentWidth}px" style:height="{RULER_HEIGHT}px">
@@ -742,7 +770,7 @@
           onpointerup={onRulerUp}
           onpointercancel={onRulerUp}
           ondblclick={() => nav.fit()}
-          title="Click: jump · drag down/up: zoom in/out · drag sideways: scroll · double-click: whole song"
+          title="Click: jump · Shift+click: a bar starts here · drag down/up: zoom in/out · drag sideways: scroll · double-click: whole song"
           style:height="{RULER_HEIGHT}px"
         ></canvas>
       </div>
@@ -787,7 +815,8 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0 4px 0 10px;
+    gap: 3px;
+    padding: 0 3px 0 4px;
     border-right: 1px solid var(--box);
     border-bottom: 1px solid var(--box);
   }
@@ -846,11 +875,13 @@
     font-size: 9px;
     letter-spacing: 1px;
     min-height: 20px;
-    padding: 0 6px;
+    padding: 0 4px;
     border: 1px solid var(--box, var(--bevel-dark));
     background: var(--panel-lo);
     color: var(--ink-dim);
     cursor: pointer;
+    white-space: nowrap;
+    flex: 0 0 auto;
   }
   .follow.on {
     color: var(--green);

@@ -29,11 +29,4 @@ export function lfoPath(shape: number, w: number, h: number, steps = 96): string
   return pts.join(" ");
 }
 
-/** Tap tempo: keep taps from the last 2.5 s (max 6); the BPM once there are
- *  at least two, from the average gap. */
-export function tapTempo(taps: number[], now: number): { taps: number[]; bpm: number | null } {
-  const kept = [...taps.filter((t) => now - t < 2500), now].slice(-6);
-  if (kept.length < 2) return { taps: kept, bpm: null };
-  const gap = (kept[kept.length - 1] - kept[0]) / (kept.length - 1);
-  return { taps: kept, bpm: Math.max(40, Math.min(240, Math.round(60000 / gap))) };
-}
+export { tapTempo } from "../audio/tempo";

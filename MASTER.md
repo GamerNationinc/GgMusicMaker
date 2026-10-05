@@ -260,6 +260,12 @@ Asked for: an Ableton-like, Deck-friendly way to move round the timeline; an FX 
 |---|---|
 | **Record starts the transport** when it's stopped (you hear what you play along to); **R** again ends the take and keeps playing; **Stop / Space** ends the take and stops. While recording the song **keeps rolling past its end** (it used to auto-stop and rewind at the last clip). Starting a New / Open while recording drops the take as before. | `test:record`: R from stopped → ❚❚; Stop ends the take and stops (17/17; overdub still 0.04 ms off). `test:browser`: a 1.9 s take on a ~1 s song (94/94). `test:recovery` 14/14 |
 
+### 2026-10-05 — song tempo, bar/beat grid, snap
+
+| Change | Verified how |
+|---|---|
+| **One tempo for the song** (`project.tempo`: BPM 40–240 to 0.01, beats per bar 2–7, `offset` = where bar 1 starts, folded into one bar). Controls in the timeline corner (where LAYERS was): BPM box (type, wheel ±1, Shift+wheel ±0.1), **TAP**, **4/4** select, **SNAP**, FOLLOW. Tempo edits are undoable; the clock shows **bar.beat.16th** under mm:ss. **Ruler counts bars** (numbers every 1/2/4… bars so they stay ≥ 44 px apart, `bar.beat` labels once a beat is that wide); lanes draw bar / beat / 16th lines. **Adaptive grid** (Ableton's): the finest of 16th, 8th, beat, 1/2/4… bars whose lines are ≥ 14 px apart. **Snap** (on by default, Ctrl+4 / SNAP, remembered in localStorage): clip moves snap the start, trims snap the dragged edge, clicks in the lanes and on the ruler snap the playhead; hold **Shift** (or Alt) to place freely. **B** = a bar starts at the playhead, **Shift+click on the ruler** = a bar starts there (line the grid up with an imported song). Audio isn't warped: changing the tempo moves the grid, not the clips. **BASS MOD follows the song BPM** (its BPM box, −/+ and TAP now set the song tempo; every layer's `bass.bpm` is kept equal to it by `followSongTempo` in `updateProject`), and its LFO counts from **bar 1** on both engines and in export (web: `songT0 + offset`; native: `ProjectSpec.barOrigin`). Old sessions: 120 BPM 4/4, or the BPM of the first active BASS MOD layer. Code: `src/audio/tempo.ts`, `src/ui/TempoControls.svelte`. | `src/audio/tempo.test.ts` (8): clamp/fold/normalize, adaptive grid at 4 zooms + 3/4, snap from bar 1 (never < 0), grid lines with bar/beat/sub and the pickup bar, bar.beat.16th, `followSongTempo`. Session migration test (BASS MOD 87 BPM → song 87). Native: BASS MOD through the mixer with `barOrigin` 0.3125 s = JS core counted from 0.3125 (< 2e-4). Browser (106/106): BASS MOD BPM = song BPM both ways, B puts a bar at the playhead (`1.1.1`), a click lands on a 16th from that bar, Ctrl+4 / SNAP toggle, an unsnapped click doesn't, 3/4 + undo, the ruler draws numbers, the corner fits on one line at 1280 px |
+
 ### Native Steam Deck build
 
 | Step | Verified how |
@@ -464,7 +470,7 @@ git tag v0.1.0 && git push origin v0.1.0     # release.yml builds + attaches art
 ### Near term
 
 - **Deck dual mode, next milestones** (`docs/deck-dual-mode.md`): DJ mix table mode, library + bulk import with analysis, album view.
-- **A project tempo.** BASS MOD carries its own BPM per layer because the project has none; a song BPM (and a beat grid on the ruler) would let every tempo-locked thing share it.
+- ~~**A project tempo.**~~ Done 2026-10-05 (see §2). Follow-ups: a **metronome / count-in** for recording, **BPM detection** on import (set tempo + bar 1 from the audio), and warping (clips that stretch with the tempo).
 - **Feel-test on the Deck** (2026-10-02 work): left-pad gain / glide friction / haptic detents, stick speeds, and BASS MOD's presets by ear.
 - **Gamepad navigation** so the app is usable in Gaming Mode (Steam Input → keyboard is the cheap first step; a focus ring + D-pad model is the real one).
 - LICENSE file.

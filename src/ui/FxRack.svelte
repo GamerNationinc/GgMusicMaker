@@ -143,8 +143,8 @@
   let bassTab = $state(0);
   const bassPreset = $derived(track ? matchingBassPreset(track.bass) : null);
   const bassHz = $derived(track ? track.bass.bpm / 60 / BASS_RATE_BEATS[track.bass.rate] : 1);
-  /** Where the LFO is now (follows the playhead): drawn as the dot on the scope. */
-  const bassPhase = $derived(((($transport.playhead * bassHz) % 1) + 1) % 1);
+  /** Where the LFO is now (follows the playhead, counted from bar 1): drawn as the dot on the scope. */
+  const bassPhase = $derived((((($transport.playhead - $project.tempo.offset) * bassHz) % 1) + 1) % 1);
   let taps: number[] = [];
   function onBass(spec: BassSpec, e: Event) {
     if (track) setBassParam(track.id, spec.key, bassFromSlider(spec, Number((e.target as HTMLInputElement).value)));
@@ -470,14 +470,15 @@
           {/each}
         </div>
         <div class="bass-tempo">
-          <div class="bpm" title="The tempo the LFO locks to — set it to the song's">
-            <span class="tiny">BPM</span>
+          <div class="bpm" title="The song's tempo: the LFO locks to it. Changing it here changes it for the whole song (and the grid).">
+            <span class="tiny">SONG BPM</span>
             <button class="btn small" aria-label="Slower" onclick={() => setBassParam(track!.id, "bpm", track!.bass.bpm - 1)}>−</button>
             <input
               class="bpm-num"
               type="number"
               min="40"
               max="240"
+              step="0.01"
               value={track.bass.bpm}
               aria-label="Tempo"
               onchange={(e) => setBassParam(track!.id, "bpm", Number((e.target as HTMLInputElement).value))}

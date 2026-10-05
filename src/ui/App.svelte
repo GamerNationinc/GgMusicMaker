@@ -25,6 +25,8 @@
     undo,
     redo,
     duplicateSelectedTrack,
+    toggleSnap,
+    setDownbeat,
     status,
     transport,
     project,
@@ -50,7 +52,7 @@
     status.set(`Theme: ${t.label} (T to cycle).`);
   }
 
-  const STUDIO_KEYS = [["space", "play"], ["s", "split"], ["r", "rec"], ["del", "delete"], ["^z", "undo"], ["^s", "save"], ["←→↑↓", "scroll/zoom"], ["L-pad", "swipe · click+drag zoom"], ["z", "fit"], ["f", "follow"], ["t", "theme"]];
+  const STUDIO_KEYS = [["space", "play"], ["s", "split"], ["r", "rec"], ["del", "delete"], ["^z", "undo"], ["^s", "save"], ["←→↑↓", "scroll/zoom"], ["L-pad", "swipe · click+drag zoom"], ["z", "fit"], ["b", "bar here"], ["^4", "snap"], ["f", "follow"], ["t", "theme"]];
   const INSTRUMENT_KEYS = [["R-pad", "notes"], ["L-pad", "cutoff/reverb"], ["ABXY", "drums"], ["L1/R1+ABXY", "chords"], ["R2", "swell"], ["L5", "sustain"], ["R5", "tilt bend"], ["View+Menu", "studio"]];
 
   const sessionName = $derived(sessionDisplayName($sessionPath));
@@ -120,6 +122,10 @@
       } else if (k === "d") {
         e.preventDefault();
         duplicateSelectedTrack();
+      } else if (k === "4") {
+        // Ableton's snap-to-grid toggle.
+        e.preventDefault();
+        toggleSnap();
       }
       return;
     }
@@ -165,6 +171,11 @@
       case "s":
       case "S":
         splitAtPlayhead();
+        break;
+      case "b":
+      case "B":
+        // Line the grid up with the song: a bar starts at the playhead.
+        setDownbeat($transport.playhead);
         break;
       case "Delete":
       case "Backspace":

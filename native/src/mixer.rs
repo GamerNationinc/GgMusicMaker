@@ -123,6 +123,9 @@ pub struct ProjectSpec {
     /// Render a wider-than-device bus for headphones.
     #[serde(default)]
     pub binaural: bool,
+    /// Song time of bar 1 (the tempo grid's offset): BASS MOD's LFO counts from it.
+    #[serde(default)]
+    pub bar_origin: f64,
 }
 fn two() -> usize {
     2
@@ -257,7 +260,7 @@ impl Mixer {
             sr,
             device_ch,
             buffers: HashMap::new(),
-            project: ProjectSpec { tracks: vec![], master_gain: 0.9, surround: 2, reverb: Space::Hall, binaural: false },
+            project: ProjectSpec { tracks: vec![], master_gain: 0.9, surround: 2, reverb: Space::Hall, binaural: false, bar_origin: 0.0 },
             dsp: HashMap::new(),
             reverb: Reverb::new(Space::Hall, sr),
             live: Live::new(sr),
@@ -392,6 +395,7 @@ impl Mixer {
 
         if self.playing {
             let t0 = self.time();
+            let bar_t = t0 - self.project.bar_origin;
             let sm = (-1.0 / (sr * 0.01)).exp();
             for t in &self.project.tracks {
                 let Some(d) = self.dsp.get_mut(&t.id) else { continue };
@@ -464,7 +468,7 @@ impl Mixer {
                 // --- BASS MOD (stereo), LFO locked to the song ---
                 if let Some(bp) = t.bass {
                     let (sl, sr_) = self.s.split_at_mut(1);
-                    d.bass.process(bp, t0, &mut sl[0][..q], &mut sr_[0][..q]);
+                    d.bass.process(bp, bar_t, &mut sl[0][..q], &mut sr_[0][..q]);
                 }
                 // --- MORPH → SYNTH → placer: each stage reads the current
                 // buffer and writes the other of a/b ---

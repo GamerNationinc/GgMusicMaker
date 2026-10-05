@@ -3,10 +3,11 @@ import { DEFAULT_MORPH } from "../fx/morph";
 import { DEFAULT_PUNCH } from "../fx/punch";
 import { DEFAULT_BASS } from "../fx/bass";
 import { DEFAULT_SYNTH } from "../fx/voice-synth";
-import { packSession, unpackSession, referencedBufferIds, sessionDisplayName, planSession, sessionWav, joinParts, readSession } from "./session";
+import { migrateProject, packSession, unpackSession, referencedBufferIds, sessionDisplayName, planSession, sessionWav, joinParts, readSession } from "./session";
 import type { Project, Track } from "../audio/types";
 import { nextId, reserveIds, __resetIds } from "../audio/types";
 import type { PcmSource } from "../audio/wav";
+import { DEFAULT_TEMPO } from "../audio/tempo";
 
 function pcm(samples: number[][], sampleRate = 48000): PcmSource {
   const chans = samples.map((s) => new Float32Array(s));
@@ -26,7 +27,7 @@ const buffers = new Map<string, PcmSource>([
 
 const project: Project = {
   sampleRate: 48000,
-  surround: "stereo",
+  surround: "stereo", tempo: { ...DEFAULT_TEMPO },
   tracks: [
     {
       id: "track_1",
@@ -203,6 +204,22 @@ describe("session migration", () => {
     // v1–v4 tracks have no MORPH: it opens switched off.
     expect(t.morph).toEqual(DEFAULT_MORPH);
     expect(t.punch).toEqual(DEFAULT_PUNCH);
+    // No song tempo yet: 120 BPM, 4/4, bar 1 at the start.
+    expect(header.project.tempo).toEqual(DEFAULT_TEMPO);
+  });
+
+  it("an older session using BASS MOD keeps its tempo as the song's", () => {
+    const old = {
+      ...project,
+      tempo: undefined,
+      tracks: [
+        { ...project.tracks[0], bass: { ...DEFAULT_BASS, wobble: 0.6, bpm: 87 } },
+        { ...project.tracks[1], bass: { ...DEFAULT_BASS, bpm: 150 } },
+      ],
+    } as unknown as Project;
+    const migrated = migrateProject(old);
+    expect(migrated.tempo).toEqual({ bpm: 87, beatsPerBar: 4, offset: 0 });
+    expect(migrated.tracks.map((t) => t.bass.bpm)).toEqual([87, 87]);
   });
 });
 

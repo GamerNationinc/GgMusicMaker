@@ -85,7 +85,7 @@ export const BASS_SPECS: BassSpec[] = BASS_GROUPS.flatMap((g) => g.specs);
 
 const SPEC_BY_KEY: Record<BassKey, { min: number; max: number; step: number }> = {
   ...(Object.fromEntries(BASS_SPECS.map((s) => [s.key, s])) as Record<BassKey, BassSpec>),
-  bpm: { min: 40, max: 240, step: 1 },
+  bpm: { min: 40, max: 240, step: 0.01 },
   rate: { min: 0, max: BASS_RATES.length - 1, step: 1 },
   shape: { min: 0, max: BASS_SHAPES.length - 1, step: 1 },
   octave: { min: 0, max: 1, step: 1 },
@@ -130,7 +130,7 @@ export function bassText(key: BassKey, v: number): string {
   if (key === "cutoff") return v >= 20000 ? "OPEN" : v >= 1000 ? `${+(v / 1000).toFixed(1)}k` : `${Math.round(v)}Hz`;
   if (key === "output") return `${v > 0 ? "+" : ""}${v.toFixed(1)}dB`;
   if (key === "env") return `${v > 0 ? "+" : ""}${Math.round(v * 100)}`;
-  if (key === "bpm") return `${Math.round(v)}`;
+  if (key === "bpm") return `${Math.round(v * 100) / 100}`;
   if (key === "rate") return BASS_RATES[v] ?? "?";
   if (key === "shape") return BASS_SHAPES[v] ?? "?";
   if (key === "octave") return v ? "−8VB" : "UNISON";
