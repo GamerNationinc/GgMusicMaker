@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { project, setBpm, setBeatsPerBar, snapToGrid, toggleSnap } from "../state/store";
+  import { project, setBpm, setBeatsPerBar, snapToGrid, toggleSnap, autoTempo } from "../state/store";
   import { BEATS_PER_BAR, BPM_MIN, BPM_MAX, formatBpm, tapTempo } from "../audio/tempo";
 
   let taps: number[] = [];
@@ -43,6 +43,11 @@
     data-role="bpm"
   />
   <button class="mini" onclick={onTap} title="Tap along with the beat to set the tempo" data-role="tap">TAP</button>
+  <button
+    class="mini"
+    onclick={() => void autoTempo()}
+    title="Listen to the selected clip (or the longest one) and set the song tempo and bar 1 from it"
+    data-role="auto-tempo">AUTO</button>
   <select
     class="mini sig"
     value={$project.tempo.beatsPerBar}

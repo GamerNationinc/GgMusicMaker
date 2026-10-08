@@ -72,6 +72,7 @@ import { STEM_RATE, audibleStems, rms, stemLayerName, stemSummary } from "../aud
 import { Autosaver, recoverAutosave as readAutosave, AUTOSAVE_MS } from "./autosave";
 import type { DecodedPcm } from "../audio/wav";
 import { withLoading } from "./loading";
+import { detectTempo, MIN_CONFIDENCE, type TempoGuess } from "../audio/beatDetect";
 import { INITIAL_LOAD, type LoadState, frameUtilisation, ema, audioDropout } from "./load";
 
 /** The audio runtime. Typed as the interface, not the class, so a future
@@ -793,6 +794,9 @@ export async function importFiles(files: FileList | File[]): Promise<void> {
 
 async function importList(list: File[], report: (p: number | null, detail?: string) => void): Promise<void> {
   const at = get(transport).playhead;
+  // The first song into an empty project sets its tempo and bar 1 (like
+  // Ableton's first auto-warped clip); later ones only say what they hear.
+  let setsTempo = get(project).tracks.every((t) => t.clips.length === 0);
   for (const [i, file] of list.entries()) {
     report(list.length > 1 ? i / list.length : null, file.name);
     try {
@@ -812,11 +816,64 @@ async function importList(list: File[], report: (p: number | null, detail?: stri
       };
       track.clips = [clip];
       updateProject((p) => ({ ...p, tracks: [...p.tracks, track] }));
-      status.set(`Imported ${file.name} (${buffer.duration.toFixed(1)}s).`);
+      const imported = `Imported ${file.name} (${buffer.duration.toFixed(1)}s).`;
+      status.set(imported);
+      report(list.length > 1 ? (i + 0.5) / list.length : null, `${file.name} — listening for the beat`);
+      const guess = await clipTempo(clip, buffer);
+      if (!guess) continue;
+      if (setsTempo) {
+        setsTempo = false;
+        applyTempoGuess(clip, guess);
+        status.set(`${imported} Song tempo ${formatBpm(guess.bpm)} BPM, bar 1 on its downbeat (Ctrl+Z to undo).`);
+      } else if (guess.bpm !== get(project).tempo.bpm) {
+        status.set(`${imported} It sounds like ${formatBpm(guess.bpm)} BPM (song: ${formatBpm(get(project).tempo.bpm)}). Select it and press AUTO to use that.`);
+      }
     } catch (err) {
       status.set(`Couldn't decode ${file.name}: ${(err as Error).message}`);
     }
   }
+}
+
+/** Listen to a clip (its part of the buffer) for a tempo. Null if there's no
+ *  clear beat (or too little audio to tell). */
+async function clipTempo(clip: Clip, buffer: AudioBuffer): Promise<TempoGuess | null> {
+  const guess = await detectTempo(buffer, {
+    startSample: clip.offset * buffer.sampleRate,
+    lengthSamples: clip.duration * buffer.sampleRate,
+    beatsPerBar: get(project).tempo.beatsPerBar,
+  });
+  return guess && guess.confidence >= MIN_CONFIDENCE ? guess : null;
+}
+
+/** Song tempo = the clip's, with a bar starting on the clip's downbeat. One
+ *  undo step. */
+function applyTempoGuess(clip: Clip, guess: TempoGuess): void {
+  const bpm = clampBpm(guess.bpm);
+  updateProject((p) => {
+    const tempo = { ...p.tempo, bpm };
+    return { ...p, tempo: { ...tempo, offset: foldOffset(clip.startTime + guess.downbeat, tempo) } };
+  });
+}
+
+/** AUTO: set the song tempo and bar 1 from the selected clip, else from the
+ *  longest one. */
+export async function autoTempo(): Promise<void> {
+  const p = get(project);
+  const clips = p.tracks.flatMap((t) => t.clips);
+  const clip = clips.find((c) => c.id === get(selectedClipId)) ?? [...clips].sort((a, b) => b.duration - a.duration)[0];
+  if (!clip) {
+    status.set("AUTO tempo: import a song first, then press AUTO to set the tempo from it.");
+    return;
+  }
+  const buffer = engine.getBuffer(clip.bufferId);
+  if (!buffer) return;
+  const guess = await withLoading("FINDING THE BEAT", () => clipTempo(clip, buffer), clip.name);
+  if (!guess) {
+    status.set(`AUTO tempo: no clear beat in ${clip.name}. Tap along with TAP instead.`);
+    return;
+  }
+  applyTempoGuess(clip, guess);
+  status.set(`Song tempo ${formatBpm(guess.bpm)} BPM from ${clip.name}, bar 1 on its downbeat (Ctrl+Z to undo).`);
 }
 
 // ---- tempo + grid ---------------------------------------------------------

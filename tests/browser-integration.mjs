@@ -698,6 +698,55 @@ async function main() {
     check("tempo controls fit the corner on one line", corner.sw <= corner.w && corner.tall === 0, `${corner.sw} in ${corner.w}, ${corner.tall} wrapped`);
   }
 
+  // --- tempo detection: the first song sets the tempo, AUTO re-reads it ---
+  {
+    await page.keyboard.press("Control+n");
+    await page.waitForTimeout(400);
+    // A 124 BPM house loop (kick every beat, clap on 2 and 4, off-beat hats),
+    // bar 1 at 0.3 s, 20 s, 22.05 kHz mono.
+    const rate = 22050, secs = 20, n = rate * secs, bpm = 124, beat = 60 / bpm;
+    const pcm = new Float32Array(n);
+    let seed = 3;
+    const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32) * 2 - 1;
+    const hit = (t, len, fn) => {
+      const s0 = Math.round(t * rate), m = Math.round(len * rate);
+      for (let i = 0; i < m && s0 + i < n; i++) pcm[s0 + i] += fn(i, Math.exp(-i / (m / 5)));
+    };
+    for (let k = 0; 0.3 + k * beat * 0.5 < secs; k++) {
+      const t = 0.3 + k * beat * 0.5;
+      if (k % 2) hit(t, 0.03, (_, e) => 0.12 * e * rnd());
+      else {
+        hit(t, 0.25, (i, e) => 0.8 * e * Math.sin(2 * Math.PI * (50 + 80 * Math.exp(-i / 400)) * (i / rate)));
+        if ((k / 2) % 2 === 1) hit(t, 0.15, (_, e) => 0.3 * e * rnd());
+      }
+    }
+    const wav = Buffer.alloc(44 + n * 2);
+    wav.write("RIFF", 0); wav.writeUInt32LE(36 + n * 2, 4); wav.write("WAVEfmt ", 8);
+    wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22);
+    wav.writeUInt32LE(rate, 24); wav.writeUInt32LE(rate * 2, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34);
+    wav.write("data", 36); wav.writeUInt32LE(n * 2, 40);
+    for (let i = 0; i < n; i++) wav.writeInt16LE(Math.round(Math.max(-1, Math.min(1, pcm[i])) * 32000), 44 + i * 2);
+    const dir = await mkdtemp(join(tmpdir(), "ggmm-beat-"));
+    tempDirs.push(dir);
+    const loop = join(dir, "house-124.wav");
+    await writeFile(loop, wav);
+    await page.setInputFiles("input[type=file][accept='audio/*']", [loop]);
+    await page.waitForFunction(() => document.querySelector("[data-role=bpm]").value === "124", null, { timeout: 15000 }).catch(() => {});
+    check("the first song imported sets the song tempo", (await page.inputValue("[data-role=bpm]")) === "124", await page.inputValue("[data-role=bpm]"));
+    check("…and says so", /Song tempo 124 BPM, bar 1 on its downbeat/.test(await page.textContent(".statusbar")), (await page.textContent(".statusbar")).trim());
+    await page.fill("[data-role=bpm]", "100");
+    await page.press("[data-role=bpm]", "Enter");
+    await page.click("[data-role=auto-tempo]");
+    await page.waitForFunction(() => document.querySelector("[data-role=bpm]").value === "124", null, { timeout: 15000 }).catch(() => {});
+    check("AUTO reads the tempo from the clip", (await page.inputValue("[data-role=bpm]")) === "124", await page.inputValue("[data-role=bpm]"));
+    await page.evaluate(() => document.activeElement?.blur?.());
+    await page.keyboard.press("Control+z");
+    await page.waitForTimeout(150);
+    check("undo puts the tempo back after AUTO", (await page.inputValue("[data-role=bpm]")) === "100", await page.inputValue("[data-role=bpm]"));
+    const corner = await page.$eval(".ruler-row .corner", (el) => ({ w: el.clientWidth, sw: el.scrollWidth }));
+    check("AUTO fits in the corner", corner.sw <= corner.w, `${corner.sw} in ${corner.w}`);
+  }
+
   // --- layer stacks + instrument racks ---------------------------------------
   await page.keyboard.press("Control+n");
   await page.waitForTimeout(400);
