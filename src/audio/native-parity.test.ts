@@ -13,6 +13,8 @@ import placerSrc from "../../public/placer-processor.js?raw";
 import binauralSrc from "../../public/binaural-processor.js?raw";
 import liveSrc from "../../public/live-processor.js?raw";
 import type { LiveEvent } from "./live";
+import djSrc from "../../public/dj-processor.js?raw";
+import type { DjEvent } from "./dj";
 import { DEFAULT_SYNTH, SYNTH_PRESETS, presetParams } from "../fx/voice-synth";
 import { DEFAULT_MORPH, MORPH_PRESETS, morphPresetParams } from "../fx/morph";
 import { impulseChannels, type ReverbSpace } from "./reverb";
@@ -222,6 +224,56 @@ describe.skipIf(!has)("Rust ports match the JS worklets", () => {
       const nat = native!.processModule("live", JSON.stringify({ events: script }), [new Float32Array(len)], 4, SR);
       expect(rms(js[0])).toBeGreaterThan(0.01);
       expect(rms(js[2])).toBeGreaterThan(0.001);
+      const e = relErr(js, nat);
+      expect(e, `rel err ${e.toExponential(2)}`).toBeLessThan(1e-3);
+    });
+  });
+
+  describe("DJ decks", () => {
+    type DjProc = { core: { load(d: number, b: { rate: number; channels: Float32Array[] }): void; event(e: DjEvent): void }; process(i: Float32Array[][], o: Float32Array[][]): boolean; port: unknown };
+    const Dj = load(djSrc, "dj-processor") as unknown as new () => DjProc;
+    /** [quantum, event] — a little mix touching every path: play, tempo,
+     *  nudge, EQ (kill and boost), faders, crossfade, a loop, a scratch
+     *  backwards, a seek, stop. */
+    const script: [number, DjEvent][] = [
+      [0, { t: "play", deck: 0, on: true }],
+      [0, { t: "xfade", x: -0.6 }],
+      [30, { t: "play", deck: 1, on: true }],
+      [30, { t: "rate", deck: 1, rate: 1.06 }],
+      [60, { t: "eq", deck: 0, low: -60, mid: 2, high: -6 }],
+      [90, { t: "nudge", deck: 1, amount: 0.04 }],
+      [110, { t: "nudge", deck: 1, amount: 0 }],
+      [120, { t: "xfade", x: 0.4 }],
+      [130, { t: "vol", deck: 0, v: 0.5 }],
+      [140, { t: "loop", deck: 1, from: 0.6, to: 0.85 }],
+      [200, { t: "scratch", deck: 0, on: true, speed: -1.5 }],
+      [230, { t: "scratch", deck: 0, on: true, speed: 2.2 }],
+      [250, { t: "scratch", deck: 0, on: false, speed: 0 }],
+      [260, { t: "seek", deck: 0, time: 0.2 }],
+      [270, { t: "phase", deck: 1, beat: 0.48, first: 0.1, to: 0, toBeat: 0.5, toFirst: 0.05 }],
+      [300, { t: "eq", deck: 0, low: 6, mid: 0, high: 0 }],
+      [340, { t: "loop", deck: 1, from: 0, to: 0 }],
+      [380, { t: "play", deck: 0, on: false }],
+    ];
+    it("plays a scripted mix the same", () => {
+      const bufRate = 44100;
+      const tracks = [...voice(3), ...voice(3).map((c) => c.map((v, i) => v * Math.sin(i * 0.001)))];
+      const len = Math.floor(SR * 1.2);
+      const js = [new Float32Array(len), new Float32Array(len)];
+      const proc = new Dj();
+      proc.core.load(0, { rate: bufRate, channels: tracks.slice(0, 2) });
+      proc.core.load(1, { rate: bufRate, channels: tracks.slice(2, 4) });
+      for (let i = 0, k = 0; i < len; i += 128, k++) {
+        for (const [at, e] of script) if (at === k) proc.core.event(e);
+        const q = Math.min(128, len - i);
+        const o = [[new Float32Array(q), new Float32Array(q)]];
+        proc.process([], o);
+        o[0].forEach((c, n) => js[n].set(c, i));
+      }
+      // The native module renders exactly `len` frames: pad its inputs' length.
+      const ins = tracks.map((c) => c);
+      const nat = native!.processModule("dj", JSON.stringify({ events: script, bufRate }), ins, 2, SR).map((c) => c.subarray(0, len));
+      expect(rms(js[0])).toBeGreaterThan(0.005);
       const e = relErr(js, nat);
       expect(e, `rel err ${e.toExponential(2)}`).toBeLessThan(1e-3);
     });

@@ -27,6 +27,7 @@ import type { Project, Track } from "./types";
 import type { ReverbSpace } from "./reverb";
 import type { SurroundLayout } from "../fx/voice-synth";
 import type { LiveEvent } from "./live";
+import type { DjEvent, DjStatus } from "./dj";
 
 export interface DecodedAudio {
   bufferId: string;
@@ -89,6 +90,13 @@ export interface AudioBackend {
 
   // Live instrument (Instrument mode): plays whether or not the transport runs.
   live(e: LiveEvent): void;
+
+  // DJ decks (DJ mode): play whether or not the transport runs.
+  /** Put a loaded buffer on a deck (null = eject). */
+  djLoad(deck: number, bufferId: string | null): void;
+  dj(e: DjEvent): void;
+  /** Where the decks are, as of the engine's last report. */
+  djStatus(): DjStatus;
 
   // Transport
   play(project: Project, fromTime: number): void;

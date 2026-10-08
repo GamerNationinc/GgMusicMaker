@@ -99,6 +99,29 @@ async function main() {
   await page.waitForTimeout(600);
   check("imports and layers a file", (await page.$$(".head")).length === 1);
 
+  // --- DJ mode on the web engine (public/dj-processor.js) ---
+  // Early in the session on purpose: late in this long run (after the 12
+  // long layers) headless Chromium stopped delivering page → worklet port
+  // messages to newly loaded decks while the worklet itself kept running
+  // (MASTER.md §3). The native engine's decks are covered by test:dj.
+  {
+    await page.click("[data-role=mode-dj]");
+    await page.waitForSelector("[data-role=dj]", { timeout: 3000 }).catch(() => {});
+    check("DJ mode opens", !!(await page.$("[data-role=dj]")));
+    await page.selectOption("[data-role=dj-load-0]", { index: 1 });
+    check("a deck loads the song", (await page.textContent("[data-role=dj-name-0]")).trim() === "tone", (await page.textContent("[data-role=dj-name-0]")).trim());
+    await page.waitForTimeout(400);
+    await page.click("[data-role=dj-play-0]");
+    await page.waitForTimeout(700);
+    const djTime = (await page.textContent("[data-role=dj-time-0]")).trim();
+    check("the web engine's deck plays and reports its position", /^0:00\.[5-9]/.test(djTime), djTime);
+    await page.click("[data-role=dj-cue-0]"); // playing: back to the cue and stopped
+    await page.waitForTimeout(150);
+    check("CUE stops the deck", (await page.textContent("[data-role=dj-play-0]")).includes("▶"));
+    await page.click("[data-role=mode-studio]");
+    await page.waitForSelector(".workspace", { timeout: 3000 }).catch(() => {});
+  }
+
   // --- undo / redo ------------------------------------------------------
   check("undo enabled after an edit", await page.isEnabled("button.undo"));
   check("redo disabled with nothing undone", !(await page.isEnabled("button.redo")));
@@ -745,6 +768,7 @@ async function main() {
     check("undo puts the tempo back after AUTO", (await page.inputValue("[data-role=bpm]")) === "100", await page.inputValue("[data-role=bpm]"));
     const corner = await page.$eval(".ruler-row .corner", (el) => ({ w: el.clientWidth, sw: el.scrollWidth }));
     check("AUTO fits in the corner", corner.sw <= corner.w, `${corner.sw} in ${corner.w}`);
+
   }
 
   // --- layer stacks + instrument racks ---------------------------------------

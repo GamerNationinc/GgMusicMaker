@@ -13,6 +13,7 @@ import { nextId } from "./types";
 import { anySoloed, isTrackAudible } from "./edits";
 import { makeImpulseResponse, type ReverbSpace } from "./reverb";
 import type { LiveEvent } from "./live";
+import type { DjEvent, DjStatus } from "./dj";
 import { TrackChannel } from "./channel";
 import type { AudioBackend, DecodedAudio, MasterMeter } from "./backend";
 import { blockLevels, logBands } from "./spectrum";
@@ -32,6 +33,7 @@ const BASS_WORKLET_URL = `${import.meta.env.BASE_URL}bass-processor.js`;
 const MORPH_WORKLET_URL = `${import.meta.env.BASE_URL}morph-processor.js`;
 const BINAURAL_WORKLET_URL = `${import.meta.env.BASE_URL}binaural-processor.js`;
 const LIVE_WORKLET_URL = `${import.meta.env.BASE_URL}live-processor.js`;
+const DJ_WORKLET_URL = `${import.meta.env.BASE_URL}dj-processor.js`;
 const RECORDER_WORKLET_URL = `${import.meta.env.BASE_URL}recorder-processor.js`;
 
 export class AudioEngine implements AudioBackend {
@@ -136,6 +138,7 @@ export class AudioEngine implements AudioBackend {
       if (ok) this.synthAvailable = true;
       this.binauralAvailable = await this.loadWorklet(ctx, BINAURAL_WORKLET_URL);
       this.liveAvailable = await this.loadWorklet(ctx, LIVE_WORKLET_URL);
+      this.djAvailable = await this.loadWorklet(ctx, DJ_WORKLET_URL);
     }
     return ok;
   }
@@ -162,6 +165,38 @@ export class AudioEngine implements AudioBackend {
       this.liveNode.connect(this.convolver, 1);
     }
     this.liveNode.port.postMessage(e);
+  }
+
+  private djAvailable = false;
+  /** The DJ decks (public/dj-processor.js) → master. Built on first use. */
+  private djNode: AudioWorkletNode | null = null;
+  private djLast: DjStatus = { pos: [0, 0], playing: [false, false] };
+
+  private djPort(): MessagePort | null {
+    if (!this.djAvailable) return null;
+    if (!this.djNode) {
+      this.djNode = new AudioWorkletNode(this.ctx, "dj-processor", { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [2] });
+      this.djNode.connect(this.master.input);
+      this.djNode.port.onmessage = (m) => {
+        if (m.data?.t === "pos") this.djLast = { pos: m.data.pos, playing: m.data.playing };
+      };
+    }
+    return this.djNode.port;
+  }
+
+  djLoad(deck: number, bufferId: string | null): void {
+    const b = bufferId ? this.buffers.get(bufferId) : undefined;
+    // The worklet gets its own copy of the track (the page keeps the buffer).
+    const channels = b ? Array.from({ length: Math.min(2, b.numberOfChannels) }, (_, c) => b.getChannelData(c).slice()) : null;
+    this.djPort()?.postMessage({ t: "load", deck, rate: b?.sampleRate ?? 1, channels }, channels ? channels.map((c) => c.buffer) : []);
+  }
+
+  dj(e: DjEvent): void {
+    this.djPort()?.postMessage(e);
+  }
+
+  djStatus(): DjStatus {
+    return this.djLast;
   }
 
   /** Resume the context and make sure the synth worklet had a chance to load. */
@@ -239,6 +274,10 @@ export class AudioEngine implements AudioBackend {
     this.preTimeBuf = new Float32Array(new ArrayBuffer(4 * this.master.preTap.fftSize));
     this.preFreqBuf = new Uint8Array(new ArrayBuffer(this.master.preTap.frequencyBinCount));
     this.reverbReturn.connect(this.master.input);
+    if (this.djNode) {
+      this.djNode.disconnect();
+      this.djNode.connect(this.master.input);
+    }
     if (this.liveNode) {
       this.liveNode.disconnect();
       this.liveNode.connect(this.master.input, 0);

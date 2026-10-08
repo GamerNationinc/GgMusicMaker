@@ -87,6 +87,15 @@ function register() {
       console.error("engine-live:", err);
     }
   });
+  // DJ mode: deck events (JSON, fire and forget) and loading a deck.
+  ipcMain.on("engine-dj", (_e, json) => {
+    try {
+      getEngine()?.dj(json);
+    } catch (err) {
+      console.error("engine-dj:", err);
+    }
+  });
+  ipcMain.handle("engine-dj-load", (_e, deck, id) => getEngine()?.djLoad(deck >>> 0, id ?? undefined));
   ipcMain.handle("engine-status", () => getEngine()?.status() ?? null);
   ipcMain.handle("engine-scope", () => getEngine()?.scope() ?? null);
   // Native recording (native/src/record.rs). Errors reject the invoke, and

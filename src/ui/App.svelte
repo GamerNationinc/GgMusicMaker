@@ -11,6 +11,7 @@
   import EngineSwitch from "./EngineSwitch.svelte";
   import ModeSwitch from "./ModeSwitch.svelte";
   import InstrumentView from "./InstrumentView.svelte";
+  import DjView from "./DjView.svelte";
   import AsciiLoader from "./AsciiLoader.svelte";
   import { withBoot } from "../state/loading";
   import { mode, startController, deckPerforming, arrowGuard } from "../input/controller";
@@ -215,6 +216,8 @@
 
 {#if $mode === "instrument"}
   <InstrumentView />
+{:else if $mode === "dj"}
+  <DjView />
 {:else}
   <Toolbar />
 

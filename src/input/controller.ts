@@ -3,7 +3,8 @@
 // Input comes from the raw Deck controller when the desktop shell can open
 // it (electron/deckpad.cjs), otherwise from the Gamepad API. Every state goes
 // through `handle`: View + Menu together cycles the mode from anywhere; in
-// Instrument mode the state drives the live instrument.
+// Instrument mode the state drives the live instrument, in DJ mode the two
+// decks (dj.ts).
 //
 // Studio mode drives the timeline (studioNav.ts): the left pad is a
 // trackpad for it and the left stick scrolls / zooms, so every mode takes
@@ -14,13 +15,14 @@ import { engine, status, transport, startRecording, stopRecording, togglePlay } 
 import { emptyState, fromGamepad, hapticPulse, parseDeckReport, type ControllerState } from "./deckpad";
 import { Instrument, type Haptic, type InstrumentView, type Output } from "./instrument";
 import { StudioNav } from "./studioNav";
+import { DjDesk, type DjOutput, type DjTrack, type DjView } from "./dj";
 
 export type AppMode = "studio" | "instrument" | "dj";
 
 export const MODES: { id: AppMode; label: string; ready: boolean }[] = [
   { id: "studio", label: "Studio", ready: true },
   { id: "instrument", label: "Instrument", ready: true },
-  { id: "dj", label: "DJ", ready: false },
+  { id: "dj", label: "DJ", ready: true },
 ];
 
 export const mode = writable<AppMode>("studio");
@@ -46,6 +48,7 @@ export function screenOnly<E extends Event>(fn: (e: E) => void): (e: E) => void 
 
 const instrument = new Instrument();
 const studio = new StudioNav();
+const desk = new DjDesk();
 
 /** True while the Deck's left pad is driving the timeline (and a moment
  *  after): Steam's desktop layout turns that pad into a scroll wheel too,
@@ -56,6 +59,7 @@ export const wheelGuard = (): boolean => studio.padBusy(performance.now());
  *  arrow keys for it, which the key handler must then ignore. */
 export const arrowGuard = (): boolean => studio.stickBusy(performance.now());
 export const instrumentView = writable<InstrumentView>(instrument.view());
+export const djView = writable<DjView>(desk.view());
 
 interface DeckBridge {
   start(): Promise<{ ok: boolean; error?: string; fake?: boolean }>;
@@ -88,7 +92,10 @@ export function startController(): void {
       deckOk = present;
       controllerSource.set(present ? "deck" : "none");
       updatePerforming();
-      if (!present) send(instrument.release());
+      if (!present) {
+        send(instrument.release());
+        sendDj(desk.release());
+      }
       status.set(present ? "Deck controller back." : "Deck controller lost — notes released.");
     });
     void deck.start().then((r) => {
@@ -166,7 +173,7 @@ function handle(s: ControllerState): void {
   prev = s;
   if (combo && !was) {
     comboUsed = true;
-    setMode(get(mode) === "studio" ? "instrument" : "studio");
+    setMode(nextMode(get(mode)));
     return;
   }
   const taps = transportTaps(last, s, comboUsed);
@@ -176,6 +183,9 @@ function handle(s: ControllerState): void {
     else if (taps.play) togglePlay();
     send(instrument.update(s));
     scheduleView();
+  } else if (get(mode) === "dj") {
+    sendDj(desk.update(s, performance.now()));
+    scheduleDjView();
   } else if (get(mode) === "studio") {
     for (const side of studio.update(s, performance.now())) haptic({ side, strength: "tick" });
   }
@@ -184,6 +194,54 @@ function handle(s: ControllerState): void {
 function send(out: Output): void {
   for (const e of out.events) engine.live(e);
   for (const h of out.haptics) haptic(h);
+}
+
+function sendDj(out: DjOutput): void {
+  for (const l of out.loads) engine.djLoad(l.deck, l.bufferId);
+  for (const e of out.events) engine.dj(e);
+  for (const h of out.haptics) haptic(h);
+}
+
+/** View + Menu: Studio → Instrument → DJ → Studio. */
+export function nextMode(m: AppMode): AppMode {
+  const ready = MODES.filter((x) => x.ready).map((x) => x.id);
+  return ready[(ready.indexOf(m) + 1) % ready.length];
+}
+
+let djViewQueued = false;
+function scheduleDjView(): void {
+  if (djViewQueued) return;
+  djViewQueued = true;
+  setTimeout(() => {
+    djViewQueued = false;
+    djView.set(desk.view());
+  }, 16);
+}
+
+/** While DJ mode is up: the engine's deck positions into the desk, and the
+ *  view along with them (~60 Hz, a timer: see scheduleView). */
+let djTimer: ReturnType<typeof setInterval> | null = null;
+function djClock(on: boolean): void {
+  if (on && !djTimer) {
+    djTimer = setInterval(() => {
+      desk.status(engine.djStatus());
+      djView.set(desk.view());
+    }, 16);
+  } else if (!on && djTimer) {
+    clearInterval(djTimer);
+    djTimer = null;
+  }
+}
+
+/** A screen action on the DJ desk (buttons, faders, knobs, loading). */
+export function djAct(fn: (d: DjDesk) => DjOutput): void {
+  void engine.ensureRunning();
+  sendDj(fn(desk));
+  djView.set(desk.view());
+}
+
+export function djLoadTrack(deck: number, track: DjTrack | null): void {
+  djAct((d) => d.load(deck, track));
 }
 
 function haptic(h: Haptic): void {
@@ -211,14 +269,15 @@ function updatePerforming(): void {
 export function setMode(m: AppMode): void {
   const from = get(mode);
   if (m === from) return;
-  if (!MODES.find((x) => x.id === m)?.ready) {
-    status.set("DJ mode is the next milestone — not built yet.");
-    return;
-  }
+  if (!MODES.find((x) => x.id === m)?.ready) return;
   if (from === "instrument") send(instrument.release());
+  if (from === "dj") sendDj(desk.release());
   mode.set(m);
   updatePerforming();
   studio.reset();
+  // The decks keep playing in every mode (a mix doesn't stop to edit); the
+  // view only follows while DJ mode is up.
+  djClock(m === "dj");
   if (m === "instrument") {
     void engine.ensureRunning();
     // Nothing keeps focus: Steam's desktop layout sends Enter/Space for
@@ -229,6 +288,15 @@ export function setMode(m: AppMode): void {
       get(controllerSource) === "none"
         ? "Instrument mode — no controller found: tap the grid and pads on screen."
         : "Instrument mode — right pad plays, ABXY drums (hold L1/R1 for chords). View + Menu to leave.",
+    );
+  } else if (m === "dj") {
+    void engine.ensureRunning();
+    (document.activeElement as HTMLElement | null)?.blur?.();
+    djView.set(desk.view());
+    status.set(
+      get(controllerSource) === "none"
+        ? "DJ mode — load a track on each deck; play, cue, sync and mix on screen."
+        : "DJ mode — trackpads = jog, L1/R1 play, ←/→ cue, X/B sync, Y/A loop, sticks EQ, L2/R2 crossfader. View + Menu to leave.",
     );
   } else {
     status.set("Studio mode.");

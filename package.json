@@ -21,6 +21,7 @@
     "test:big": "node tests/electron-big.mjs",
     "test:record": "node tests/electron-record.mjs",
     "test:instrument": "node tests/electron-instrument.mjs",
+    "test:dj": "node tests/electron-dj.mjs",
     "dist:deck": "vite build && electron-builder --linux dir AppImage"
   },
   "devDependencies": {

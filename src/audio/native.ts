@@ -17,6 +17,7 @@
 
 import { fileStreams } from "../state/platform";
 import type { LiveEvent } from "./live";
+import type { DjEvent, DjStatus } from "./dj";
 import type { AudioBackend, ClickSpec, DecodedAudio, MasterMeter } from "./backend";
 import type { AudioEngine } from "./engine";
 import type { Project, Track } from "./types";
@@ -55,6 +56,9 @@ export interface NativeEngineBridge {
   stop(): void;
   /** One live-instrument event as JSON (older shells don't have it). */
   live?(json: string): void;
+  /** DJ decks (older shells don't have them). */
+  dj?(json: string): void;
+  djLoad?(deck: number, id: string | null): Promise<void>;
   status(): Promise<NativeStatus | null>;
   scope(): Promise<Float32Array | null>;
   render(project: string, ids: string[], rates: number[], data: Float32Array[][], sampleRate: number, tail: number): Promise<Float32Array[]>;
@@ -89,6 +93,9 @@ export interface NativeStatus {
   device: string;
   deviceChannels: number;
   busChannels: number;
+  /** DJ decks (older addons: absent). */
+  djPos?: number[];
+  djPlaying?: boolean[];
 }
 
 /** The mixer-facing view of a project (mirrors native/src/mixer.rs
@@ -208,7 +215,15 @@ export class NativeBackend implements AudioBackend {
   private mirror(id: string, buffer: AudioBuffer): void {
     if (this.loaded.has(id)) return;
     this.loaded.add(id);
-    this.pendingLoads.push(this.loadChannels(id, buffer).catch(() => this.loaded.delete(id)));
+    const p = this.loadChannels(id, buffer).catch(() => void this.loaded.delete(id));
+    this.loads.set(id, p);
+    this.pendingLoads.push(p);
+  }
+  /** Each buffer's upload to the engine, by id. */
+  private loads = new Map<string, Promise<unknown>>();
+  /** Resolves once buffer `id` is in the engine (at once if unknown). */
+  private uploaded(id: string | null): Promise<unknown> {
+    return (id && this.loads.get(id)) || Promise.resolve();
   }
 
   /** Hand a buffer to the engine. Big ones (a long song is over a GB) go
@@ -334,6 +349,37 @@ export class NativeBackend implements AudioBackend {
   live(e: LiveEvent): void {
     if (this.fallback || !this.native.live) return this.web.live(e);
     this.native.live(JSON.stringify(e));
+  }
+
+  // ---- DJ decks ----------------------------------------------------------------
+
+  djLoad(deck: number, bufferId: string | null): void {
+    if (this.fallback || !this.native.djLoad) return this.web.djLoad(deck, bufferId);
+    const b = bufferId ? this.web.getBuffer(bufferId) : undefined;
+    if (b) this.mirror(bufferId!, b);
+    // Once the track is in the engine; deck events sent meanwhile (the cue
+    // seek that comes with a load) wait for it, in order.
+    const p: Promise<void> = this.uploaded(bufferId)
+      .then(() => this.native.djLoad!(deck, b ? bufferId : null))
+      .catch((e) => console.error("djLoad:", e))
+      .finally(() => {
+        if (this.djPending === p) this.djPending = null;
+      });
+    this.djPending = p;
+  }
+  private djPending: Promise<void> | null = null;
+
+  dj(e: DjEvent): void {
+    if (this.fallback || !this.native.dj) return this.web.dj(e);
+    const json = JSON.stringify(e);
+    if (this.djPending) void this.djPending.then(() => this.native.dj!(json));
+    else this.native.dj(json);
+  }
+
+  djStatus(): DjStatus {
+    if (this.fallback || !this.native.dj) return this.web.djStatus();
+    const s = this.status;
+    return { pos: s?.djPos ?? [0, 0], playing: s?.djPlaying ?? [false, false] };
   }
 
   // ---- transport -------------------------------------------------------------

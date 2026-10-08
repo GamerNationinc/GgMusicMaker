@@ -16,6 +16,7 @@ pub mod click;
 pub mod binaural;
 pub mod deckpad;
 pub mod dsp;
+pub mod dj;
 pub mod live;
 pub mod mixer;
 pub mod morph;
@@ -40,6 +41,8 @@ enum Cmd {
     Play(f64),
     Stop,
     Live(live::LiveEvent),
+    Dj(dj::DjEvent),
+    DjLoad(usize, Option<Arc<Buffer>>),
     Capture(Option<record::Capture>),
     Monitor(Option<record::MonitorFeed>),
 }
@@ -64,6 +67,8 @@ struct Status {
     out_peak: AtomicU64,
     reduction: AtomicU64,
     bus: AtomicU64,
+    dj_pos: [AtomicU64; 2],
+    dj_playing: [AtomicBool; 2],
 }
 
 fn st(a: &AtomicU64, v: f64) {
@@ -109,6 +114,12 @@ impl Audio {
                 Cmd::Play(t) => m.play(t),
                 Cmd::Stop => m.stop(),
                 Cmd::Live(e) => m.live_event(e),
+                Cmd::Dj(e) => m.dj_event(e),
+                Cmd::DjLoad(deck, b) => {
+                    if let Some(old) = m.dj_load(deck, b) {
+                        let _ = self.trash.try_send(Garbage::Buffer(old));
+                    }
+                }
                 Cmd::Capture(c) => {
                     if let Some(old) = m.set_capture(c) {
                         let _ = self.trash.try_send(Garbage::Capture(old));
@@ -151,6 +162,10 @@ impl Audio {
         st(&s.out_peak, m.out_peak);
         st(&s.reduction, m.reduction);
         st(&s.bus, m.bus_channels() as f64);
+        for (k, (pos, playing)) in m.dj.status().into_iter().enumerate() {
+            st(&s.dj_pos[k], pos);
+            s.dj_playing[k].store(playing, Ordering::Relaxed);
+        }
         if let Ok(mut sc) = self.scope.try_lock() {
             // Oldest → newest.
             let p = m.scope_pos;
@@ -173,6 +188,9 @@ pub struct EngineStatus {
     pub device: String,
     pub device_channels: u32,
     pub bus_channels: u32,
+    /// DJ decks: seconds into each deck's track, and whether it plays.
+    pub dj_pos: Vec<f64>,
+    pub dj_playing: Vec<bool>,
 }
 
 /// Build what a project needs off the audio thread: DSP for new layers, and
@@ -392,6 +410,23 @@ impl NativeEngine {
         self.send(Cmd::Live(e))
     }
 
+    /// One DJ-deck event (JSON, see dj.rs `DjEvent`).
+    #[napi]
+    pub fn dj(&self, json: String) -> Result<()> {
+        let e: dj::DjEvent = serde_json::from_str(&json).map_err(|e| Error::from_reason(format!("dj: {e}")))?;
+        self.send(Cmd::Dj(e))
+    }
+
+    /// Put a loaded buffer on a DJ deck (null = eject).
+    #[napi]
+    pub fn dj_load(&self, deck: u32, id: Option<String>) -> Result<()> {
+        let b = match id {
+            Some(id) => Some(self.library.lock().unwrap().get(&id).cloned().ok_or_else(|| Error::from_reason(format!("dj: no buffer {id}")))?),
+            None => None,
+        };
+        self.send(Cmd::DjLoad(deck as usize, b))
+    }
+
     #[napi]
     pub fn status(&self) -> EngineStatus {
         self.collect_garbage();
@@ -408,6 +443,8 @@ impl NativeEngine {
             device: self.device.clone(),
             device_channels: self.channels,
             bus_channels: ld(&s.bus) as u32,
+            dj_pos: s.dj_pos.iter().map(ld).collect(),
+            dj_playing: s.dj_playing.iter().map(|p| p.load(Ordering::Relaxed)).collect(),
         }
     }
 
@@ -608,6 +645,7 @@ pub fn process_module(kind: String, params_json: String, inputs: Vec<Float32Arra
         R(Box<Reverb>),
         L(Box<live::Live>, Vec<(usize, live::LiveEvent)>),
         Ba(Box<bass::Bass>, bass::BassParams, f64),
+        D(Box<dj::Dj>, Vec<(usize, dj::DjEvent)>),
     }
     #[derive(serde::Deserialize)]
     struct Pw {
@@ -646,6 +684,21 @@ pub fn process_module(kind: String, params_json: String, inputs: Vec<Float32Arra
         "live" => {
             let p: Ls = serde_json::from_str(&params_json).map_err(bad)?;
             M::L(Box::new(live::Live::new(sample_rate)), p.events)
+        }
+        "dj" => {
+            // inputs: deck A's track (L, R) then deck B's, at `bufRate`.
+            #[derive(serde::Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            struct Ds {
+                events: Vec<(usize, dj::DjEvent)>,
+                buf_rate: f64,
+            }
+            let p: Ds = serde_json::from_str(&params_json).map_err(bad)?;
+            let mut d = Box::new(dj::Dj::new(sample_rate));
+            for (k, pair) in ins.chunks(2).take(2).enumerate() {
+                d.load(k, Some(Arc::new(Buffer { rate: p.buf_rate, channels: pair.to_vec() })));
+            }
+            M::D(d, p.events)
         }
         "bass" => {
             #[derive(serde::Deserialize)]
@@ -689,6 +742,19 @@ pub fn process_module(kind: String, params_json: String, inputs: Vec<Float32Arra
                 let [b0, b1, b2, b3] = &mut b;
                 l.render([&mut b0[..q], &mut b1[..q]], [&mut b2[..q], &mut b3[..q]]);
                 for (c, ch) in o.iter_mut().enumerate().take(4) {
+                    for n in 0..q {
+                        ch[n] = b[c][n] as f32;
+                    }
+                }
+            }
+            M::D(d, events) => {
+                for &(_, e) in events.iter().filter(|(k, _)| *k == i / 128) {
+                    d.event(e);
+                }
+                let mut b = [[0f64; 128]; 2];
+                let [b0, b1] = &mut b;
+                d.render([&mut b0[..q], &mut b1[..q]]);
+                for (c, ch) in o.iter_mut().enumerate().take(2) {
                     for n in 0..q {
                         ch[n] = b[c][n] as f32;
                     }

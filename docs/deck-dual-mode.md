@@ -6,7 +6,9 @@ hardware needed. (A dock with a real turntable/jog controller that takes over
 the trackpads' role is a later extra.)
 
 Status: **milestone 1 (controller foundation + Instrument mode) done
-2026-09-30.** DJ mode, the library/bulk import and the album view are next.
+2026-09-30. DJ mode milestone 1 (two decks, mixer, controller) done
+2026-10-08** (MASTER.md §2). The library/bulk import and the album view are
+next; DJ follow-ups are listed under "DJ mix table mode" below.
 
 ## Decisions (CEOGG, 2026-09-30)
 
@@ -46,7 +48,7 @@ the emulation at the source (see "Open" below).
 
 ## Control mapping
 
-| Control | Instrument mode (built) | DJ mix table mode (next) |
+| Control | Instrument mode (built) | DJ mix table mode (built 2026-10-08; spec in the next table) |
 |---|---|---|
 | Trackpads | **Right**: scale-locked note grid — columns = scale steps, 3 rows = 3 octaves; touch plays, slide moves step by step with a haptic tick, lift releases (keys/pluck retrigger, pad/bass glide). **Left**: X/Y macro — X filter cutoff, Y reverb send (stays where the thumb left it). | Left/right jog wheels — touch position + velocity for scratch feel |
 | Sticks | **Left** Y = pitch bend ±2 st (springs back). **Right** up = mod wheel (vibrato). | Per-deck 3-band EQ (2D stick position = low/mid/high), click = kill |
@@ -59,6 +61,18 @@ the emulation at the source (see "Open" below).
 | View + Menu | Mode switch (all modes) | Mode switch |
 | Gyro | Hold R5: rolling the Deck (steering-wheel tilt) bends pitch, ±2 st at 30°, relative to where it was when R5 went down (read from the accelerometer). | Off by default |
 | Touchscreen | The same instrument on screen: tap/hold grid cells and pads, key/scale/octave/sound buttons. | Waveforms, deck overview, effects rack |
+
+DJ mode as built (`src/input/dj.ts`) — where it differs from the plan above:
+
+| Control | DJ mode |
+|---|---|
+| Trackpads | Jog: left = deck A, right = deck B. Circle the pad like a platter (a turn = 1.8 s of audio, a 33⅓ record). Touch a playing deck = nudge; press the pad in = scratch (backwards too); a stopped deck scrubs. Haptic tick every 1/12 turn. |
+| Sticks | EQ knobs at a rate (they stay where you leave them): ↑↓ LOW, ←→ HIGH; MID is on screen. Click (L3 / R3) = LOW kill. |
+| L2 / R2 | Slide the crossfader towards A / B (harder = faster); it stays. |
+| L1 / R1 | Play / pause A / B. |
+| D-pad ← / → | CUE A / B. |
+| X / Y · B / A | SYNC A / LOOP 4 A · SYNC B / LOOP 4 B. (Sampler: next.) |
+| L4 L5 / R4 R5 | Hot cues 1 and 2 of A / B (3 and 4 on screen). |
 
 Scales: major, minor, dorian, major pentatonic, minor pentatonic, blues.
 Chords come from the 7-note parent scale (major for major pentatonic, natural
@@ -121,6 +135,12 @@ not the transport runs. Nothing sounding costs nothing.
 Two decks as special tracks on the shared engine: jog on the trackpads, EQ
 on the sticks, crossfader on the triggers, cue/play on the bumpers, loops,
 sync, sampler, hot cues on the back buttons; waveforms on the screen.
+
+**Built 2026-10-08** except the sampler. Next: play it by hand and tune the
+feel (jog speed, nudge strength, stick/trigger rates, haptics); sampler on
+ABXY with a shift; beat-jump and loop sizes (1–32 beats, halve/double);
+keylock (tempo without pitch, needs a time-stretcher); deck FX (filter,
+echo); recording the mix; bar lines from the detected downbeat.
 
 ### Bulk track addition (Virtual DJ–style)
 - Drag-and-drop a whole folder or multi-select files onto the library pane.

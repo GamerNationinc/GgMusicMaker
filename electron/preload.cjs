@@ -124,6 +124,8 @@ contextBridge.exposeInMainWorld("ggmmNative", {
     play: (from) => ipcRenderer.send("engine-play", from),
     stop: () => ipcRenderer.send("engine-stop"),
     live: (json) => ipcRenderer.send("engine-live", json),
+    dj: (json) => ipcRenderer.send("engine-dj", json),
+    djLoad: (deck, id) => invoke("engine-dj-load", deck, id ?? null),
     status: () => invoke("engine-status"),
     scope: () => invoke("engine-scope"),
     recStart: (device, input) => invoke("engine-rec-start", device, input ?? null),

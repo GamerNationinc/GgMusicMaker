@@ -16,6 +16,7 @@ use crate::binaural::Binaural;
 use crate::dsp::{Biquad, Compressor, Kind, Punch, PunchParams};
 use crate::morph::{Morph, MorphParams};
 use crate::placer::Placer;
+use crate::dj::{Dj, DjEvent};
 use crate::live::{Live, LiveEvent};
 use crate::reverb::{Reverb, Space};
 use crate::synth::{SynthParams, VoiceSynth};
@@ -231,6 +232,8 @@ pub struct Mixer {
     reverb: Reverb,
     /// The instrument played live from the controller (Instrument mode).
     live: Live,
+    /// The two DJ decks (DJ mode).
+    pub dj: Dj,
     /// The instrument's last block (L, R), before it joins the bus.
     lv: [[f64; Q]; 2],
     /// A Deck-instrument take being recorded.
@@ -279,6 +282,7 @@ impl Mixer {
             dsp: HashMap::new(),
             reverb: Reverb::new(Space::Hall, sr),
             live: Live::new(sr),
+            dj: Dj::new(sr),
             lv: [[0.0; Q]; 2],
             capture: None,
             monitor: None,
@@ -360,6 +364,15 @@ impl Mixer {
 
     pub fn live_event(&mut self, e: LiveEvent) {
         self.live.event(e);
+    }
+
+    pub fn dj_event(&mut self, e: DjEvent) {
+        self.dj.event(e);
+    }
+
+    /// Load (or eject) a DJ deck; the buffer it held is handed back.
+    pub fn dj_load(&mut self, deck: usize, b: Option<Arc<Buffer>>) -> Option<Arc<Buffer>> {
+        self.dj.load(deck, b)
     }
 
     /// Start (Some) or stop (None) feeding a Deck-instrument take; the one
@@ -590,6 +603,11 @@ impl Mixer {
                 self.bus[0][i] += self.lv[0][i];
                 self.bus[1][i] += self.lv[1][i];
             }
+        }
+        // --- DJ decks (play whether or not the transport runs) ---
+        if self.dj.active() {
+            let (b0, b1) = self.bus.split_at_mut(1);
+            self.dj.render([&mut b0[0][..q], &mut b1[0][..q]]);
         }
         // A Deck take records the instrument dry, every block (silence too,
         // so its frames stay locked to song time).

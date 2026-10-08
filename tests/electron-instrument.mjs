@@ -201,7 +201,11 @@ try {
   await send();
   await sleep(1500);
 
-  // --- back out ---
+  // --- back out: Instrument → DJ → Studio ---
+  await send({ buttons: { view: true, menu: true } });
+  await send();
+  await page.waitForSelector("[data-role=dj]", { timeout: 3000 }).catch(() => {});
+  check("View + Menu goes on to DJ mode", !!(await page.$("[data-role=dj]")));
   await send({ buttons: { view: true, menu: true } });
   await send();
   await page.waitForSelector(".workspace", { timeout: 3000 }).catch(() => {});
