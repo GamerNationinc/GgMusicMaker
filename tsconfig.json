@@ -14,7 +14,7 @@
     "noUnusedParameters": true,
     "noImplicitReturns": true,
     "skipLibCheck": true,
-    "types": ["svelte", "vite/client"]
+    "types": ["svelte", "vite/client", "node"]
   },
   "include": ["src/**/*.ts", "src/**/*.svelte", "src/**/*.d.ts"],
   "references": [{ "path": "./tsconfig.node.json" }]
